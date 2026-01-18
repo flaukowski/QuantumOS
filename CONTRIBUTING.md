@@ -1,0 +1,324 @@
+# Contributing to QuantumOS
+
+Thank you for your interest in contributing to QuantumOS! This guide will help you get started with contributing to this next-generation quantum-aware operating system.
+
+## Table of Contents
+- [Code of Conduct](#code-of-conduct)
+- [Getting Started](#getting-started)
+- [Development Workflow](#development-workflow)
+- [Coding Standards](#coding-standards)
+- [Testing Requirements](#testing-requirements)
+- [Pull Request Process](#pull-request-process)
+- [Issue Guidelines](#issue-guidelines)
+- [Security](#security)
+
+## Code of Conduct
+
+### Our Pledge
+We are committed to providing a welcoming and inclusive environment for all contributors, regardless of:
+- Experience level with operating systems
+- Familiarity with quantum computing
+- Background or identity
+- Geographic location
+
+### Standards
+- Use welcoming and inclusive language
+- Be respectful of differing viewpoints and experiences
+- Gracefully accept constructive criticism
+- Focus on what is best for the community
+- Show empathy toward other community members
+
+### Enforcement
+Instances of abusive, harassing, or otherwise unacceptable behavior may be reported to the project maintainers.
+
+## Getting Started
+
+### Prerequisites
+- C programming experience
+- Basic understanding of operating systems concepts
+- Familiarity with quantum computing concepts (helpful but not required)
+- Cross-compilation tools (see Bootstrap Guide)
+
+### Development Environment Setup
+```bash
+# Clone the repository
+git clone https://github.com/flaukowski/QuantumOS.git
+cd QuantumOS
+
+# Install dependencies
+make install-deps
+
+# Build and test
+make && make run
+```
+
+### First Contribution
+1. Fork the repository
+2. Create a feature branch
+3. Make your changes
+4. Add tests
+5. Submit a pull request
+
+## Development Workflow
+
+### Branch Strategy
+- **main** - Stable, releasable code
+- **develop** - Integration branch for features
+- **feature/*** - Feature branches
+- **bugfix/*** - Bug fix branches
+- **release/*** - Release preparation
+
+### Commit Guidelines
+Use conventional commits:
+- `feat:` - New features
+- `fix:` - Bug fixes
+- `docs:` - Documentation changes
+- `style:` - Code style changes
+- `refactor:` - Code refactoring
+- `test:` - Test additions/changes
+- `chore:` - Build process or auxiliary tool changes
+
+Examples:
+```
+feat(process): add process creation API
+fix(memory): resolve page table mapping bug
+docs(readme): update installation instructions
+```
+
+### Code Review Process
+1. All changes require review
+2. At least one maintainer approval
+3. Automated tests must pass
+4. Documentation must be updated
+5. Security changes require additional review
+
+## Coding Standards
+
+### General Guidelines
+- Follow Linux kernel coding style
+- Use 4-space indentation (no tabs)
+- 80-character line limit where practical
+- Comment non-obvious code
+- Use descriptive variable names
+
+### C Code Style
+```c
+// Good example
+int process_create(const char *name, uint32_t parent_pid, process_t **process)
+{
+    if (!name || !process) {
+        return -EINVAL;
+    }
+    
+    *process = kmalloc(sizeof(process_t));
+    if (!*process) {
+        return -ENOMEM;
+    }
+    
+    memset(*process, 0, sizeof(process_t));
+    strncpy((*process)->name, name, sizeof((*process)->name) - 1);
+    (*process)->parent_pid = parent_pid;
+    
+    return 0;
+}
+```
+
+### Header Organization
+```c
+#ifndef FILENAME_H
+#define FILENAME_H
+
+#include <kernel/types.h>
+#include <kernel/memory.h>
+
+/* Constants */
+#define MAX_PROCESSES 1024
+
+/* Type definitions */
+typedef struct process process_t;
+
+/* Function declarations */
+int process_create(const char *name, uint32_t parent_pid, process_t **process);
+
+#endif /* FILENAME_H */
+```
+
+### Documentation
+Use Doxygen-style comments:
+```c
+/**
+ * @brief Create a new process
+ * 
+ * @param name Process name (must be null-terminated)
+ * @param parent_pid Parent process ID
+ * @param process Output pointer to created process
+ * @return int 0 on success, negative error code on failure
+ * 
+ * @note The caller is responsible for freeing the process with process_destroy()
+ */
+int process_create(const char *name, uint32_t parent_pid, process_t **process);
+```
+
+## Testing Requirements
+
+### Test Categories
+- **Unit Tests** - Test individual functions in isolation
+- **Integration Tests** - Test component interaction
+- **System Tests** - Test complete workflows
+- **Performance Tests** - Verify performance targets
+- **Security Tests** - Verify security properties
+
+### Test Structure
+```
+tests/
+├── unit/
+│   ├── test_memory.c
+│   ├── test_process.c
+│   └── test_ipc.c
+├── integration/
+│   ├── test_kernel_services.c
+│   └── test_quantum_integration.c
+├── system/
+│   ├── test_boot_sequence.c
+│   └── test_quantum_workloads.c
+└── benchmarks/
+    ├── performance.c
+    └── scalability.c
+```
+
+### Running Tests
+```bash
+# Run all tests
+make test
+
+# Run specific test category
+make test-unit
+make test-integration
+make test-system
+
+# Run performance benchmarks
+make benchmark
+```
+
+### Test Requirements
+- All new features must include tests
+- Test coverage must be > 80%
+- All tests must pass before merge
+- Performance tests must meet targets
+
+## Pull Request Process
+
+### Before Submitting
+1. **Update Documentation** - Ensure docs reflect changes
+2. **Add Tests** - Cover new functionality with tests
+3. **Check Style** - Run code style checks
+4. **Test Locally** - Verify all tests pass
+5. **Update Changelog** - Add entry to CHANGELOG.md
+
+### PR Template
+Use the provided PR template:
+```markdown
+## Description
+Brief description of changes
+
+## Type of Change
+- [ ] Bug fix
+- [ ] New feature
+- [ ] Breaking change
+- [ ] Documentation update
+
+## Testing
+- [ ] Unit tests pass
+- [ ] Integration tests pass
+- [ ] Manual testing completed
+
+## Checklist
+- [ ] Code follows style guidelines
+- [ ] Self-review completed
+- [ ] Documentation updated
+- [ ] Tests added/updated
+```
+
+### Review Process
+1. **Automated Checks** - CI/CD pipeline runs tests
+2. **Code Review** - Maintainers review code changes
+3. **Security Review** - Security-sensitive changes get extra review
+4. **Integration Testing** - Changes tested in integration environment
+5. **Approval** - Maintainer approval required for merge
+
+## Issue Guidelines
+
+### Creating Issues
+Use appropriate issue templates:
+- **Bug Report** - For reporting bugs
+- **Feature Request** - For proposing new features
+- **Quantum Component** - For quantum-specific issues
+
+### Issue Labels
+- `bug` - Bug reports
+- `enhancement` - Feature requests
+- `documentation` - Documentation issues
+- `security` - Security issues
+- `performance` - Performance issues
+- `quantum` - Quantum-specific issues
+- `good first issue` - Good for newcomers
+- `help wanted` - Community help needed
+
+### Bug Reports
+Include:
+- Clear description of the problem
+- Steps to reproduce
+- Expected vs actual behavior
+- System information
+- Relevant logs/output
+
+### Feature Requests
+Include:
+- Problem statement
+- Proposed solution
+- Alternatives considered
+- Additional context
+
+## Security
+
+### Security Policy
+- Security vulnerabilities should be reported privately
+- Do not open public issues for security problems
+- Security team will investigate and respond
+- Security patches will be coordinated
+
+### Reporting Security Issues
+Email: security@quantumos.dev
+Include "Security Vulnerability" in subject line
+
+### Security Development
+- All security changes require review
+- Use secure coding practices
+- Regular security audits
+- Dependency vulnerability scanning
+
+## Community
+
+### Communication Channels
+- **GitHub Issues** - Bug reports and feature requests
+- **GitHub Discussions** - General questions and discussions
+- **Documentation** - Technical documentation and guides
+
+### Getting Help
+- Check existing issues and discussions
+- Read documentation thoroughly
+- Ask specific, well-researched questions
+- Be patient and respectful
+
+## Recognition
+
+Contributors are recognized in:
+- CONTRIBUTORS.md file
+- Release notes
+- Project documentation
+
+Thank you for contributing to QuantumOS! 🚀
+
+## License
+
+By contributing to QuantumOS, you agree that your contributions will be licensed under the GNU GPL v2 license.
