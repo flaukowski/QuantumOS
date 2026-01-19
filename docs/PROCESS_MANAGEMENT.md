@@ -169,7 +169,7 @@ Each process is automatically assigned an IPC message queue upon creation:
 
 ```c
 // During process creation
-ipc_result_t ipc_result = ipc_create_queue(pid, &process->message_queue_id);
+ipc_result_t ipc_result = ipc_process_init(pid);
 ```
 
 The process management system integrates with IPC for:
