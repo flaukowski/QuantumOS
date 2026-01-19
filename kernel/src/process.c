@@ -290,7 +290,7 @@ status_t process_create(const process_create_params_t *params, process_t **proce
     }
     
     /* Create IPC message queue */
-    ipc_result_t ipc_result = ipc_create_queue(pid, &process_table[pid].message_queue_id);
+    ipc_result_t ipc_result = ipc_process_init(pid);
     if (ipc_result != IPC_SUCCESS) {
         /* Clean up */
         process_table[pid].state = PROCESS_STATE_UNUSED;
@@ -334,7 +334,7 @@ status_t process_destroy(uint32_t pid) {
     remove_from_ready_queue(process);
     
     /* Clean up IPC resources */
-    ipc_destroy_queue(process->message_queue_id);
+    ipc_process_cleanup(process->pid);
     
     /* Free memory */
     if (process->type != PROCESS_TYPE_KERNEL) {

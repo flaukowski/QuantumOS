@@ -95,7 +95,7 @@ typedef struct process {
     uint64_t last_scheduled;       /* Last time process was scheduled */
     
     /* IPC integration */
-    uint32_t message_queue_id;     /* IPC message queue ID */
+    /* IPC system manages queues internally by PID */
     uint32_t port_count;           /* Number of owned IPC ports */
     
     /* Capability security */
