@@ -15,31 +15,47 @@ This document tracks the implementation progress of QuantumOS v0.1 bootstrap pha
 - [ ] **Build System** - Makefile integration
 - [ ] **Testing Framework** - Basic kernel tests
 
+### Phase 0.2 Components (In Progress)
+- [x] **IPC System** - Message-passing inter-process communication
+  - Message queues per process
+  - Named ports for service discovery
+  - Zero-copy shared memory regions
+  - Bidirectional channels
+  - Quantum-safe extensions (circuit handoff, measurement propagation)
+- [ ] **Process Management** - Process lifecycle and scheduling
+- [ ] **Capability System** - Capability-based security
+- [ ] **Quantum Resources** - Qubit allocation and coherence tracking
+
 ## Current Implementation Files
 
 ### Completed Files
 ```
 kernel/
 ├── include/
-│   ├── types.h              # Basic types and macros
-│   ├── quantum_types.h      # Quantum data structures
-│   └── boot.h               # Boot-specific definitions
+│   └── kernel/
+│       ├── types.h              # Basic types and macros
+│       ├── quantum_types.h      # Quantum data structures
+│       ├── boot.h               # Boot-specific definitions
+│       ├── memory.h             # Memory management definitions
+│       ├── interrupts.h         # Interrupt handling definitions
+│       └── ipc.h                # IPC system interface
 ├── src/
 │   ├── boot.S               # Assembly entry point
+│   ├── main.c               # Kernel main entry point
 │   ├── memory.c             # Basic memory management
 │   ├── interrupts.c         # Interrupt handling
-│   ├── gdt.c               # GDT setup
-│   └── console.c           # Console output
-└── link.ld                 # Linker script (in progress)
+│   ├── interrupts.S         # Assembly interrupt stubs
+│   └── ipc/
+│       └── ipc.c            # IPC system implementation
+└── link.ld                 # Linker script
 ```
 
 ### Next Implementation Steps
-1. Complete linker script
-2. Implement Makefile
-3. Add basic process structures
-4. Create capability system foundation
-5. Add quantum resource management
-6. Implement basic IPC
+1. ~~Implement basic IPC~~ **DONE**
+2. Add basic process structures (required for full IPC functionality)
+3. Create capability system foundation
+4. Add quantum resource management
+5. Integrate IPC with process scheduler
 
 ## Testing Progress
 - [x] Unit test framework design
