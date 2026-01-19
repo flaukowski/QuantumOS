@@ -20,14 +20,19 @@ jobs:
     
     steps:
     - name: Checkout code
-      uses: actions/checkout@v3
+      uses: actions/checkout@v4
       with:
         submodules: recursive
-    
+
     - name: Install dependencies
       run: |
         sudo apt-get update
-        sudo apt-get install -y gcc-x86_64-elf gdb-multiarch qemu-system-x86 grub-pc-bin xorriso
+        # Install cross-compiler toolchain (Ubuntu 24.04 compatible)
+        sudo apt-get install -y build-essential bison flex libgmp3-dev libmpc-dev libmpfr-dev texinfo
+        sudo apt-get install -y gdb-multiarch qemu-system-x86 grub-pc-bin xorriso nasm
+        # Use system gcc with -m64 flag for x86_64 target, or install cross-compiler from source
+        # For now, use the standard gcc with appropriate flags
+        which gcc && gcc --version
     
     - name: Build kernel (Debug)
       if: matrix.build_type == 'debug'
@@ -56,7 +61,7 @@ jobs:
         ls -la build/ > build_files.txt
     
     - name: Upload build artifacts
-      uses: actions/upload-artifact@v3
+      uses: actions/upload-artifact@v4
       with:
         name: quantumos-build-${{ matrix.arch }}-${{ matrix.build_type }}
         path: |
@@ -68,10 +73,10 @@ jobs:
   security:
     name: Security Scan
     runs-on: ubuntu-latest
-    
+
     steps:
     - name: Checkout code
-      uses: actions/checkout@v3
+      uses: actions/checkout@v4
     
     - name: Run security scan
       run: |
@@ -85,10 +90,10 @@ jobs:
   code-quality:
     name: Code Quality
     runs-on: ubuntu-latest
-    
+
     steps:
     - name: Checkout code
-      uses: actions/checkout@v3
+      uses: actions/checkout@v4
     
     - name: Install tools
       run: |
@@ -110,10 +115,10 @@ jobs:
   documentation:
     name: Documentation Check
     runs-on: ubuntu-latest
-    
+
     steps:
     - name: Checkout code
-      uses: actions/checkout@v3
+      uses: actions/checkout@v4
     
     - name: Check documentation
       run: |
@@ -140,15 +145,15 @@ jobs:
   performance:
     name: Performance Test
     runs-on: ubuntu-latest
-    
+
     steps:
     - name: Checkout code
-      uses: actions/checkout@v3
-    
+      uses: actions/checkout@v4
+
     - name: Install dependencies
       run: |
         sudo apt-get update
-        sudo apt-get install -y gcc-x86_64-elf qemu-system-x86 time
+        sudo apt-get install -y build-essential qemu-system-x86 time nasm
     
     - name: Build kernel
       run: make clean && make
@@ -164,7 +169,7 @@ jobs:
         echo "Performance tests completed"
     
     - name: Upload performance data
-      uses: actions/upload-artifact@v3
+      uses: actions/upload-artifact@v4
       with:
         name: performance-data
         path: |
@@ -175,15 +180,15 @@ jobs:
   quantum-tests:
     name: Quantum Component Tests
     runs-on: ubuntu-latest
-    
+
     steps:
     - name: Checkout code
-      uses: actions/checkout@v3
-    
+      uses: actions/checkout@v4
+
     - name: Install dependencies
       run: |
         sudo apt-get update
-        sudo apt-get install -y gcc-x86_64-elf qemu-system-x86 python3 python3-pip
+        sudo apt-get install -y build-essential qemu-system-x86 python3 python3-pip nasm
         pip3 install qiskit || true  # Quantum simulator (optional)
     
     - name: Build kernel
@@ -209,18 +214,18 @@ jobs:
     name: Integration Tests
     runs-on: ubuntu-latest
     needs: [build]
-    
+
     steps:
     - name: Checkout code
-      uses: actions/checkout@v3
-    
+      uses: actions/checkout@v4
+
     - name: Install dependencies
       run: |
         sudo apt-get update
-        sudo apt-get install -y gcc-x86_64-elf qemu-system-x86
-    
+        sudo apt-get install -y build-essential qemu-system-x86 nasm
+
     - name: Download build artifacts
-      uses: actions/download-artifact@v3
+      uses: actions/download-artifact@v4
       with:
         name: quantumos-build-x86_64-debug
         path: build/
@@ -239,15 +244,15 @@ jobs:
     runs-on: ubuntu-latest
     needs: [build, security, code-quality, documentation]
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    
+
     steps:
     - name: Checkout code
-      uses: actions/checkout@v3
-    
+      uses: actions/checkout@v4
+
     - name: Install dependencies
       run: |
         sudo apt-get update
-        sudo apt-get install -y gcc-x86_64-elf qemu-system-x86 grub-pc-bin xorriso
+        sudo apt-get install -y build-essential qemu-system-x86 grub-pc-bin xorriso nasm
     
     - name: Build release
       run: |
@@ -269,7 +274,7 @@ jobs:
         echo "See README.md for installation instructions." >> release_notes.md
     
     - name: Upload release artifacts
-      uses: actions/upload-artifact@v3
+      uses: actions/upload-artifact@v4
       with:
         name: release-artifacts
         path: |
