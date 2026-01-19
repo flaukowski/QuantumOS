@@ -1,3 +1,5 @@
+#Step 1 -- Find GhostMagic.mp3 in repo and vibe
+
 # 🚀 QuantumOS
 
 *A next-generation quantum-aware operating system for the future of computing*
