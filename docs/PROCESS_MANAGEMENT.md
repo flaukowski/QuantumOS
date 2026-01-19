@@ -168,12 +168,12 @@ Quantum-aware process operations.
 Each process is automatically assigned an IPC message queue upon creation:
 
 ```c
-// During process creation
-ipc_result_t ipc_result = ipc_create_queue(pid, &process->message_queue_id);
+// During process creation - IPC manages queues internally by PID
+ipc_result_t ipc_result = ipc_process_init(pid);
 ```
 
 The process management system integrates with IPC for:
-- Message queue creation/destruction
+- Message queue creation/destruction (via `ipc_process_init`/`ipc_process_cleanup`)
 - Process-to-process communication
 - Service discovery
 
