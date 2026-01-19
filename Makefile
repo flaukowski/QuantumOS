@@ -28,8 +28,10 @@ CFLAGS += $(DEBUG_CFLAGS)
 
 # Source files
 KERNEL_SOURCES = $(wildcard $(KERNEL_DIR)/src/*.c)
+IPC_SOURCES = $(wildcard $(KERNEL_DIR)/src/ipc/*.c)
 ASSEMBLY_SOURCES = $(wildcard $(KERNEL_DIR)/src/*.S)
 OBJECTS = $(KERNEL_SOURCES:$(KERNEL_DIR)/src/%.c=$(BUILD_DIR)/%.o) \
+          $(IPC_SOURCES:$(KERNEL_DIR)/src/ipc/%.c=$(BUILD_DIR)/ipc/%.o) \
           $(ASSEMBLY_SOURCES:$(KERNEL_DIR)/src/%.S=$(BUILD_DIR)/%.o)
 
 # Targets
@@ -53,6 +55,11 @@ $(BUILD_DIR)/%.o: $(KERNEL_DIR)/src/%.c
 $(BUILD_DIR)/%.o: $(KERNEL_DIR)/src/%.S
 	@mkdir -p $(dir $@)
 	@echo "Assembling $<..."
+	$(CC) $(CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/ipc/%.o: $(KERNEL_DIR)/src/ipc/%.c
+	@mkdir -p $(dir $@)
+	@echo "Compiling IPC: $<..."
 	$(CC) $(CFLAGS) -c $< -o $@
 
 # Create bootable image

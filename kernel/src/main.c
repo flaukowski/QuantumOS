@@ -2,6 +2,7 @@
 #include <kernel/boot.h>
 #include <kernel/memory.h>
 #include <kernel/interrupts.h>
+#include <kernel/ipc.h>
 
 // External symbols from linker script
 extern uint8_t __bss_start;
@@ -19,6 +20,7 @@ static void hal_init(void);
 static void memory_init(void);
 static void interrupts_init(void);
 static void core_services_init(void);
+static void ipc_subsystem_init(void);
 
 // Kernel main entry point
 void kernel_main(uint32_t magic, uint32_t info_addr) {
@@ -128,14 +130,29 @@ static void interrupts_init(void) {
 static void core_services_init(void) {
     current_boot_state = BOOT_STATE_CORE_SERVICES;
     boot_log("Initializing core services...");
-    
-    // TODO: Initialize core services
+
+    // Initialize IPC system
+    ipc_subsystem_init();
+
+    // TODO: Initialize remaining core services
     // - Process management
-    // - IPC system
     // - Capability system
     // - Quantum subsystem
-    
+
     boot_log("Core services initialization complete");
+}
+
+// IPC subsystem initialization
+static void ipc_subsystem_init(void) {
+    boot_log("Initializing IPC subsystem...");
+
+    ipc_result_t result = ipc_init();
+    if (result != IPC_SUCCESS) {
+        boot_panic("Failed to initialize IPC subsystem");
+        return;
+    }
+
+    boot_log("IPC subsystem initialized");
 }
 
 // Boot validation
