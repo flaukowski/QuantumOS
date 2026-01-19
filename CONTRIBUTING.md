@@ -12,6 +12,107 @@ Thank you for your interest in contributing to QuantumOS! This guide will help y
 - [Issue Guidelines](#issue-guidelines)
 - [Security](#security)
 
+## AI Contributor Guidelines
+
+QuantumOS is an AI-collaborative project where multiple AI models contribute alongside human developers. This section establishes guidelines to prevent drift and ensure quality across AI contributors.
+
+### Pre-Submission Requirements
+
+Before submitting ANY code, AI contributors MUST complete these verifications:
+
+#### 1. API Consistency Check
+```bash
+# REQUIRED: Run before every PR
+./scripts/check-api-consistency.sh
+```
+
+- [ ] All function calls reference functions that ACTUALLY EXIST in headers
+- [ ] Function signatures match declarations exactly
+- [ ] Return types are handled correctly
+- [ ] No "phantom" functions (calling APIs that don't exist)
+
+#### 2. Compilation Verification
+```bash
+# REQUIRED: Must pass before PR
+make clean && make
+```
+
+- [ ] Code compiles without errors
+- [ ] No new warnings introduced
+- [ ] All dependencies declared in headers
+
+#### 3. Documentation Alignment
+- [ ] Code examples in docs match actual API
+- [ ] No references to non-existent functions
+- [ ] When fixing code, also fix related docs
+
+### Common Drift Patterns (AVOID THESE)
+
+Based on observed issues in this project:
+
+**Pattern 1: Phantom API Calls**
+```c
+// WRONG - These functions don't exist!
+ipc_create_queue(pid, &queue_id);
+ipc_destroy_queue(queue_id);
+
+// CORRECT - Use the ACTUAL API from ipc.h
+ipc_process_init(pid);
+ipc_process_cleanup(pid);
+```
+*Prevention*: READ the header file before calling functions from it.
+
+**Pattern 2: Incomplete Fixes**
+Claiming to fix something but only partially doing so (e.g., fixing code but not docs).
+*Prevention*: After making a fix, grep for the old pattern everywhere.
+
+**Pattern 3: Assumed Context**
+Assuming functions exist based on naming conventions without verifying.
+*Prevention*: Always verify by reading actual source files.
+
+### Commit Message Format for AI Contributors
+
+```
+type(scope): description
+
+Detailed explanation of changes.
+
+AI-Contributor: Model-Name/Version
+AI-Confidence: high|medium|low
+AI-Verified: api-check,compile,docs
+Co-Authored-By: Model Name <noreply@provider.com>
+```
+
+**AI-Contributor**: Model name (Claude-Opus-4.5, GPT-4, Gemini-3, etc.)
+**AI-Confidence**: Self-assessed confidence level
+**AI-Verified**: Comma-separated verifications performed
+
+### Quality Tracking
+
+AI contributions are tracked with these metrics:
+
+| Metric | Target | Description |
+|--------|--------|-------------|
+| API Accuracy | 100% | Function calls match existing APIs |
+| First-Compile Success | 100% | Code compiles on first submission |
+| Review Iterations | < 2 | Rounds before merge-ready |
+| Doc Consistency | 100% | Docs match implementation |
+
+### Verification Scripts
+
+```bash
+# Check API consistency (function calls vs declarations)
+./scripts/check-api-consistency.sh
+
+# Full pre-PR validation
+./scripts/validate-contribution.sh
+
+# Check for common drift patterns
+./scripts/lint-check.sh
+```
+
+---
+
 ## Code of Conduct
 
 ### Our Pledge
