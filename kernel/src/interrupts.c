@@ -2,6 +2,10 @@
 #include <kernel/interrupts.h>
 #include <kernel/boot.h>
 
+// Forward declarations for I/O port functions
+static inline void __outb(uint16_t port, uint8_t value);
+static inline uint8_t __inb(uint16_t port);
+
 // IDT table
 static idt_entry_t idt[IDT_ENTRIES];
 static idt_ptr_t idt_ptr;
@@ -157,28 +161,22 @@ void load_idt(idt_ptr_t *idtp) {
 }
 
 // Register interrupt handler
+// Note: vector is uint8_t (0-255), which covers all valid IDT entries
 irq_result_t interrupt_register(uint8_t vector, interrupt_handler_t handler, void *context) {
-    if (vector >= IDT_ENTRIES) {
-        return IRQ_ERROR_INVALID_VECTOR;
-    }
-    
     if (interrupt_handlers[vector].handler != NULL) {
         return IRQ_ERROR_ALREADY_REGISTERED;
     }
-    
+
     interrupt_handlers[vector].handler = handler;
     interrupt_handlers[vector].context = context;
     interrupt_handlers[vector].flags = 0;
-    
+
     return IRQ_SUCCESS;
 }
 
 // Unregister interrupt handler
+// Note: vector is uint8_t (0-255), which covers all valid IDT entries
 irq_result_t interrupt_unregister(uint8_t vector) {
-    if (vector >= IDT_ENTRIES) {
-        return IRQ_ERROR_INVALID_VECTOR;
-    }
-    
     interrupt_handlers[vector].handler = NULL;
     interrupt_handlers[vector].context = NULL;
     interrupt_handlers[vector].flags = 0;
@@ -244,7 +242,7 @@ void interrupt_handler(cpu_state_t *state) {
     
     // Handle software interrupts
     if (interrupt_handlers[vector].handler != NULL) {
-        interrupt_handlers[vector].handler(state, interrupt_handlers[vector].context);
+        interrupt_handlers[vector].handler(state);
     } else {
         boot_log("Unhandled interrupt");
         dump_cpu_state(state);
@@ -310,11 +308,13 @@ void irq_handler(cpu_state_t *state) {
 
 // Timer IRQ handler
 void timer_irq_handler(cpu_state_t *state) {
+    (void)state;  // Unused for now
+
     static uint64_t tick_count = 0;
     tick_count++;
-    
+
     // TODO: Update system time, scheduler, etc.
-    
+
     if (tick_count % 100 == 0) {
         boot_log("Timer tick: ");
         early_console_write_hex(tick_count);
@@ -323,8 +323,10 @@ void timer_irq_handler(cpu_state_t *state) {
 
 // Keyboard IRQ handler
 void keyboard_irq_handler(cpu_state_t *state) {
+    (void)state;  // Unused for now
+
     uint8_t scancode = __inb(0x60);
-    
+
     // TODO: Handle keyboard input
     (void)scancode;
 }

@@ -35,18 +35,23 @@ LDFLAGS = -nostdlib -z max-page-size=0x1000 -T $(KERNEL_DIR)/link.ld
 DEBUG_CFLAGS = -g -O0
 RELEASE_CFLAGS = -O2 -DNDEBUG
 
-# Default to debug build
-CFLAGS += $(DEBUG_CFLAGS)
+# Build type: debug (default) or release
+BUILD_TYPE ?= debug
+ifeq ($(BUILD_TYPE),release)
+    CFLAGS += $(RELEASE_CFLAGS)
+else
+    CFLAGS += $(DEBUG_CFLAGS)
+endif
 
 # Source files
+# KERNEL_SOURCES captures all .c files in kernel/src/ (including process*.c)
 KERNEL_SOURCES = $(wildcard $(KERNEL_DIR)/src/*.c)
-PROCESS_SOURCES = $(wildcard $(KERNEL_DIR)/src/process*.c)
 IPC_SOURCES = $(wildcard $(KERNEL_DIR)/src/ipc/*.c)
 ASSEMBLY_SOURCES = $(wildcard $(KERNEL_DIR)/src/*.S)
+# Assembly files compile to *_asm.o to avoid naming collisions with C files
 OBJECTS = $(KERNEL_SOURCES:$(KERNEL_DIR)/src/%.c=$(BUILD_DIR)/%.o) \
-          $(PROCESS_SOURCES:$(KERNEL_DIR)/src/%.c=$(BUILD_DIR)/%.o) \
           $(IPC_SOURCES:$(KERNEL_DIR)/src/ipc/%.c=$(BUILD_DIR)/ipc/%.o) \
-          $(ASSEMBLY_SOURCES:$(KERNEL_DIR)/src/%.S=$(BUILD_DIR)/%.o)
+          $(ASSEMBLY_SOURCES:$(KERNEL_DIR)/src/%.S=$(BUILD_DIR)/%_asm.o)
 
 # Targets
 .PHONY: all clean kernel run debug dump test
@@ -66,7 +71,8 @@ $(BUILD_DIR)/%.o: $(KERNEL_DIR)/src/%.c
 	@echo "Compiling $<..."
 	$(CC) $(CFLAGS) -c $< -o $@
 
-$(BUILD_DIR)/%.o: $(KERNEL_DIR)/src/%.S
+# Assembly files compile to *_asm.o to avoid collision with C files of same name
+$(BUILD_DIR)/%_asm.o: $(KERNEL_DIR)/src/%.S
 	@mkdir -p $(dir $@)
 	@echo "Assembling $<..."
 	$(CC) $(CFLAGS) -c $< -o $@

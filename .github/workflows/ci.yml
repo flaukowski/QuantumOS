@@ -38,13 +38,13 @@ jobs:
       if: matrix.build_type == 'debug'
       run: |
         make clean
-        make CFLAGS="-g -O0"
-    
+        make BUILD_TYPE=debug
+
     - name: Build kernel (Release)
       if: matrix.build_type == 'release'
       run: |
         make clean
-        make CFLAGS="-O2 -DNDEBUG"
+        make BUILD_TYPE=release
     
     - name: Run basic tests
       run: |
@@ -257,7 +257,7 @@ jobs:
     - name: Build release
       run: |
         make clean
-        make CFLAGS="-O2 -DNDEBUG"
+        make BUILD_TYPE=release
         make build/x86_64/kernel.iso
     
     - name: Generate release notes
