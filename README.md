@@ -39,8 +39,18 @@ QuantumOS is not just another operating system—it's a bold reimagining of what
 
 ## 🚀 Quick Start
 
+### Supported Platforms
+
+| Host OS | Status | Notes |
+|---------|--------|-------|
+| **Ubuntu 24.04 LTS** | ✅ Fully Supported | Uses system gcc (cross-compiler not available) |
+| **Ubuntu 22.04 LTS** | ✅ Fully Supported | Can use x86_64-elf-gcc cross-compiler |
+| **Debian 12+** | ✅ Fully Supported | Similar to Ubuntu |
+| **macOS (Intel/ARM)** | ⚠️ Via Docker | Use Docker with Ubuntu image |
+| **Windows (WSL2)** | ✅ Fully Supported | Use Ubuntu WSL2 distribution |
+
 ### Prerequisites
-- Cross-compilation tools (gcc-x86_64-elf)
+- GCC (system or cross-compiler - auto-detected)
 - QEMU for testing
 - GDB for debugging
 
@@ -50,18 +60,28 @@ QuantumOS is not just another operating system—it's a bold reimagining of what
 git clone https://github.com/flaukowski/QuantumOS.git
 cd QuantumOS
 
-# Install dependencies
+# Install dependencies (Ubuntu/Debian)
 make install-deps
 
 # Build the kernel
 make
 
-# Run in QEMU
+# Verify your setup works (recommended for new contributors!)
+make ci-smoke
+
+# Run interactively in QEMU
 make run
 
 # Debug with GDB
 make debug
 ```
+
+### One-Command Verification
+New contributors can verify their entire setup works with a single command:
+```bash
+make install-deps && make ci-smoke
+```
+This builds the kernel and boots it in headless QEMU to validate the build chain.
 
 ### First Boot
 When QuantumOS boots, you'll see:
@@ -179,16 +199,27 @@ We believe the future of computing is collaborative, and we welcome contribution
 QuantumOS has a comprehensive testing framework:
 
 ```bash
-# Run all tests
+# Quick validation (build + API consistency check)
+make validate
+
+# CI smoke test (build + QEMU boot + banner check)
+make ci-smoke
+
+# Run kernel tests (coming soon)
 make test
+```
 
-# Run specific test categories
-make test-unit
-make test-integration
-make test-system
+### For AI Contributors
+We have specialized validation for AI-assisted development:
+```bash
+# Full pre-PR validation suite
+./scripts/validate-contribution.sh
 
-# Performance benchmarks
-make benchmark
+# Check for API consistency issues (prevents "phantom API" drift)
+./scripts/check-api-consistency.sh
+
+# Lint checks
+./scripts/lint-check.sh
 ```
 
 ## 📖 Documentation
