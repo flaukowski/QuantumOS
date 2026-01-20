@@ -4,10 +4,22 @@
 ARCH ?= x86_64
 BUILD_DIR = build/$(ARCH)
 KERNEL_DIR = kernel
-CC = $(ARCH)-elf-gcc
-LD = $(ARCH)-elf-ld
-OBJCOPY = $(ARCH)-elf-objcopy
-OBJDUMP = $(ARCH)-elf-objdump
+
+# Cross-compiler detection: try x86_64-elf-gcc first, fall back to system gcc
+# The cross-compiler is preferred but not available in all environments (e.g., Ubuntu 24.04)
+CROSS_CC := $(shell which $(ARCH)-elf-gcc 2>/dev/null)
+ifdef CROSS_CC
+    CC = $(ARCH)-elf-gcc
+    LD = $(ARCH)-elf-ld
+    OBJCOPY = $(ARCH)-elf-objcopy
+    OBJDUMP = $(ARCH)-elf-objdump
+else
+    # Fall back to system GCC with appropriate flags for freestanding code
+    CC = gcc
+    LD = ld
+    OBJCOPY = objcopy
+    OBJDUMP = objdump
+endif
 GDB = gdb-multiarch
 
 # Compiler flags
@@ -121,7 +133,11 @@ clean:
 install-deps:
 	@echo "Installing dependencies..."
 	sudo apt-get update
-	sudo apt-get install -y gcc-x86-64-elf gdb-multiarch qemu-system-x86 grub-pc-bin xorriso
+	# Note: gcc-x86_64-elf may not be available in Ubuntu 24.04+
+	# The Makefile supports fallback to system gcc
+	sudo apt-get install -y build-essential gdb-multiarch qemu-system-x86 grub-pc-bin xorriso nasm || true
+	@echo "Attempting to install cross-compiler (may not be available)..."
+	sudo apt-get install -y gcc-x86-64-elf 2>/dev/null || echo "Cross-compiler not available, using system gcc"
 
 # Help
 help:
