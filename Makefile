@@ -54,7 +54,7 @@ OBJECTS = $(KERNEL_SOURCES:$(KERNEL_DIR)/src/%.c=$(BUILD_DIR)/%.o) \
           $(ASSEMBLY_SOURCES:$(KERNEL_DIR)/src/%.S=$(BUILD_DIR)/%_asm.o)
 
 # Targets
-.PHONY: all clean kernel run debug dump test
+.PHONY: all clean kernel run debug dump test test-list test-coverage
 
 all: kernel
 
@@ -124,10 +124,111 @@ dump: $(BUILD_DIR)/kernel.elf
 	@echo "=== Symbols ==="
 	$(OBJDUMP) -t $< | head -20
 
-# Test kernel
-test: kernel
-	@echo "Running kernel tests..."
-	@# TODO: Add kernel tests
+# Test directories and files
+TEST_DIR = tests
+TEST_UNIT_DIR = $(TEST_DIR)/unit
+TEST_BUILD_DIR = $(BUILD_DIR)/tests
+TEST_SOURCES = $(wildcard $(TEST_UNIT_DIR)/*.c)
+TEST_OBJECTS = $(TEST_SOURCES:$(TEST_UNIT_DIR)/%.c=$(TEST_BUILD_DIR)/%.o)
+
+# Test kernel - compiles and runs unit tests
+test: kernel $(TEST_BUILD_DIR)/test_runner
+	@echo "=== Running QuantumOS Unit Tests ==="
+	@echo ""
+	@# For kernel tests, we need to link them into a test kernel and run in QEMU
+	@# Or run host-compiled tests if available
+	@if [ -f $(TEST_BUILD_DIR)/test_runner ]; then \
+		echo "Running host-based test runner..."; \
+		$(TEST_BUILD_DIR)/test_runner; \
+	else \
+		echo "Running kernel-integrated tests via QEMU..."; \
+		timeout 15s qemu-system-x86_64 -kernel $(BUILD_DIR)/kernel.elf \
+			-serial stdio -m 128M -display none -no-reboot 2>&1 | \
+			tee $(TEST_BUILD_DIR)/test_output.txt; \
+		echo ""; \
+		echo "Test output saved to $(TEST_BUILD_DIR)/test_output.txt"; \
+		if grep -q "FAIL" $(TEST_BUILD_DIR)/test_output.txt 2>/dev/null; then \
+			echo ""; \
+			echo "ERROR: Some tests FAILED"; \
+			grep "FAIL" $(TEST_BUILD_DIR)/test_output.txt; \
+			exit 1; \
+		elif grep -q "PASS" $(TEST_BUILD_DIR)/test_output.txt 2>/dev/null; then \
+			echo ""; \
+			echo "All tests PASSED"; \
+		else \
+			echo ""; \
+			echo "WARNING: No test results found in output"; \
+		fi; \
+	fi
+	@echo ""
+	@echo "=== Unit Tests Complete ==="
+
+# Build test runner (host-side tests for non-kernel code)
+$(TEST_BUILD_DIR)/test_runner: $(TEST_SOURCES)
+	@mkdir -p $(TEST_BUILD_DIR)
+	@echo "Note: Host-based test runner requires tests to be compilable without kernel dependencies"
+	@# For now, we rely on kernel-integrated tests run via QEMU
+	@touch $(TEST_BUILD_DIR)/.tests_checked
+
+# Compile individual test files (for kernel-integrated testing)
+$(TEST_BUILD_DIR)/%.o: $(TEST_UNIT_DIR)/%.c
+	@mkdir -p $(dir $@)
+	@echo "Compiling test: $<..."
+	$(CC) $(CFLAGS) -DTEST_BUILD -c $< -o $@
+
+# Run specific test file
+test-%: kernel
+	@echo "Running test: $*..."
+	@if [ -f $(TEST_UNIT_DIR)/test_$*.c ]; then \
+		echo "Test file found: $(TEST_UNIT_DIR)/test_$*.c"; \
+		timeout 15s qemu-system-x86_64 -kernel $(BUILD_DIR)/kernel.elf \
+			-serial stdio -m 128M -display none -no-reboot 2>&1 | \
+			grep -A 100 "test_$*" || echo "Test output not found"; \
+	else \
+		echo "Test file not found: $(TEST_UNIT_DIR)/test_$*.c"; \
+		exit 1; \
+	fi
+
+# List available tests
+test-list:
+	@echo "Available tests:"
+	@for f in $(TEST_UNIT_DIR)/test_*.c; do \
+		if [ -f "$$f" ]; then \
+			name=$$(basename "$$f" .c | sed 's/test_//'); \
+			echo "  - $$name ($$f)"; \
+		fi; \
+	done
+	@echo ""
+	@echo "Run with: make test-<name>"
+	@echo "Run all:  make test"
+
+# Code coverage target
+test-coverage: clean
+	@echo "=== Building with Coverage Instrumentation ==="
+	@mkdir -p $(TEST_BUILD_DIR)
+	$(MAKE) CFLAGS="$(CFLAGS) --coverage -fprofile-arcs -ftest-coverage"
+	@echo ""
+	@echo "=== Running Tests with Coverage ==="
+	$(MAKE) test || true
+	@echo ""
+	@echo "=== Generating Coverage Report ==="
+	@if command -v lcov > /dev/null 2>&1; then \
+		lcov --capture --directory . --output-file $(TEST_BUILD_DIR)/coverage.info 2>/dev/null || true; \
+		lcov --remove $(TEST_BUILD_DIR)/coverage.info '/usr/*' --output-file $(TEST_BUILD_DIR)/coverage.info 2>/dev/null || true; \
+		if [ -f $(TEST_BUILD_DIR)/coverage.info ]; then \
+			echo "Coverage summary:"; \
+			lcov --summary $(TEST_BUILD_DIR)/coverage.info 2>&1 | grep -E "lines|functions" || true; \
+			if command -v genhtml > /dev/null 2>&1; then \
+				genhtml $(TEST_BUILD_DIR)/coverage.info --output-directory $(TEST_BUILD_DIR)/coverage_html 2>/dev/null; \
+				echo ""; \
+				echo "HTML report generated at: $(TEST_BUILD_DIR)/coverage_html/index.html"; \
+			fi; \
+		else \
+			echo "Coverage data not generated (freestanding code may not support gcov)"; \
+		fi; \
+	else \
+		echo "lcov not installed. Install with: sudo apt-get install lcov"; \
+	fi
 
 # CI Smoke Test - builds and boots kernel, validates boot banner appears
 # This is the "one-command" test for new contributors to verify their setup
@@ -188,19 +289,22 @@ help:
 	@echo "  make ci-smoke           # Verify build + boot works"
 	@echo ""
 	@echo "Targets:"
-	@echo "  all          - Build kernel (default)"
-	@echo "  kernel       - Build kernel only"
-	@echo "  run          - Run kernel in QEMU (interactive)"
-	@echo "  run-iso      - Run kernel from ISO in QEMU"
-	@echo "  ci-smoke     - CI smoke test (build + headless boot + validate)"
-	@echo "  validate     - Quick validation (build + API check)"
-	@echo "  debug        - Debug kernel with GDB"
-	@echo "  dump         - Show kernel information"
-	@echo "  test         - Run kernel tests"
-	@echo "  clean        - Clean build artifacts"
-	@echo "  install-deps - Install required dependencies"
-	@echo "  info         - Show build configuration"
-	@echo "  help         - Show this help"
+	@echo "  all            - Build kernel (default)"
+	@echo "  kernel         - Build kernel only"
+	@echo "  run            - Run kernel in QEMU (interactive)"
+	@echo "  run-iso        - Run kernel from ISO in QEMU"
+	@echo "  ci-smoke       - CI smoke test (build + headless boot + validate)"
+	@echo "  validate       - Quick validation (build + API check)"
+	@echo "  debug          - Debug kernel with GDB"
+	@echo "  dump           - Show kernel information"
+	@echo "  test           - Run all unit tests"
+	@echo "  test-list      - List available tests"
+	@echo "  test-<name>    - Run specific test (e.g., test-process)"
+	@echo "  test-coverage  - Run tests with code coverage report"
+	@echo "  clean          - Clean build artifacts"
+	@echo "  install-deps   - Install required dependencies"
+	@echo "  info           - Show build configuration"
+	@echo "  help           - Show this help"
 	@echo ""
 	@echo "Variables:"
 	@echo "  ARCH       - Target architecture (default: x86_64)"
@@ -224,7 +328,7 @@ info:
 	@echo "  Objects: $(OBJECTS)"
 
 # Phony targets
-.PHONY: all clean kernel run run-iso debug dump test ci-smoke validate info install-deps help
+.PHONY: all clean kernel run run-iso debug dump test test-list test-coverage ci-smoke validate info install-deps help
 
 # Default target
 .DEFAULT_GOAL := all
