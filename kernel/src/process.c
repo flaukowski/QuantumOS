@@ -45,12 +45,12 @@ static bool process_table_initialized = false;
 static process_t *current_process = NULL;
 static uint32_t current_pid = KERNEL_PROCESS_ID;
 
-/* Next available PID */
-static uint32_t next_pid = INIT_PROCESS_ID;
+/* Next available PID (TODO: use for sequential PID allocation) */
+static uint32_t next_pid __attribute__((unused)) = INIT_PROCESS_ID;
 
 /* Scheduling queues */
 static process_t *ready_queue[PRIORITY_KERNEL + 1];
-static process_t *current_queue = NULL;
+static process_t *current_queue __attribute__((unused)) = NULL;
 
 /* Process statistics */
 static process_stats_t process_statistics = {0};
