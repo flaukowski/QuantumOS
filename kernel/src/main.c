@@ -18,8 +18,8 @@ static boot_config_t boot_config;
 static void kernel_init(void);
 static void early_init(void);
 static void hal_init(void);
-static void memory_init(void);
-static void interrupts_init(void);
+static void memory_subsystem_init(void);
+static void interrupts_subsystem_init(void);
 static void core_services_init(void);
 static void ipc_subsystem_init(void);
 static void process_subsystem_init(void);
@@ -36,7 +36,7 @@ void kernel_main(uint32_t magic, uint32_t info_addr) {
     
     // Parse boot configuration
     boot_config.magic = magic;
-    boot_config.boot_flags = *(uint32_t*)info_addr;
+    boot_config.boot_flags = *(uint32_t*)(uintptr_t)info_addr;
     
     boot_log("QuantumOS v0.1 booting...");
     boot_log("Multiboot information validated");
@@ -72,10 +72,10 @@ static void kernel_init(void) {
     hal_init();
     
     // Initialize memory management
-    memory_init();
-    
+    memory_subsystem_init();
+
     // Initialize interrupt system
-    interrupts_init();
+    interrupts_subsystem_init();
     
     // Initialize core services
     core_services_init();
@@ -103,28 +103,30 @@ static void hal_init(void) {
 }
 
 // Memory management initialization
-static void memory_init(void) {
+static void memory_subsystem_init(void) {
     current_boot_state = BOOT_STATE_MEMORY_INIT;
     boot_log("Initializing memory management...");
-    
-    // TODO: Initialize memory management
-    // - Page allocator
-    // - Virtual memory
-    // - Heap allocator
-    
+
+    // Call the real memory_init from memory.h
+    mem_result_t result = memory_init();
+    if (result != MEM_SUCCESS) {
+        boot_log("Warning: Memory init returned non-success");
+    }
+
     boot_log("Memory management initialization complete");
 }
 
 // Interrupt system initialization
-static void interrupts_init(void) {
+static void interrupts_subsystem_init(void) {
     current_boot_state = BOOT_STATE_INTERRUPTS_INIT;
     boot_log("Initializing interrupt system...");
-    
-    // TODO: Initialize interrupt system
-    // - IDT setup
-    // - Exception handlers
-    // - IRQ routing
-    
+
+    // Call the real interrupts_init from interrupts.h
+    irq_result_t result = interrupts_init();
+    if (result != IRQ_SUCCESS) {
+        boot_log("Warning: Interrupts init returned non-success");
+    }
+
     boot_log("Interrupt system initialization complete");
 }
 
