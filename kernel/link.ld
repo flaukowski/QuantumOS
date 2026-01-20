@@ -5,8 +5,8 @@ ENTRY(_start)
 /* Define memory regions */
 MEMORY
 {
-    kernel (rx) : ORIGIN = 0x00100000, LENGTH = 1M    /* Kernel loaded at 1MB */
-    ram (rwx)   : ORIGIN = 0x00200000, LENGTH = 126M  /* Rest of low memory */
+    kernel (rwx) : ORIGIN = 0x00100000, LENGTH = 96M   /* Kernel loaded at 1MB, includes BSS */
+    ram (rwx)    : ORIGIN = 0x06100000, LENGTH = 32M   /* Rest of low memory */
 }
 
 /* Sections */

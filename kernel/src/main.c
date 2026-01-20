@@ -195,18 +195,7 @@ void boot_log(const char *message) {
     early_console_write("\r\n");
 }
 
-// Boot panic
-void boot_panic(const char *message) {
-    early_console_write("\r\n*** BOOT PANIC ***\r\n");
-    early_console_write(message);
-    early_console_write("\r\n");
-    
-    // Halt system
-    __asm__ volatile("cli");
-    while (1) {
-        __asm__ volatile("hlt");
-    }
-}
+// boot_panic is provided by boot.S (assembly implementation)
 
 // Early console initialization
 void early_console_init(void) {
