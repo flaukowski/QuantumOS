@@ -6,7 +6,7 @@ ENTRY(_start)
 MEMORY
 {
     kernel (rwx) : ORIGIN = 0x00100000, LENGTH = 96M   /* Kernel loaded at 1MB, includes BSS */
-    ram (rwx)    : ORIGIN = 0x06100000, LENGTH = 32M   /* Rest of low memory */
+    ram (rwx)    : ORIGIN = 0x06100000, LENGTH = 128M  /* Rest of low memory for stack/heap */
 }
 
 /* Sections */
