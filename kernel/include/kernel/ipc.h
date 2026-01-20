@@ -69,7 +69,8 @@ typedef enum {
     IPC_ERROR_OUT_OF_MEMORY = -10,
     IPC_ERROR_INVALID_ARG = -11,
     IPC_ERROR_ALREADY_EXISTS = -12,
-    IPC_ERROR_NOT_SUPPORTED = -13
+    IPC_ERROR_NOT_SUPPORTED = -13,
+    IPC_ERROR_NOT_FOUND = -14
 } ipc_result_t;
 
 /* ============================================================================
