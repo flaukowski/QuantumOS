@@ -35,8 +35,13 @@ LDFLAGS = -nostdlib -z max-page-size=0x1000 -T $(KERNEL_DIR)/link.ld
 DEBUG_CFLAGS = -g -O0
 RELEASE_CFLAGS = -O2 -DNDEBUG
 
-# Default to debug build
-CFLAGS += $(DEBUG_CFLAGS)
+# Build type: debug (default) or release
+BUILD_TYPE ?= debug
+ifeq ($(BUILD_TYPE),release)
+    CFLAGS += $(RELEASE_CFLAGS)
+else
+    CFLAGS += $(DEBUG_CFLAGS)
+endif
 
 # Source files
 # KERNEL_SOURCES captures all .c files in kernel/src/ (including process*.c)
