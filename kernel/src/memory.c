@@ -23,7 +23,7 @@ mem_result_t pmm_init(uint64_t total_memory) {
     
     // Allocate frame bitmap
     size_t bitmap_size = total_frames / 8;
-    pmm.frame_bitmap = (uint8_t*)ALIGN_UP(&__end, PAGE_SIZE);
+    pmm.frame_bitmap = (uint8_t*)ALIGN_UP((uintptr_t)&__end, PAGE_SIZE);
     
     // Initialize bitmap (all frames initially free)
     memset(pmm.frame_bitmap, 0, bitmap_size);
@@ -60,7 +60,7 @@ void* pmm_alloc_frame(void) {
             pmm.free_frames--;
             pmm.used_frames++;
             
-            void *frame_addr = (void*)(i * PAGE_SIZE);
+            void *frame_addr = (void*)(uintptr_t)(i * PAGE_SIZE);
             return frame_addr;
         }
     }
