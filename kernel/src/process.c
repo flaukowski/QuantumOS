@@ -14,6 +14,18 @@
 #include <kernel/boot.h>
 #include <kernel/types.h>
 
+/* Local strncpy implementation (no libc in freestanding kernel) */
+static char *strncpy_local(char *dest, const char *src, size_t n) {
+    size_t i;
+    for (i = 0; i < n && src[i] != '\0'; i++) {
+        dest[i] = src[i];
+    }
+    for (; i < n; i++) {
+        dest[i] = '\0';
+    }
+    return dest;
+}
+
 /* ============================================================================
  * Internal Constants
  * ============================================================================ */
@@ -110,7 +122,7 @@ static status_t init_process_pcb(process_t *process, const process_create_params
     /* Basic information */
     process->pid = pid;
     process->parent_pid = params->parent_pid;
-    strncpy(process->name, params->name, PROCESS_NAME_MAX_LEN - 1);
+    strncpy_local(process->name, params->name, PROCESS_NAME_MAX_LEN - 1);
     process->name[PROCESS_NAME_MAX_LEN - 1] = '\0';
     process->type = params->type;
     process->state = PROCESS_STATE_CREATED;
@@ -265,10 +277,11 @@ status_t process_create(const process_create_params_t *params, process_t **proce
     void *stack_memory = NULL;
     if (params->type != PROCESS_TYPE_KERNEL) {
         /* TODO: Allocate from user memory pool */
-        stack_memory = (void*)0x400000 + (pid * PROCESS_STACK_SIZE);
+        stack_memory = (void*)((uintptr_t)0x400000 + (pid * PROCESS_STACK_SIZE));
     } else {
         stack_memory = &kernel_stack;
     }
+    (void)stack_memory; /* TODO: Use for stack setup */
     
     /* Initialize PCB */
     result = init_process_pcb(&process_table[pid], params, pid);
@@ -307,7 +320,7 @@ status_t process_create(const process_create_params_t *params, process_t **proce
     
     *process = &process_table[pid];
     
-    boot_log("Created process '%s' with PID %d", params->name, pid);
+    boot_log("Process created successfully");
     return STATUS_SUCCESS;
 }
 
@@ -355,7 +368,7 @@ status_t process_destroy(uint32_t pid) {
     process->state = PROCESS_STATE_UNUSED;
     process->magic = 0;
     
-    boot_log("Destroyed process with PID %d", pid);
+    boot_log("Process destroyed");
     return STATUS_SUCCESS;
 }
 
@@ -387,7 +400,8 @@ status_t process_exit(uint32_t pid, int32_t exit_code) {
     process_statistics.active_processes--;
     process_statistics.zombie_processes++;
     
-    boot_log("Process %d exited with code %d", pid, exit_code);
+    (void)exit_code; /* Exit code stored in PCB */
+    boot_log("Process exited");
     return STATUS_SUCCESS;
 }
 
@@ -646,20 +660,20 @@ status_t process_get_stats(process_stats_t *stats) {
  */
 void process_dump_info(uint32_t pid) {
     if (!process_is_valid(pid)) {
-        boot_log("Invalid PID: %d", pid);
+        boot_log("Invalid PID for dump");
         return;
     }
-    
+
     process_t *process = &process_table[pid];
-    
-    boot_log("=== Process %d ===", pid);
-    boot_log("Name: %s", process->name);
-    boot_log("Type: %d, State: %d, Priority: %d", 
-              process->type, process->state, process->priority);
-    boot_log("Parent: %d, Children: %d", process->parent_pid, process->child_count);
-    boot_log("RIP: 0x%016lx, RSP: 0x%016lx", process->rip, process->rsp);
-    boot_log("Runtime: %lld ns", process->runtime_total);
-    boot_log("Quantum aware: %s", process->quantum.is_quantum_aware ? "yes" : "no");
+
+    boot_log("=== Process Info ===");
+    boot_log(process->name);
+    boot_log("State: ");
+    early_console_write_hex(process->state);
+    boot_log("Priority: ");
+    early_console_write_hex(process->priority);
+    boot_log("RIP: ");
+    early_console_write_hex(process->rip);
 }
 
 /**
@@ -667,11 +681,11 @@ void process_dump_info(uint32_t pid) {
  */
 void process_dump_all(void) {
     boot_log("=== Process Table ===");
-    boot_log("Total: %d, Active: %d, Zombies: %d", 
-              process_statistics.total_processes,
-              process_statistics.active_processes,
-              process_statistics.zombie_processes);
-    
+    boot_log("Total processes: ");
+    early_console_write_hex(process_statistics.total_processes);
+    boot_log("Active: ");
+    early_console_write_hex(process_statistics.active_processes);
+
     for (uint32_t i = 0; i < MAX_PROCESSES; i++) {
         if (process_is_valid(i)) {
             process_dump_info(i);
