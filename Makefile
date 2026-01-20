@@ -39,12 +39,11 @@ RELEASE_CFLAGS = -O2 -DNDEBUG
 CFLAGS += $(DEBUG_CFLAGS)
 
 # Source files
+# KERNEL_SOURCES captures all .c files in kernel/src/ (including process*.c)
 KERNEL_SOURCES = $(wildcard $(KERNEL_DIR)/src/*.c)
-PROCESS_SOURCES = $(wildcard $(KERNEL_DIR)/src/process*.c)
 IPC_SOURCES = $(wildcard $(KERNEL_DIR)/src/ipc/*.c)
 ASSEMBLY_SOURCES = $(wildcard $(KERNEL_DIR)/src/*.S)
 OBJECTS = $(KERNEL_SOURCES:$(KERNEL_DIR)/src/%.c=$(BUILD_DIR)/%.o) \
-          $(PROCESS_SOURCES:$(KERNEL_DIR)/src/%.c=$(BUILD_DIR)/%.o) \
           $(IPC_SOURCES:$(KERNEL_DIR)/src/ipc/%.c=$(BUILD_DIR)/ipc/%.o) \
           $(ASSEMBLY_SOURCES:$(KERNEL_DIR)/src/%.S=$(BUILD_DIR)/%.o)
 
