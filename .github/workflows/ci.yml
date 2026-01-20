@@ -12,12 +12,12 @@ jobs:
   build:
     name: Build and Test
     runs-on: ubuntu-latest
-    
+
     strategy:
       matrix:
         arch: [x86_64]
         build_type: [debug, release]
-    
+
     steps:
     - name: Checkout code
       uses: actions/checkout@v4
@@ -33,7 +33,7 @@ jobs:
         # Use system gcc with -m64 flag for x86_64 target, or install cross-compiler from source
         # For now, use the standard gcc with appropriate flags
         which gcc && gcc --version
-    
+
     - name: Build kernel (Debug)
       if: matrix.build_type == 'debug'
       run: |
@@ -45,21 +45,21 @@ jobs:
       run: |
         make clean
         make BUILD_TYPE=release
-    
-    - name: Run basic tests
+
+    - name: Run unit tests
       run: |
-        make test || true  # Tests may not be implemented yet
-    
+        make test
+
     - name: Check kernel boots
       timeout-minutes: 5
       run: |
-        timeout 30s make run || echo "Boot test completed"
-    
+        timeout 30s make run || echo "Boot test completed (timeout expected)"
+
     - name: Generate build artifacts
       run: |
         make dump > build_dump.txt
         ls -la build/ > build_files.txt
-    
+
     - name: Upload build artifacts
       uses: actions/upload-artifact@v4
       with:
@@ -77,15 +77,35 @@ jobs:
     steps:
     - name: Checkout code
       uses: actions/checkout@v4
-    
-    - name: Run security scan
+
+    - name: Check for unsafe functions
       run: |
-        # Basic security checks
-        find . -name "*.c" -o -name "*.h" | xargs grep -l "strcpy\|strcat\|sprintf" || true
-        find . -name "*.c" -o -name "*.h" | xargs grep -l "system\|exec\|popen" || true
-        
-        # Check for common vulnerabilities
-        echo "Security scan completed"
+        echo "Scanning for unsafe C functions..."
+        UNSAFE_FOUND=0
+
+        # Check for dangerous functions that should never be used
+        if find . -name "*.c" -o -name "*.h" | xargs grep -l "gets\|sprintf[^n]" 2>/dev/null | grep -v test; then
+          echo "ERROR: Found usage of dangerous functions (gets, sprintf without bounds)"
+          UNSAFE_FOUND=1
+        fi
+
+        # Warn about potentially unsafe functions (strcpy, strcat)
+        echo ""
+        echo "Checking for potentially unsafe functions (warnings)..."
+        find . -name "*.c" -o -name "*.h" | xargs grep -n "strcpy\|strcat" 2>/dev/null || true
+
+        # Check for shell execution functions (should be rare in kernel code)
+        if find . -name "*.c" | xargs grep -l "system\s*(" 2>/dev/null | grep -v test; then
+          echo "ERROR: Found system() calls in non-test code"
+          UNSAFE_FOUND=1
+        fi
+
+        if [ $UNSAFE_FOUND -eq 1 ]; then
+          echo "Security scan FAILED"
+          exit 1
+        fi
+
+        echo "Security scan PASSED"
 
   code-quality:
     name: Code Quality
@@ -94,23 +114,47 @@ jobs:
     steps:
     - name: Checkout code
       uses: actions/checkout@v4
-    
+
     - name: Install tools
       run: |
         sudo apt-get update
         sudo apt-get install -y clang-format cppcheck
-    
+
     - name: Check code formatting
       run: |
-        find . -name "*.c" -o -name "*.h" | xargs clang-format --dry-run --Werror || true
-    
+        echo "Checking code formatting with clang-format..."
+        FORMAT_ERRORS=0
+        for file in $(find . -name "*.c" -o -name "*.h" | grep -v build/); do
+          if ! clang-format --dry-run --Werror "$file" 2>/dev/null; then
+            echo "Formatting issue in: $file"
+            FORMAT_ERRORS=$((FORMAT_ERRORS + 1))
+          fi
+        done
+        if [ $FORMAT_ERRORS -gt 0 ]; then
+          echo "Found $FORMAT_ERRORS files with formatting issues"
+          echo "Run 'clang-format -i <file>' to fix"
+          exit 1
+        fi
+        echo "Code formatting check PASSED"
+
     - name: Static analysis
       run: |
-        find . -name "*.c" | xargs cppcheck --enable=all --error-exitcode=1 || true
-    
+        echo "Running cppcheck static analysis..."
+        # Run cppcheck but filter out noise from system headers and focus on errors
+        find . -name "*.c" -not -path "./build/*" | xargs cppcheck \
+          --enable=warning,performance,portability \
+          --error-exitcode=1 \
+          --suppress=missingIncludeSystem \
+          --suppress=unusedFunction \
+          -I kernel/include \
+          2>&1
+        echo "Static analysis PASSED"
+
     - name: Check for TODO/FIXME comments
       run: |
-        grep -r "TODO\|FIXME\|XXX" --include="*.c" --include="*.h" . || true
+        echo "Checking for TODO/FIXME/XXX comments..."
+        grep -rn "TODO\|FIXME\|XXX" --include="*.c" --include="*.h" . || echo "No TODO/FIXME/XXX comments found"
+        echo "(This is informational only, not a failure)"
 
   documentation:
     name: Documentation Check
@@ -119,28 +163,118 @@ jobs:
     steps:
     - name: Checkout code
       uses: actions/checkout@v4
-    
-    - name: Check documentation
+      with:
+        fetch-depth: 0  # Need full history to compare changes
+
+    - name: Check required documentation files exist
       run: |
-        # Check if README exists and has content
+        echo "Checking required documentation files..."
+        MISSING=0
+
         if [ ! -f README.md ]; then
-          echo "README.md is missing"
-          exit 1
+          echo "ERROR: README.md is missing"
+          MISSING=1
         fi
-        
-        # Check if CONTRIBUTING.md exists
+
         if [ ! -f CONTRIBUTING.md ]; then
-          echo "CONTRIBUTING.md is missing"
-          exit 1
+          echo "ERROR: CONTRIBUTING.md is missing"
+          MISSING=1
         fi
-        
-        # Check if LICENSE exists
+
         if [ ! -f LICENSE ]; then
-          echo "LICENSE is missing"
+          echo "ERROR: LICENSE is missing"
+          MISSING=1
+        fi
+
+        if [ $MISSING -eq 1 ]; then
           exit 1
         fi
-        
-        echo "Documentation check passed"
+
+        echo "Required documentation files exist"
+
+  documentation-sync:
+    name: Documentation Sync Check
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0  # Need full history to compare changes
+
+    - name: Check documentation updated with code changes
+      run: |
+        echo "Checking if documentation is updated with code changes..."
+
+        # Get the base branch (usually main or develop)
+        BASE_BRANCH="${{ github.base_ref }}"
+
+        # Get list of changed files in this PR
+        CHANGED_FILES=$(git diff --name-only origin/$BASE_BRANCH...HEAD)
+
+        echo "Changed files in this PR:"
+        echo "$CHANGED_FILES"
+        echo ""
+
+        # Check if any C source or header files were changed
+        CODE_CHANGED=0
+        if echo "$CHANGED_FILES" | grep -E '\.(c|h)$' | grep -v test; then
+          CODE_CHANGED=1
+          echo "Code files (.c/.h) were modified"
+        fi
+
+        # Check if any documentation files were changed
+        DOCS_CHANGED=0
+        if echo "$CHANGED_FILES" | grep -E '\.(md|rst|txt)$|^docs/'; then
+          DOCS_CHANGED=1
+          echo "Documentation files were modified"
+        fi
+
+        # If code changed but no docs changed, check if it's a significant change
+        if [ $CODE_CHANGED -eq 1 ] && [ $DOCS_CHANGED -eq 0 ]; then
+          echo ""
+          echo "WARNING: Code files were changed but no documentation was updated."
+          echo ""
+
+          # Check for new public functions in headers (these require documentation)
+          NEW_FUNCS=$(git diff origin/$BASE_BRANCH...HEAD -- '*.h' | grep "^+" | grep -E "^[^/]*\(" | grep -v "static" | grep -v "#define" || true)
+
+          if [ -n "$NEW_FUNCS" ]; then
+            echo "ERROR: New public functions were added without documentation updates:"
+            echo "$NEW_FUNCS"
+            echo ""
+            echo "Please update the relevant documentation (README.md, API docs, etc.)"
+            echo "to describe these new functions."
+            exit 1
+          fi
+
+          # Check for changes to public API (function signature changes)
+          API_CHANGES=$(git diff origin/$BASE_BRANCH...HEAD -- 'kernel/include/*.h' | grep "^[-+]" | grep -E "(status_t|void|int|uint|bool).*\(" || true)
+
+          if [ -n "$API_CHANGES" ]; then
+            echo "WARNING: API changes detected in headers:"
+            echo "$API_CHANGES"
+            echo ""
+            echo "Consider updating documentation to reflect these API changes."
+            echo "(This is a warning, not blocking the PR)"
+          fi
+        fi
+
+        echo ""
+        echo "Documentation sync check completed"
+
+    - name: Validate API documentation matches headers
+      run: |
+        echo "Validating API documentation consistency..."
+
+        # Run the API consistency check script if it exists
+        if [ -f ./scripts/check-api-consistency.sh ]; then
+          chmod +x ./scripts/check-api-consistency.sh
+          ./scripts/check-api-consistency.sh
+        else
+          echo "API consistency script not found, skipping"
+        fi
 
   performance:
     name: Performance Test
@@ -154,28 +288,127 @@ jobs:
       run: |
         sudo apt-get update
         sudo apt-get install -y build-essential qemu-system-x86 time nasm
-    
+
     - name: Build kernel
       run: make clean && make
-    
+
     - name: Performance benchmarks
       run: |
-        # Measure build time
-        time make clean && make > build_time.txt 2>&1
-        
-        # Measure boot time (basic)
-        timeout 10s make run > boot_time.txt 2>&1 || true
-        
-        echo "Performance tests completed"
-    
+        echo "=== Performance Benchmarks ===" > performance_report.txt
+        echo "" >> performance_report.txt
+
+        # Measure clean build time
+        echo "Measuring clean build time..."
+        make clean
+        START_TIME=$(date +%s.%N)
+        make
+        END_TIME=$(date +%s.%N)
+        BUILD_TIME=$(echo "$END_TIME - $START_TIME" | bc)
+        echo "Clean build time: ${BUILD_TIME}s" >> performance_report.txt
+
+        # Measure incremental build time (no changes)
+        echo "Measuring incremental build time..."
+        START_TIME=$(date +%s.%N)
+        make
+        END_TIME=$(date +%s.%N)
+        INCR_TIME=$(echo "$END_TIME - $START_TIME" | bc)
+        echo "Incremental build time: ${INCR_TIME}s" >> performance_report.txt
+
+        # Measure boot time
+        echo "Measuring boot time..."
+        timeout 10s qemu-system-x86_64 -kernel build/x86_64/kernel.elf \
+          -serial stdio -m 128M -display none -no-reboot 2>&1 | head -50 > boot_output.txt || true
+        echo "" >> performance_report.txt
+        echo "Boot output captured (first 50 lines)" >> performance_report.txt
+
+        # Check kernel binary size
+        KERNEL_SIZE=$(stat -c%s build/x86_64/kernel.elf 2>/dev/null || echo "unknown")
+        echo "Kernel size: ${KERNEL_SIZE} bytes" >> performance_report.txt
+
+        echo "" >> performance_report.txt
+        echo "Performance tests completed at $(date)" >> performance_report.txt
+
+        cat performance_report.txt
+
     - name: Upload performance data
       uses: actions/upload-artifact@v4
       with:
         name: performance-data
         path: |
-          build_time.txt
-          boot_time.txt
+          performance_report.txt
+          boot_output.txt
         retention-days: 7
+
+  code-coverage:
+    name: Code Coverage
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Install dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y build-essential qemu-system-x86 nasm lcov
+
+    - name: Build with coverage instrumentation
+      run: |
+        make clean
+        # Build with coverage flags
+        make CFLAGS="-Wall -Wextra -nostdlib -ffreestanding -mno-red-zone \
+          -mno-mmx -mno-sse -mno-sse2 -fno-omit-frame-pointer \
+          -fno-stack-protector -fno-pic -fno-pie -mcmodel=kernel \
+          -Ikernel/include -Ikernel/../msi/include \
+          -g -O0 --coverage -fprofile-arcs -ftest-coverage"
+
+    - name: Run tests with coverage
+      run: |
+        # Run the test suite
+        make test || true
+
+        # Boot the kernel briefly to execute initialization code paths
+        timeout 5s qemu-system-x86_64 -kernel build/x86_64/kernel.elf \
+          -serial stdio -m 128M -display none -no-reboot 2>&1 || true
+
+    - name: Generate coverage report
+      run: |
+        echo "=== Code Coverage Report ===" > coverage_summary.txt
+
+        # Collect coverage data
+        lcov --capture --directory . --output-file coverage.info 2>/dev/null || true
+
+        # Filter out system headers
+        lcov --remove coverage.info '/usr/*' --output-file coverage.info 2>/dev/null || true
+
+        # Generate summary
+        if [ -f coverage.info ]; then
+          lcov --list coverage.info >> coverage_summary.txt 2>/dev/null || true
+
+          # Extract coverage percentage
+          COVERAGE=$(lcov --summary coverage.info 2>&1 | grep "lines" | awk '{print $2}' || echo "unknown")
+          echo "" >> coverage_summary.txt
+          echo "Total line coverage: $COVERAGE" >> coverage_summary.txt
+
+          # Generate HTML report
+          genhtml coverage.info --output-directory coverage_html 2>/dev/null || true
+        else
+          echo "Coverage data not available (kernel code may not support gcov)" >> coverage_summary.txt
+          echo "Note: Freestanding kernel code requires special handling for coverage" >> coverage_summary.txt
+        fi
+
+        cat coverage_summary.txt
+
+    - name: Upload coverage report
+      uses: actions/upload-artifact@v4
+      with:
+        name: code-coverage
+        path: |
+          coverage_summary.txt
+          coverage.info
+          coverage_html/
+        retention-days: 30
+        if-no-files-found: warn
 
   quantum-tests:
     name: Quantum Component Tests
@@ -189,26 +422,62 @@ jobs:
       run: |
         sudo apt-get update
         sudo apt-get install -y build-essential qemu-system-x86 python3 python3-pip nasm
-        pip3 install qiskit || true  # Quantum simulator (optional)
-    
+        pip3 install qiskit --break-system-packages || true  # Quantum simulator (optional)
+
     - name: Build kernel
       run: make clean && make
-    
+
     - name: Test quantum components
       run: |
-        # Test quantum types and structures
-        echo "Testing quantum components..."
-        
-        # Check quantum headers
+        echo "=== Quantum Component Tests ===" > quantum_test_results.txt
+        QUANTUM_FAILURES=0
+
+        # Check quantum headers exist
+        echo "Checking quantum headers..." >> quantum_test_results.txt
         if [ -f kernel/include/quantum_types.h ]; then
-          echo "Quantum types header found"
+          echo "  [PASS] quantum_types.h found" >> quantum_test_results.txt
         else
-          echo "Quantum types header missing"
+          echo "  [FAIL] quantum_types.h missing" >> quantum_test_results.txt
+          QUANTUM_FAILURES=$((QUANTUM_FAILURES + 1))
+        fi
+
+        # Check for quantum-related source files
+        echo "" >> quantum_test_results.txt
+        echo "Checking quantum source files..." >> quantum_test_results.txt
+        QUANTUM_SOURCES=$(find . -name "*quantum*.c" -o -name "*qubit*.c" | wc -l)
+        echo "  Found $QUANTUM_SOURCES quantum-related source files" >> quantum_test_results.txt
+
+        # Verify quantum types are properly defined
+        echo "" >> quantum_test_results.txt
+        echo "Checking quantum type definitions..." >> quantum_test_results.txt
+        if grep -q "typedef.*qubit" kernel/include/quantum_types.h 2>/dev/null; then
+          echo "  [PASS] Qubit type defined" >> quantum_test_results.txt
+        else
+          echo "  [WARN] Qubit type not found" >> quantum_test_results.txt
+        fi
+
+        if grep -q "typedef.*quantum_state" kernel/include/quantum_types.h 2>/dev/null; then
+          echo "  [PASS] Quantum state type defined" >> quantum_test_results.txt
+        else
+          echo "  [WARN] Quantum state type not found" >> quantum_test_results.txt
+        fi
+
+        echo "" >> quantum_test_results.txt
+        if [ $QUANTUM_FAILURES -gt 0 ]; then
+          echo "Quantum tests: $QUANTUM_FAILURES failures" >> quantum_test_results.txt
+          cat quantum_test_results.txt
           exit 1
         fi
-        
-        # Basic quantum structure size checks
-        echo "Quantum component tests completed"
+
+        echo "Quantum component tests PASSED" >> quantum_test_results.txt
+        cat quantum_test_results.txt
+
+    - name: Upload quantum test results
+      uses: actions/upload-artifact@v4
+      with:
+        name: quantum-test-results
+        path: quantum_test_results.txt
+        retention-days: 7
 
   integration:
     name: Integration Tests
@@ -228,21 +497,82 @@ jobs:
       uses: actions/download-artifact@v4
       with:
         name: quantumos-build-x86_64-debug
-        path: build/
-    
+        path: build-artifacts/
+
+    - name: Prepare build directory
+      run: |
+        mkdir -p build/x86_64
+        cp -r build-artifacts/* build/ 2>/dev/null || cp -r build-artifacts/* build/x86_64/ 2>/dev/null || true
+        find build/ -name "*.elf" -exec ls -la {} \;
+
     - name: Integration tests
       run: |
-        echo "Running integration tests..."
-        
-        # Test kernel boot sequence
-        timeout 30s make run || echo "Integration test completed"
-        
-        echo "Integration tests completed"
+        echo "=== Integration Tests ===" > integration_results.txt
+        INTEGRATION_FAILURES=0
+
+        # Find the kernel ELF
+        KERNEL_ELF=$(find build/ -name "kernel.elf" | head -1)
+
+        if [ -z "$KERNEL_ELF" ]; then
+          echo "[FAIL] Kernel ELF not found in artifacts" >> integration_results.txt
+          cat integration_results.txt
+          exit 1
+        fi
+
+        echo "Using kernel: $KERNEL_ELF" >> integration_results.txt
+
+        # Test 1: Kernel boot sequence
+        echo "" >> integration_results.txt
+        echo "Test 1: Kernel boot sequence..." >> integration_results.txt
+        timeout 15s qemu-system-x86_64 -kernel "$KERNEL_ELF" \
+          -serial stdio -m 128M -display none -no-reboot 2>&1 | tee boot_output.txt || true
+
+        if grep -q "QuantumOS" boot_output.txt 2>/dev/null; then
+          echo "  [PASS] Boot banner detected" >> integration_results.txt
+        else
+          echo "  [WARN] Boot banner not found (may be expected)" >> integration_results.txt
+        fi
+
+        # Test 2: Check for kernel panic or errors
+        echo "" >> integration_results.txt
+        echo "Test 2: Checking for kernel panics..." >> integration_results.txt
+        if grep -qi "panic\|error\|fault" boot_output.txt 2>/dev/null; then
+          echo "  [WARN] Potential error messages in boot output" >> integration_results.txt
+          grep -i "panic\|error\|fault" boot_output.txt >> integration_results.txt || true
+        else
+          echo "  [PASS] No panic/error messages detected" >> integration_results.txt
+        fi
+
+        # Test 3: Memory initialization
+        echo "" >> integration_results.txt
+        echo "Test 3: Memory initialization..." >> integration_results.txt
+        if grep -qi "memory\|heap\|page" boot_output.txt 2>/dev/null; then
+          echo "  [PASS] Memory-related output detected" >> integration_results.txt
+        else
+          echo "  [INFO] No memory initialization output (may be normal)" >> integration_results.txt
+        fi
+
+        echo "" >> integration_results.txt
+        echo "Integration tests completed" >> integration_results.txt
+        cat integration_results.txt
+
+        if [ $INTEGRATION_FAILURES -gt 0 ]; then
+          exit 1
+        fi
+
+    - name: Upload integration test results
+      uses: actions/upload-artifact@v4
+      with:
+        name: integration-test-results
+        path: |
+          integration_results.txt
+          boot_output.txt
+        retention-days: 7
 
   release:
     name: Release Preparation
     runs-on: ubuntu-latest
-    needs: [build, security, code-quality, documentation]
+    needs: [build, security, code-quality, documentation, integration]
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
 
     steps:
@@ -253,26 +583,28 @@ jobs:
       run: |
         sudo apt-get update
         sudo apt-get install -y build-essential qemu-system-x86 grub-pc-bin xorriso nasm
-    
+
     - name: Build release
       run: |
         make clean
         make BUILD_TYPE=release
         make build/x86_64/kernel.iso
-    
+
     - name: Generate release notes
       run: |
         echo "# QuantumOS Release $(date +%Y%m%d)" > release_notes.md
         echo "" >> release_notes.md
+        echo "## Build Information" >> release_notes.md
+        echo "- Build date: $(date)" >> release_notes.md
+        echo "- Git commit: ${{ github.sha }}" >> release_notes.md
+        echo "- Kernel size: $(stat -c%s build/x86_64/kernel.elf) bytes" >> release_notes.md
+        echo "" >> release_notes.md
         echo "## Changes" >> release_notes.md
-        echo "- Kernel bootstrap implementation" >> release_notes.md
-        echo "- Memory management system" >> release_notes.md
-        echo "- Interrupt handling" >> release_notes.md
-        echo "- Build system with cross-compilation" >> release_notes.md
+        git log --oneline -10 >> release_notes.md || echo "- See commit history" >> release_notes.md
         echo "" >> release_notes.md
         echo "## Installation" >> release_notes.md
         echo "See README.md for installation instructions." >> release_notes.md
-    
+
     - name: Upload release artifacts
       uses: actions/upload-artifact@v4
       with:
