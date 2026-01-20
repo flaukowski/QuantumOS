@@ -1,5 +1,7 @@
 # QuantumOS Kernel Bootstrap (x86_64)
 
+#define BOOT_STACK_SIZE 16384
+
 .section .text
 .global _start
 .extern kernel_main
@@ -113,7 +115,7 @@ early_console_write_hex:
     mov $16, %ecx     # 16 hex digits
     
 .hex_loop:
-    rol %rax, 4       # rotate left 4 bits
+    rol $4, %rax      # rotate left 4 bits
     mov %rax, %rdx
     and $0xF, %rdx    # get low nibble
     
@@ -130,7 +132,7 @@ early_console_write_hex:
     loop .hex_loop
     
     # Null terminate
-    mov $0, (%rsi)
+    movb $0, (%rsi)
     
     # Print the hex string
     mov $hex_buffer, %rsi
