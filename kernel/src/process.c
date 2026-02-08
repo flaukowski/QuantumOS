@@ -26,6 +26,7 @@ static char *strncpy_local(char *dest, const char *src, size_t n) {
     return dest;
 }
 
+
 /* ============================================================================
  * Internal Constants
  * ============================================================================ */
@@ -685,6 +686,7 @@ void process_dump_all(void) {
     early_console_write_hex(process_statistics.total_processes);
     boot_log("Active: ");
     early_console_write_hex(process_statistics.active_processes);
+
 
     for (uint32_t i = 0; i < MAX_PROCESSES; i++) {
         if (process_is_valid(i)) {

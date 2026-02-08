@@ -55,6 +55,9 @@ A feature is complete for v0.2 when:
 - [ ] Rights propagation rules
 - [ ] Integration with IPC (capability transfer)
 
+#### Quantum Resources ⏳ PLANNED
+- [ ] Qubit allocation and coherence tracking
+
 #### User-Space Services Framework ⏳ PLANNED
 - [ ] Service manager process
 - [ ] Service registration/discovery

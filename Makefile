@@ -46,10 +46,12 @@ endif
 # Source files
 # KERNEL_SOURCES captures all .c files in kernel/src/ (including process*.c)
 KERNEL_SOURCES = $(wildcard $(KERNEL_DIR)/src/*.c)
+PROCESS_SOURCES = $(wildcard $(KERNEL_DIR)/src/process*.c)
 IPC_SOURCES = $(wildcard $(KERNEL_DIR)/src/ipc/*.c)
 ASSEMBLY_SOURCES = $(wildcard $(KERNEL_DIR)/src/*.S)
 # Assembly files compile to *_asm.o to avoid naming collisions with C files
 OBJECTS = $(KERNEL_SOURCES:$(KERNEL_DIR)/src/%.c=$(BUILD_DIR)/%.o) \
+          $(PROCESS_SOURCES:$(KERNEL_DIR)/src/%.c=$(BUILD_DIR)/%.o) \
           $(IPC_SOURCES:$(KERNEL_DIR)/src/ipc/%.c=$(BUILD_DIR)/ipc/%.o) \
           $(ASSEMBLY_SOURCES:$(KERNEL_DIR)/src/%.S=$(BUILD_DIR)/%_asm.o)
 
