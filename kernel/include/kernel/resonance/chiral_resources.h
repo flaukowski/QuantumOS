@@ -160,10 +160,13 @@ typedef struct {
 /**
  * Chiral allocation result
  */
+/** Maximum qubit IDs returned from a single allocation */
+#define MAX_ALLOC_IDS 32
+
 typedef struct {
     bool success;
     uint32_t qubits_allocated;
-    uint32_t *qubit_ids;            /* Allocated qubit IDs */
+    uint32_t qubit_ids[MAX_ALLOC_IDS]; /* Allocated qubit IDs (owned copy) */
 
     /* Achieved metrics */
     chiral_stability_class_t achieved_stability;

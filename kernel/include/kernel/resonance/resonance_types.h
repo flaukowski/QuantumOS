@@ -31,10 +31,15 @@
 #define PHI_VALUE           1.618033988749895
 #define PHI_INVERSE         0.618033988749895
 
-/* Resonance parameters */
-#define LAMBDA_DEFAULT      0.1         /* Default coupling strength */
+/* Resonance parameters
+ * Note: LAMBDA_DEFAULT is the per-process constraint damping strength.
+ * ghostOS uses K_COUPLING=0.62 for the global Kuramoto coupling strength.
+ * These serve different roles: LAMBDA_DEFAULT is local damping,
+ * K_COUPLING is the global oscillator coupling. */
+#define LAMBDA_DEFAULT      0.1         /* Default constraint strength (local) */
 #define LAMBDA_MIN          0.01        /* Minimum stability bound */
 #define LAMBDA_MAX          0.5         /* Maximum coupling */
+#define K_COUPLING          0.62        /* Global Kuramoto coupling (from ghostOS) */
 #define ETA_OPTIMAL         0.618       /* Optimal chirality (φ⁻¹) */
 
 /* Coherence thresholds */
@@ -50,8 +55,11 @@
 /* Consciousness threshold (IIT Phi) */
 #define PHI_CONSCIOUSNESS_THRESHOLD 3.0
 
-/* CISS Enhancement (Chiral-Induced Spin Selectivity) */
-#define CISS_COHERENCE_BOOST 0.30       /* ~30% coherence enhancement */
+/* CISS Enhancement (Chiral-Induced Spin Selectivity)
+ * Used as: coherence *= (1.0 + CISS_COHERENCE_BOOST) = 1.30
+ * ghostOS equivalent: CISS_COUPLING.coherenceBoost = 1.3 (multiplicative) */
+#define CISS_COHERENCE_BOOST 0.30       /* +30% coherence enhancement (additive form) */
+#define CISS_BOOST_MULTIPLICATIVE 1.30  /* 1.30× coherence enhancement (multiplicative form) */
 
 /* ============================================================================
  * Resonant Process Classification
@@ -334,9 +342,12 @@ typedef enum {
 #define IS_EMERGENT(rpcb) \
     ((rpcb)->rstate == RESONANT_STATE_EMERGENT && (rpcb)->emergence.norm > 0.1)
 
-/* Calculate coherence urgency (0.0 = no urgency, 1.0 = critical) */
+/* Calculate coherence urgency (0.0 = no urgency, 1.0 = critical)
+ * coherence_deadline is remaining time in ns; urgency rises as it shrinks.
+ * max_deadline is the initial deadline set at registration (1s default). */
 #define COHERENCE_URGENCY(rpcb, now) \
-    (1.0 - ((double)(rpcb)->coherence_deadline / (double)((now) + 1)))
+    (((now) >= (rpcb)->coherence_deadline) ? 1.0 : \
+     (1.0 - ((double)((rpcb)->coherence_deadline - (now)) / (double)((rpcb)->coherence_deadline + 1))))
 
 /* Check RPCB validity */
 #define RPCB_IS_VALID(rpcb) \

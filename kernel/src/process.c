@@ -547,6 +547,40 @@ bool process_is_valid(uint32_t pid) {
 }
 
 /**
+ * Check if process is ready to run
+ */
+bool process_is_ready(uint32_t pid) {
+    if (!process_is_valid(pid)) {
+        return false;
+    }
+
+    return process_table[pid].state == PROCESS_STATE_READY;
+}
+
+/**
+ * Check if process is currently running
+ */
+bool process_is_running(uint32_t pid) {
+    if (!process_is_valid(pid)) {
+        return false;
+    }
+
+    return process_table[pid].state == PROCESS_STATE_RUNNING;
+}
+
+/**
+ * Check if process is terminated
+ */
+bool process_is_terminated(uint32_t pid) {
+    if (!process_is_valid(pid)) {
+        return false;
+    }
+
+    return process_table[pid].state == PROCESS_STATE_TERMINATED ||
+           process_table[pid].state == PROCESS_STATE_ZOMBIE;
+}
+
+/**
  * Add child to parent
  */
 status_t process_add_child(uint32_t parent_pid, uint32_t child_pid) {

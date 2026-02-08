@@ -47,10 +47,12 @@ endif
 # KERNEL_SOURCES captures all .c files in kernel/src/ (including process*.c)
 KERNEL_SOURCES = $(wildcard $(KERNEL_DIR)/src/*.c)
 IPC_SOURCES = $(wildcard $(KERNEL_DIR)/src/ipc/*.c)
+RESONANCE_SOURCES = $(wildcard $(KERNEL_DIR)/src/resonance/*.c)
 ASSEMBLY_SOURCES = $(wildcard $(KERNEL_DIR)/src/*.S)
 # Assembly files compile to *_asm.o to avoid naming collisions with C files
 OBJECTS = $(KERNEL_SOURCES:$(KERNEL_DIR)/src/%.c=$(BUILD_DIR)/%.o) \
           $(IPC_SOURCES:$(KERNEL_DIR)/src/ipc/%.c=$(BUILD_DIR)/ipc/%.o) \
+          $(RESONANCE_SOURCES:$(KERNEL_DIR)/src/resonance/%.c=$(BUILD_DIR)/resonance/%.o) \
           $(ASSEMBLY_SOURCES:$(KERNEL_DIR)/src/%.S=$(BUILD_DIR)/%_asm.o)
 
 # Targets
@@ -80,6 +82,11 @@ $(BUILD_DIR)/%_asm.o: $(KERNEL_DIR)/src/%.S
 $(BUILD_DIR)/ipc/%.o: $(KERNEL_DIR)/src/ipc/%.c
 	@mkdir -p $(dir $@)
 	@echo "Compiling IPC: $<..."
+	$(CC) $(CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/resonance/%.o: $(KERNEL_DIR)/src/resonance/%.c
+	@mkdir -p $(dir $@)
+	@echo "Compiling Resonance: $<..."
 	$(CC) $(CFLAGS) -c $< -o $@
 
 # Create bootable image

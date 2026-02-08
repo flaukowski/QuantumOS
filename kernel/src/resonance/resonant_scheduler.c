@@ -13,6 +13,7 @@
  */
 
 #include <kernel/resonance/resonant_scheduler.h>
+#include <kernel/resonance/geometric_control.h>
 #include <kernel/boot.h>
 #include <kernel/memory.h>
 
@@ -51,10 +52,25 @@ static double fast_sqrt(double x) {
     return guess;
 }
 
+static double fast_abs(double x) {
+    return x < 0 ? -x : x;
+}
+
+/* Approximate asin via rational polynomial: asin(x) ≈ x*(1 + x²*(1/6 + x²*(3/40 + x²*15/336))) */
+static double fast_asin(double x) {
+    if (x > 1.0) x = 1.0;
+    if (x < -1.0) x = -1.0;
+    double x2 = x * x;
+    return x * (1.0 + x2 * (1.0/6.0 + x2 * (3.0/40.0 + x2 * 15.0/336.0)));
+}
+
 static double fast_atan2(double y, double x) {
-    if (x > 0) return fast_sin(y / fast_sqrt(x * x + y * y));
-    if (x < 0 && y >= 0) return PI + fast_sin(y / fast_sqrt(x * x + y * y));
-    if (x < 0 && y < 0) return -PI + fast_sin(y / fast_sqrt(x * x + y * y));
+    double r = fast_sqrt(x * x + y * y);
+    if (r < 1e-15) return 0;
+    double sin_val = y / r;
+    if (x > 0) return fast_asin(sin_val);
+    if (x < 0 && y >= 0) return PI - fast_asin(sin_val);
+    if (x < 0 && y < 0) return -PI - fast_asin(sin_val);
     if (y > 0) return PI / 2.0;
     if (y < 0) return -PI / 2.0;
     return 0;
@@ -86,6 +102,9 @@ static queen_state_t queen_state;
 
 /* Configuration */
 static resonant_config_t current_config;
+
+/* Geometric control state */
+static geometric_state_t geometric_state;
 
 /* Default configuration */
 static const resonant_config_t default_config = {
@@ -142,7 +161,7 @@ static void init_oscillator(oscillator_state_t *osc, resonant_class_t rclass) {
 static void init_chiral(chiral_state_t *chiral, handedness_t hand) {
     chiral->eta = current_config.initial_eta;
     chiral->gamma = current_config.gamma;
-    chiral->asymmetry = chiral->eta / chiral->gamma;
+    chiral->asymmetry = fast_abs(chiral->eta / chiral->gamma);
     chiral->topological_charge = 0.0;
     chiral->handedness = hand;
     chiral->is_stable = chiral->asymmetry < CHIRAL_STABLE_MAX;
@@ -295,6 +314,22 @@ static double calculate_resonant_priority(resonant_pcb_t *rpcb, uint64_t now) {
             break;
     }
 
+    /* Geometric curvature factor: high curvature = complex dynamics,
+     * give priority to maintain stability */
+    if (GEOMETRIC_IS_VALID(&geometric_state)) {
+        double ricci = geometric_get_ricci_scalar(&geometric_state);
+        if (ricci > 0.01 || ricci < -0.01) {
+            /* Moderate boost for processes during curved dynamics */
+            priority += 0.1 * clamp(ricci > 0 ? ricci : -ricci, 0.0, 1.0);
+        }
+
+        /* Anomaly penalty: if chiral anomaly detected, deprioritize
+         * unstable processes to let the system rebalance */
+        if (geometric_is_anomalous(&geometric_state) && !rpcb->chiral.is_stable) {
+            priority -= 0.15;
+        }
+    }
+
     (void)now;  /* Reserved for future timing-based adjustments */
 
     return clamp(priority, 0.0, 2.0);
@@ -330,6 +365,12 @@ resonant_result_t resonant_scheduler_init(const resonant_config_t *config) {
 
     scheduler_initialized = true;
 
+    /* Initialize geometric control layer */
+    uint32_t geo_dim = 8;  /* Use max dimension for coupled oscillator groups */
+    if (geometric_init(&geometric_state, geo_dim) == GEOMETRIC_SUCCESS) {
+        boot_log("Geometric control layer initialized");
+    }
+
     boot_log("Resonant scheduler initialized with ghostOS dynamics");
     return RESONANT_SUCCESS;
 }
@@ -343,6 +384,9 @@ void resonant_scheduler_shutdown(void) {
             rpcb_table[i].magic = 0;
         }
     }
+
+    /* Shutdown geometric control layer */
+    geometric_shutdown(&geometric_state);
 
     scheduler_initialized = false;
     boot_log("Resonant scheduler shutdown");
@@ -418,8 +462,8 @@ resonant_result_t resonant_unregister(uint32_t pid) {
         return RESONANT_ERROR_INVALID_PID;
     }
 
-    /* Decouple from all relationships */
-    for (uint8_t i = 0; i < rpcb->coupling_count; i++) {
+    /* Decouple from all relationships (reverse order: decouple shifts array) */
+    for (int8_t i = rpcb->coupling_count - 1; i >= 0; i--) {
         resonant_decouple(pid, rpcb->coupled_pids[i]);
     }
 
@@ -579,7 +623,7 @@ resonant_result_t resonant_set_chiral(uint32_t pid, double eta, double gamma) {
 
     rpcb->chiral.eta = eta;
     rpcb->chiral.gamma = gamma;
-    rpcb->chiral.asymmetry = (gamma > 0) ? eta / gamma : eta;
+    rpcb->chiral.asymmetry = (gamma > 0) ? fast_abs(eta / gamma) : fast_abs(eta);
     rpcb->chiral.is_stable = rpcb->chiral.asymmetry < CHIRAL_STABLE_MAX;
 
     return RESONANT_SUCCESS;
@@ -698,6 +742,53 @@ resonant_result_t resonant_sync(void) {
 
     /* Update Queen order parameter */
     update_order_parameter();
+
+    /* Update geometric control layer with current oscillator phases */
+    if (GEOMETRIC_IS_VALID(&geometric_state)) {
+        double phases[GEOMETRIC_MAX_DIM];
+        double gradients[GEOMETRIC_MAX_DIM];
+        uint32_t geo_idx = 0;
+
+        for (uint32_t i = 0; i < MAX_RESONANT_PROCESSES && geo_idx < geometric_state.metric.dimension; i++) {
+            resonant_pcb_t *rpcb_geo = &rpcb_table[i];
+            if (!RPCB_IS_VALID(rpcb_geo)) continue;
+            if (rpcb_geo->rstate == RESONANT_STATE_DORMANT) continue;
+
+            phases[geo_idx] = rpcb_geo->oscillator.phase;
+            /* Gradient: phase velocity as gradient proxy */
+            gradients[geo_idx] = rpcb_geo->oscillator.frequency * TWO_PI +
+                                 calculate_coupling_contribution(rpcb_geo);
+            geo_idx++;
+        }
+
+        if (geo_idx > 0) {
+            geometric_update_metric(&geometric_state, phases, gradients);
+            geometric_update_berry_phase(&geometric_state, phases);
+            geometric_compute_ricci_scalar(&geometric_state);
+
+            /* Chiral anomaly detection: separate left/right mode amplitudes */
+            double left_modes[GEOMETRIC_MAX_DIM];
+            double right_modes[GEOMETRIC_MAX_DIM];
+            uint32_t left_count = 0, right_count = 0;
+
+            for (uint32_t i = 0; i < MAX_RESONANT_PROCESSES; i++) {
+                resonant_pcb_t *rpcb_anom = &rpcb_table[i];
+                if (!RPCB_IS_VALID(rpcb_anom)) continue;
+                if (rpcb_anom->rstate == RESONANT_STATE_DORMANT) continue;
+
+                if (rpcb_anom->chiral.handedness == HANDEDNESS_LEFT && left_count < GEOMETRIC_MAX_DIM) {
+                    left_modes[left_count++] = rpcb_anom->oscillator.amplitude;
+                } else if (rpcb_anom->chiral.handedness == HANDEDNESS_RIGHT && right_count < GEOMETRIC_MAX_DIM) {
+                    right_modes[right_count++] = rpcb_anom->oscillator.amplitude;
+                }
+            }
+
+            if (left_count > 0 || right_count > 0) {
+                geometric_detect_chiral_anomaly(&geometric_state,
+                    left_modes, left_count, right_modes, right_count, 0.1);
+            }
+        }
+    }
 
     /* Update system coherence */
     double total_coherence = 0.0;
@@ -992,4 +1083,9 @@ void resonant_dump_queen(void) {
     early_console_write_hex(queen_state.network_conscious);
     boot_log("Sync Count: ");
     early_console_write_hex((uint32_t)queen_state.sync_count);
+
+    /* Dump geometric state */
+    if (GEOMETRIC_IS_VALID(&geometric_state)) {
+        geometric_dump_state(&geometric_state);
+    }
 }
