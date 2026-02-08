@@ -1,0 +1,3 @@
+[submodule "MusicPortal"]
+	path = MusicPortal
+	url = https://github.com/NickFlach/MusicPortal.git
