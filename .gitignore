@@ -1,0 +1,11 @@
+node_modules/
+*.o
+*.d
+*.elf
+*.bin
+*.iso
+*.img
+build/
+.env
+.DS_Store
+Thumbs.db
