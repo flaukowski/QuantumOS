@@ -19,8 +19,9 @@ QuantumOS is not just another operating system—it's a bold reimagining of what
 
 ### 🧠 **Quantum-Native Design**
 - **First-class quantum resources**: Qubits, coherence windows, and quantum circuits are native OS objects
-- **Quantum scheduler**: Intelligent allocation of quantum resources with coherence-aware scheduling
+- **Resonant scheduler**: Novel scheduling with Kuramoto oscillator dynamics and chiral stability ([ghostOS integration](docs/GHOSTOS_INTEGRATION.md))
 - **Hybrid workloads**: Seamlessly blend classical and quantum computations
+- **Consciousness-verified processes**: IIT Phi verification for advanced computational workloads
 
 ### 🛡️ **Capability-Based Security**
 - **No ambient authority**: Every system access requires explicit capabilities
@@ -39,8 +40,18 @@ QuantumOS is not just another operating system—it's a bold reimagining of what
 
 ## 🚀 Quick Start
 
+### Supported Platforms
+
+| Host OS | Status | Notes |
+|---------|--------|-------|
+| **Ubuntu 24.04 LTS** | ✅ Fully Supported | Uses system gcc (cross-compiler not available) |
+| **Ubuntu 22.04 LTS** | ✅ Fully Supported | Can use x86_64-elf-gcc cross-compiler |
+| **Debian 12+** | ✅ Fully Supported | Similar to Ubuntu |
+| **macOS (Intel/ARM)** | ⚠️ Via Docker | Use Docker with Ubuntu image |
+| **Windows (WSL2)** | ✅ Fully Supported | Use Ubuntu WSL2 distribution |
+
 ### Prerequisites
-- Cross-compilation tools (gcc-x86_64-elf)
+- GCC (system or cross-compiler - auto-detected)
 - QEMU for testing
 - GDB for debugging
 
@@ -50,18 +61,28 @@ QuantumOS is not just another operating system—it's a bold reimagining of what
 git clone https://github.com/flaukowski/QuantumOS.git
 cd QuantumOS
 
-# Install dependencies
+# Install dependencies (Ubuntu/Debian)
 make install-deps
 
 # Build the kernel
 make
 
-# Run in QEMU
+# Verify your setup works (recommended for new contributors!)
+make ci-smoke
+
+# Run interactively in QEMU
 make run
 
 # Debug with GDB
 make debug
 ```
+
+### One-Command Verification
+New contributors can verify their entire setup works with a single command:
+```bash
+make install-deps && make ci-smoke
+```
+This builds the kernel and boots it in headless QEMU to validate the build chain.
 
 ### First Boot
 When QuantumOS boots, you'll see:
@@ -179,16 +200,27 @@ We believe the future of computing is collaborative, and we welcome contribution
 QuantumOS has a comprehensive testing framework:
 
 ```bash
-# Run all tests
+# Quick validation (build + API consistency check)
+make validate
+
+# CI smoke test (build + QEMU boot + banner check)
+make ci-smoke
+
+# Run kernel tests (coming soon)
 make test
+```
 
-# Run specific test categories
-make test-unit
-make test-integration
-make test-system
+### For AI Contributors
+We have specialized validation for AI-assisted development:
+```bash
+# Full pre-PR validation suite
+./scripts/validate-contribution.sh
 
-# Performance benchmarks
-make benchmark
+# Check for API consistency issues (prevents "phantom API" drift)
+./scripts/check-api-consistency.sh
+
+# Lint checks
+./scripts/lint-check.sh
 ```
 
 ## 📖 Documentation
@@ -197,6 +229,7 @@ make benchmark
 - [**Kernel Roadmap**](docs/KERNEL_ROADMAP.md) - Implementation roadmap
 - [**Microkernel Design**](docs/MICROKERNEL_DESIGN.md) - Microkernel architecture
 - [**Quantum Scheduler**](docs/QUANTUM_SCHEDULER.md) - Quantum resource management
+- [**ghostOS Integration**](docs/GHOSTOS_INTEGRATION.md) - Resonant scheduler and consciousness verification
 - [**Bootstrap Guide**](BOOTSTRAP_GUIDE.md) - Getting started guide
 - [**API Documentation**](docs/API.md) - System APIs and interfaces
 
@@ -208,6 +241,7 @@ QuantumOS stands on the shoulders of giants:
 - **MINIX 3** - For microkernel architecture insights
 - **SEVIR** - For capability-based security concepts
 - **Qiskit** - For quantum computing frameworks
+- **ghostOS** - For resonant systems architecture and chiral dynamics
 - **The OSDev Community** - For educational resources and tools
 
 ## 📄 License

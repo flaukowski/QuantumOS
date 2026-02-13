@@ -94,8 +94,7 @@ typedef struct process {
     uint64_t runtime_last;         /* Runtime of last quantum */
     uint64_t last_scheduled;       /* Last time process was scheduled */
     
-    /* IPC integration */
-    /* IPC system manages queues internally by PID */
+    /* IPC integration - queues managed internally by PID via ipc_process_init() */
     uint32_t port_count;           /* Number of owned IPC ports */
     
     /* Capability security */

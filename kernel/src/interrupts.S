@@ -9,14 +9,14 @@ isr\num:
     push $0          # Push dummy error code
     push $\num       # Push interrupt number
     jmp isr_common
-.endmmacro
+.endm
 
 .macro ISR_ERRCODE num
 .global isr\num
 isr\num:
     push $\num       # Push interrupt number
     jmp isr_common
-.endmmacro
+.endm
 
 # Exception handlers (0-31)
 ISR_NOERRCODE 0     # Divide error
@@ -59,7 +59,7 @@ irq\num:
     push $0          # Push dummy error code
     push $(32 + \num) # Push interrupt number
     jmp irq_common
-.endmmacro
+.endm
 
 IRQ 0   # Timer
 IRQ 1   # Keyboard
