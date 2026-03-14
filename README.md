@@ -19,7 +19,7 @@ QuantumOS is not just another operating system—it's a bold reimagining of what
 
 ### 🧠 **Quantum-Native Design**
 - **First-class quantum resources**: Qubits, coherence windows, and quantum circuits are native OS objects
-- **Resonant scheduler**: Novel scheduling with Kuramoto oscillator dynamics and chiral stability ([ghostOS integration](docs/GHOSTOS_INTEGRATION.md))
+- **Resonant scheduler**: Novel scheduling with Kuramoto oscillator dynamics and chiral stability ([ghostmagicOS integration](docs/ghostmagicOS_INTEGRATION.md))
 - **Hybrid workloads**: Seamlessly blend classical and quantum computations
 - **Consciousness-verified processes**: IIT Phi verification for advanced computational workloads
 
@@ -229,7 +229,7 @@ We have specialized validation for AI-assisted development:
 - [**Kernel Roadmap**](docs/KERNEL_ROADMAP.md) - Implementation roadmap
 - [**Microkernel Design**](docs/MICROKERNEL_DESIGN.md) - Microkernel architecture
 - [**Quantum Scheduler**](docs/QUANTUM_SCHEDULER.md) - Quantum resource management
-- [**ghostOS Integration**](docs/GHOSTOS_INTEGRATION.md) - Resonant scheduler and consciousness verification
+- [**ghostmagicOS Integration**](docs/ghostmagicOS_INTEGRATION.md) - Resonant scheduler and consciousness verification
 - [**Bootstrap Guide**](BOOTSTRAP_GUIDE.md) - Getting started guide
 - [**API Documentation**](docs/API.md) - System APIs and interfaces
 
@@ -241,7 +241,7 @@ QuantumOS stands on the shoulders of giants:
 - **MINIX 3** - For microkernel architecture insights
 - **SEVIR** - For capability-based security concepts
 - **Qiskit** - For quantum computing frameworks
-- **ghostOS** - For resonant systems architecture and chiral dynamics
+- **ghostmagicOS** - For resonant systems architecture and chiral dynamics
 - **The OSDev Community** - For educational resources and tools
 
 ## 📄 License

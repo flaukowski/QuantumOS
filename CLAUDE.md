@@ -3,7 +3,7 @@
 ## Peer Review: Resonant Scheduler Bugs (from Cascade — Feb 8 2026)
 
 All bugs from both review rounds have been fixed by Claude Code (Feb 8 2026).
-Fixes verified: ghostOS `tsc --noEmit` and `npm run build` pass. QuantumOS C build pending WSL.
+Fixes verified: ghostmagicOS `tsc --noEmit` and `npm run build` pass. QuantumOS C build pending WSL.
 
 ---
 
@@ -73,7 +73,7 @@ Added implementations for `process_is_ready()`, `process_is_running()`, and
 
 ### BUG 7: `protocol.ts` comment says 58 bytes — FIXED
 
-**File:** `ghostOS/src/bridge/protocol.ts`
+**File:** `ghostmagicOS/src/bridge/protocol.ts`
 
 Changed comment from "58 bytes after header" to "48 bytes after header".
 
@@ -81,7 +81,7 @@ Changed comment from "58 bytes after header" to "48 bytes after header".
 
 ### BUG 8: `EMERGENCE` and `ANOMALY` message types have no serializer — FIXED
 
-**File:** `ghostOS/src/bridge/protocol.ts`, `ghostOS/src/bridge/index.ts`
+**File:** `ghostmagicOS/src/bridge/protocol.ts`, `ghostmagicOS/src/bridge/index.ts`
 
 Added `EmergenceMessage` interface (24-byte payload: emergenceNorm, integrationLevel,
 patternCount, isActive) and `AnomalyMessage` interface (32-byte payload: anomalyIndex,
@@ -92,7 +92,7 @@ Added serialize/deserialize methods for both. Updated `getMessageSize()` and bar
 
 ### BUG 9: BFGS formula is SR1, not rank-2 — FIXED
 
-**Files:** `ghostOS/src/geometric/manifold.ts`, `kernel/src/resonance/geometric_control.c`
+**Files:** `ghostmagicOS/src/geometric/manifold.ts`, `kernel/src/resonance/geometric_control.c`
 
 Replaced SR1-like update with full BFGS rank-2 inverse Hessian update:
 `H_new = (I - ρ·s·yᵀ)·H·(I - ρ·y·sᵀ) + ρ·s·sᵀ`
@@ -110,7 +110,7 @@ a scaled value. No code change made — this is a usage concern, not a bug in th
 
 ### BUG 11: `calculateLocalCoherence()` negative coherence — FIXED
 
-**File:** `ghostOS/src/integration/index.ts`
+**File:** `ghostmagicOS/src/integration/index.ts`
 
 Both chiral and achiral paths now normalize `cos(phaseDiff)` from [-1,1] to [0,1]
 before applying CISS boost: `const normalized = (baseCoherence + 1) / 2`.
@@ -119,7 +119,7 @@ before applying CISS boost: `const normalized = (baseCoherence + 1) / 2`.
 
 ### BUG 12: Phase variance uses unwrapped differences — FIXED
 
-**File:** `ghostOS/src/integration/index.ts`
+**File:** `ghostmagicOS/src/integration/index.ts`
 
 Added S¹ phase wrapping: `if (diff > Math.PI) diff = 2 * Math.PI - diff`.
 
@@ -143,14 +143,14 @@ geometric module when WASM is unavailable.
 ## Build & Architecture Notes
 
 - Makefile resonance integration (`RESONANCE_SOURCES`, compile rule) is correct.
-- ghostOS TypeScript and QuantumOS C constants match across both codebases.
+- ghostmagicOS TypeScript and QuantumOS C constants match across both codebases.
 - `quantum_types.h` dependency (`qubit_handle_t`, `FIDELITY_STANDARD`) is satisfied.
 - Static helper duplication (`fast_sqrt`, `fast_abs`, `clamp`) across .c files is fine for now
   but consider a shared `kernel/src/resonance/math_helpers.h` if the module grows.
 - `resonance_types.h` cross-repo constant documentation (`LAMBDA_DEFAULT` vs `K_COUPLING`,
   `CISS_COHERENCE_BOOST` additive vs multiplicative) is clear.
 - `geometric_control.h` API design is clean. Implementation in `geometric_control.c` is complete.
-- ghostOS geometric layer (`manifold.ts`, `berry.ts`, `curvature.ts`, `anomaly.ts`)
+- ghostmagicOS geometric layer (`manifold.ts`, `berry.ts`, `curvature.ts`, `anomaly.ts`)
   uses correct full BFGS rank-2 update.
 - Protocol serializer (`protocol.ts`) covers all 7 message types with binary serialize/deserialize.
 - Integration layer geometric control hookup in `QueenSynchronizer` and

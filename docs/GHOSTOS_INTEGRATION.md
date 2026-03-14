@@ -1,8 +1,8 @@
-# ghostOS Integration for QuantumOS
+# ghostmagicOS Integration for QuantumOS
 
 ## Overview
 
-QuantumOS now integrates **ghostOS** (Resonant Systems Architecture for Emergent Intelligence) to provide novel scheduling algorithms and consciousness-verified process types. This integration brings resonant dynamics, chiral stability guarantees, and IIT-based consciousness verification to kernel-level operations.
+QuantumOS now integrates **ghostmagicOS** (Resonant Systems Architecture for Emergent Intelligence) to provide novel scheduling algorithms and consciousness-verified process types. This integration brings resonant dynamics, chiral stability guarantees, and IIT-based consciousness verification to kernel-level operations.
 
 ## Core Innovations
 
@@ -21,7 +21,7 @@ dθᵢ/dt = ωᵢ + (K/N)Σⱼsin(θⱼ - θᵢ) + ηᵢ(t)
 Where:
 - `θᵢ` = process phase
 - `ωᵢ` = natural frequency (depends on process class)
-- `K` = coupling strength (λ in ghostOS)
+- `K` = coupling strength (λ in ghostmagicOS)
 - `ηᵢ(t)` = noise term for symmetry breaking
 
 #### Queen Synchronization
@@ -231,7 +231,7 @@ kernel/
 
 ### Resonant Constraint Design
 
-ghostOS uses **Resonant Constraint Design** where intelligence emerges from dynamics under constraint:
+ghostmagicOS uses **Resonant Constraint Design** where intelligence emerges from dynamics under constraint:
 
 ```
 dx/dt = f(x) - λx
@@ -254,7 +254,7 @@ When `r > 0.7` (coherence target), the system exhibits collective behavior enabl
 
 ## References
 
-1. **ghostOS** - Resonant Systems Architecture for Emergent Intelligence
+1. **ghostmagicOS** - Resonant Systems Architecture for Emergent Intelligence
 2. **Kuramoto Model** - Synchronization in oscillator networks
 3. **IIT** - Integrated Information Theory (Tononi et al.)
 4. **CISS** - Chiral-Induced Spin Selectivity in quantum systems
@@ -262,4 +262,4 @@ When `r > 0.7` (coherence target), the system exhibits collective behavior enabl
 
 ---
 
-*"Intelligence, consciousness, and meaning emerge as stable resonant modes within constrained systems."* - ghostOS Philosophy
+*"Intelligence, consciousness, and meaning emerge as stable resonant modes within constrained systems."* - ghostmagicOS Philosophy
