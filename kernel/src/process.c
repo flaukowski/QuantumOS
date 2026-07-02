@@ -415,9 +415,13 @@ status_t process_destroy(uint32_t pid) {
     process->capability_root = CAP_ID_INVALID;
     process->capability_count = 0;
 
-    /* Free memory */
-    if (process->type != PROCESS_TYPE_KERNEL) {
-        /* TODO: Free user memory */
+    /* Free the private address space (page tables + user frames). Safe
+     * here because process_destroy never runs on the current process,
+     * so this is never the address space loaded in CR3. */
+    if (process->virtual_address_space) {
+        vmspace_destroy((uint64_t *)process->virtual_address_space);
+        process->virtual_address_space = NULL;
+        process->cr3 = 0;
     }
     
     /* Remove from parent's children list */
@@ -451,18 +455,12 @@ void process_reap(void) {
             continue;
         }
 
-        /* User processes own a private address space; free it before
-         * the PCB slot is reused */
-        if (p->virtual_address_space) {
-            vmspace_destroy((uint64_t *)p->virtual_address_space);
-            p->virtual_address_space = NULL;
-            p->cr3 = 0;
-        }
+        /* process_destroy frees the private address space back to the
+         * pmm; the slot returns to UNUSED */
+        process_destroy(pid);
 
         boot_log("reaped process; free frames: ");
         early_console_write_hex(pmm_get_free_frames());
-
-        process_destroy(pid);
     }
 }
 
