@@ -13,6 +13,7 @@
 #include <kernel/ipc.h>
 #include <kernel/boot.h>
 #include <kernel/types.h>
+#include <kernel/capability.h>
 
 /* Local strncpy implementation (no libc in freestanding kernel) */
 static char *strncpy_local(char *dest, const char *src, size_t n) {
@@ -339,6 +340,16 @@ status_t process_create(const process_create_params_t *params, process_t **proce
         process_table[pid].state = PROCESS_STATE_UNUSED;
         return STATUS_ERROR;
     }
+
+    /* Grant the process its root capability: full authority over
+     * itself. Everything else must be derived or explicitly granted
+     * (no ambient authority). */
+    uint32_t root_cap = CAP_ID_INVALID;
+    if (cap_create(pid, CAP_RESOURCE_PROCESS, pid, CAP_PERM_ALL, 0,
+                   &root_cap) == CAP_SUCCESS) {
+        process_table[pid].capability_root = root_cap;
+        process_table[pid].capability_count = 1;
+    }
     
     /* Update statistics */
     process_statistics.total_processes++;
@@ -378,7 +389,13 @@ status_t process_destroy(uint32_t pid) {
     
     /* Clean up IPC resources */
     ipc_process_cleanup(process->pid);
-    
+
+    /* Revoke every capability the process owns (cascades to anything
+     * it granted onward) */
+    cap_revoke_all_for_process(pid);
+    process->capability_root = CAP_ID_INVALID;
+    process->capability_count = 0;
+
     /* Free memory */
     if (process->type != PROCESS_TYPE_KERNEL) {
         /* TODO: Free user memory */
