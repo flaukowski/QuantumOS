@@ -60,13 +60,20 @@ OBJECTS = $(KERNEL_SOURCES:$(KERNEL_DIR)/src/%.c=$(BUILD_DIR)/%.o) \
 
 all: kernel
 
-kernel: $(BUILD_DIR)/kernel.elf
+kernel: $(BUILD_DIR)/kernel.elf $(BUILD_DIR)/kernel.elf32
 
 $(BUILD_DIR)/kernel.elf: $(OBJECTS) $(KERNEL_DIR)/link.ld
 	@mkdir -p $(dir $@)
 	@echo "Linking kernel..."
 	$(LD) $(LDFLAGS) -o $@ $(OBJECTS)
 	@echo "Kernel linked successfully: $@"
+
+# QEMU's -kernel multiboot loader refuses ELF64 images, so produce an
+# ELF32 copy for direct boot (all load addresses are < 4 GB). Debugging
+# still uses kernel.elf, which carries the 64-bit symbols.
+$(BUILD_DIR)/kernel.elf32: $(BUILD_DIR)/kernel.elf
+	$(OBJCOPY) -O elf32-i386 $< $@
+	@echo "Boot image created: $@"
 
 $(BUILD_DIR)/%.o: $(KERNEL_DIR)/src/%.c
 	@mkdir -p $(dir $@)
@@ -95,14 +102,14 @@ $(BUILD_DIR)/resonance/%.o: $(KERNEL_DIR)/src/resonance/%.c
 	@echo "Compiling Resonance: $<..."
 	$(CC) $(RESONANCE_CFLAGS) -c $< -o $@
 
-# Create bootable image
-$(BUILD_DIR)/kernel.iso: $(BUILD_DIR)/kernel.elf
+# Create bootable image (GRUB's multiboot v1 loader also wants ELF32)
+$(BUILD_DIR)/kernel.iso: $(BUILD_DIR)/kernel.elf32
 	@mkdir -p $(BUILD_DIR)/iso/boot/grub
 	@cp $< $(BUILD_DIR)/iso/boot/kernel.elf
 	@echo "set timeout=0" > $(BUILD_DIR)/iso/boot/grub/grub.cfg
 	@echo "set default=0" >> $(BUILD_DIR)/iso/boot/grub/grub.cfg
 	@echo "menuentry \"QuantumOS\" {" >> $(BUILD_DIR)/iso/boot/grub/grub.cfg
-	@echo "    multiboot2 /boot/kernel.elf" >> $(BUILD_DIR)/iso/boot/grub/grub.cfg
+	@echo "    multiboot /boot/kernel.elf" >> $(BUILD_DIR)/iso/boot/grub/grub.cfg
 	@echo "    boot" >> $(BUILD_DIR)/iso/boot/grub/grub.cfg
 	@echo "}" >> $(BUILD_DIR)/iso/boot/grub/grub.cfg
 	@grub-mkrescue -o $@ $(BUILD_DIR)/iso 2>/dev/null || \
@@ -110,7 +117,7 @@ $(BUILD_DIR)/kernel.iso: $(BUILD_DIR)/kernel.elf
 	 echo "GRUB mkrescue not available, skipping ISO creation"
 
 # Run in QEMU
-run: $(BUILD_DIR)/kernel.elf
+run: $(BUILD_DIR)/kernel.elf32
 	@echo "Starting QEMU..."
 	qemu-system-x86_64 -kernel $< -serial stdio -m 128M
 
@@ -118,10 +125,11 @@ run-iso: $(BUILD_DIR)/kernel.iso
 	@echo "Starting QEMU with ISO..."
 	qemu-system-x86_64 -cdrom $< -serial stdio -m 128M
 
-# Debug with GDB
-debug: $(BUILD_DIR)/kernel.elf
+# Debug with GDB (QEMU boots the ELF32 image; GDB reads 64-bit symbols
+# from kernel.elf)
+debug: $(BUILD_DIR)/kernel.elf $(BUILD_DIR)/kernel.elf32
 	@echo "Starting QEMU in debug mode..."
-	qemu-system-x86_64 -kernel $< -serial stdio -m 128M -s -S &
+	qemu-system-x86_64 -kernel $(BUILD_DIR)/kernel.elf32 -serial stdio -m 128M -s -S &
 	@echo "Waiting for GDB connection..."
 	@sleep 1
 	$(GDB) $< -ex "target remote localhost:1234" -ex "break kernel_main" -ex "continue"
@@ -155,7 +163,7 @@ test: kernel $(TEST_BUILD_DIR)/test_runner
 		$(TEST_BUILD_DIR)/test_runner; \
 	else \
 		echo "Running kernel-integrated tests via QEMU..."; \
-		timeout 15s qemu-system-x86_64 -kernel $(BUILD_DIR)/kernel.elf \
+		timeout 15s qemu-system-x86_64 -kernel $(BUILD_DIR)/kernel.elf32 \
 			-serial stdio -m 128M -display none -no-reboot 2>&1 | \
 			tee $(TEST_BUILD_DIR)/test_output.txt; \
 		echo ""; \
@@ -194,7 +202,7 @@ test-%: kernel
 	@echo "Running test: $*..."
 	@if [ -f $(TEST_UNIT_DIR)/test_$*.c ]; then \
 		echo "Test file found: $(TEST_UNIT_DIR)/test_$*.c"; \
-		timeout 15s qemu-system-x86_64 -kernel $(BUILD_DIR)/kernel.elf \
+		timeout 15s qemu-system-x86_64 -kernel $(BUILD_DIR)/kernel.elf32 \
 			-serial stdio -m 128M -display none -no-reboot 2>&1 | \
 			grep -A 100 "test_$*" || echo "Test output not found"; \
 	else \
@@ -251,19 +259,21 @@ ci-smoke: kernel
 	@echo "[1/3] Build verified: $(BUILD_DIR)/kernel.elf exists"
 	@test -f $(BUILD_DIR)/kernel.elf || (echo "ERROR: Kernel not built" && exit 1)
 	@echo "[2/3] Running QEMU boot test (10 second timeout)..."
-	@timeout 10s qemu-system-x86_64 -kernel $(BUILD_DIR)/kernel.elf \
+	@timeout 10s qemu-system-x86_64 -kernel $(BUILD_DIR)/kernel.elf32 \
 		-serial stdio -m 128M -display none -no-reboot 2>&1 | tee /tmp/qemu-boot.log || true
 	@echo ""
 	@echo "[3/3] Validating boot output..."
-	@if grep -q "QuantumOS" /tmp/qemu-boot.log 2>/dev/null; then \
-		echo "SUCCESS: Boot banner detected"; \
+	@if grep -q "QuantumOS ready" /tmp/qemu-boot.log 2>/dev/null; then \
+		echo "SUCCESS: Kernel booted to idle loop (QuantumOS ready)"; \
 		echo ""; \
 		echo "=== Smoke Test PASSED ==="; \
 	else \
-		echo "WARNING: Boot banner not found (may be expected if kernel halts quickly)"; \
-		echo "Check /tmp/qemu-boot.log for output"; \
+		echo "ERROR: Kernel did not reach 'QuantumOS ready'"; \
+		echo "Boot log:"; \
+		cat /tmp/qemu-boot.log 2>/dev/null || true; \
 		echo ""; \
-		echo "=== Smoke Test COMPLETED (with warnings) ==="; \
+		echo "=== Smoke Test FAILED ==="; \
+		exit 1; \
 	fi
 
 # Quick validation for contributors
