@@ -4,6 +4,7 @@
 #include <kernel/interrupts.h>
 #include <kernel/ipc.h>
 #include <kernel/process.h>
+#include <kernel/scheduler.h>
 
 // External symbols from linker script
 extern uint8_t __bss_start;
@@ -23,6 +24,7 @@ static void interrupts_subsystem_init(void);
 static void core_services_init(void);
 static void ipc_subsystem_init(void);
 static void process_subsystem_init(void);
+static void scheduler_subsystem_init(void);
 
 // Kernel main entry point
 void kernel_main(uint32_t magic, uint32_t info_addr) {
@@ -80,6 +82,9 @@ static void kernel_init(void) {
     // Initialize core services
     core_services_init();
 
+    // Spawn demo kernel threads and attach the scheduler
+    scheduler_subsystem_init();
+
     // Start the periodic timer and enable interrupts
     pit_init(TIMER_DEFAULT_HZ);
     interrupt_enable(IRQ_BASE + IRQ_TIMER);
@@ -89,7 +94,8 @@ static void kernel_init(void) {
     boot_log("Kernel initialization complete");
     boot_log("QuantumOS ready");
 
-    // Idle loop — woken by the timer tick
+    // Idle loop for the kernel process — the scheduler preempts this
+    // and rotates through the kernel threads
     while (1) {
         __asm__ volatile("hlt");
     }
@@ -178,6 +184,47 @@ static void process_subsystem_init(void) {
     }
 
     boot_log("Process subsystem initialized");
+}
+
+// ============================================================================
+// Demo kernel threads — visible proof that preemptive scheduling works
+// ============================================================================
+
+static volatile uint64_t alpha_wakeups = 0;
+static volatile uint64_t beta_wakeups = 0;
+
+static void demo_thread_alpha(void) {
+    boot_log("kernel-thread alpha: online");
+    while (1) {
+        __asm__ volatile("hlt");
+        if (++alpha_wakeups % 200 == 0) {
+            boot_log("kernel-thread alpha: alive");
+        }
+    }
+}
+
+static void demo_thread_beta(void) {
+    boot_log("kernel-thread beta: online");
+    while (1) {
+        __asm__ volatile("hlt");
+        if (++beta_wakeups % 200 == 0) {
+            boot_log("kernel-thread beta: alive");
+        }
+    }
+}
+
+// Scheduler + demo thread initialization
+static void scheduler_subsystem_init(void) {
+    boot_log("Initializing scheduler...");
+
+    if (kernel_thread_create("alpha", demo_thread_alpha, PRIORITY_NORMAL, NULL) != STATUS_SUCCESS) {
+        boot_log("Warning: failed to create kernel thread alpha");
+    }
+    if (kernel_thread_create("beta", demo_thread_beta, PRIORITY_NORMAL, NULL) != STATUS_SUCCESS) {
+        boot_log("Warning: failed to create kernel thread beta");
+    }
+
+    scheduler_init();
 }
 
 // Boot validation

@@ -141,8 +141,12 @@ boot_panic:
     jmp .panic_loop
 
 # Early console output — C ABI: string in %rdi
+# Interrupts are disabled for the duration so strings stay atomic on the
+# serial line (timer-tick logs would otherwise interleave mid-string).
 .global early_console_write
 early_console_write:
+    pushfq
+    cli
     push %rax
     push %rdi
     push %rsi
@@ -176,6 +180,7 @@ early_console_write:
     pop %rsi
     pop %rdi
     pop %rax
+    popfq             # restore caller's IF
     ret
 
 # Write hex value
