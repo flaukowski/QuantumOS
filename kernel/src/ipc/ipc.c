@@ -11,6 +11,7 @@
 #include <kernel/ipc.h>
 #include <kernel/types.h>
 #include <kernel/boot.h>
+#include <kernel/memory.h>
 
 /* ============================================================================
  * Internal Constants
@@ -123,30 +124,38 @@ static void str_copy(char *dest, const char *src, size_t max) {
  * Queue Entry Management
  * ============================================================================ */
 
-/* Simple entry pool for queue entries */
-#define ENTRY_POOL_SIZE (MAX_PROCESSES * IPC_MAX_QUEUE_SIZE)
-static ipc_queue_entry_t entry_pool[ENTRY_POOL_SIZE];
-static uint8_t entry_in_use[ENTRY_POOL_SIZE];
+/*
+ * Queue entries are allocated on demand from the kernel heap instead of a
+ * static pool (the old pool was MAX_PROCESSES * IPC_MAX_QUEUE_SIZE entries
+ * of ~4 KB each — ~67 MB of BSS). kfree() is currently a no-op (bump
+ * allocator), so freed entries are recycled through a local free list;
+ * heap usage grows only to the high-water mark of in-flight messages.
+ */
+static ipc_queue_entry_t *entry_free_list = NULL;
 
 static ipc_queue_entry_t *queue_alloc_entry(void) {
-    for (uint32_t i = 0; i < ENTRY_POOL_SIZE; i++) {
-        if (!entry_in_use[i]) {
-            entry_in_use[i] = 1;
-            entry_pool[i].next = NULL;
-            entry_pool[i].prev = NULL;
-            return &entry_pool[i];
+    ipc_queue_entry_t *entry = entry_free_list;
+
+    if (entry) {
+        entry_free_list = entry->next;
+    } else {
+        entry = kmalloc(sizeof(ipc_queue_entry_t));
+        if (!entry) {
+            return NULL;
         }
     }
-    return NULL;
+
+    entry->next = NULL;
+    entry->prev = NULL;
+    return entry;
 }
 
 static void queue_free_entry(ipc_queue_entry_t *entry) {
     if (!entry) return;
 
-    uint32_t idx = (uint32_t)(entry - entry_pool);
-    if (idx < ENTRY_POOL_SIZE) {
-        entry_in_use[idx] = 0;
-    }
+    entry->prev = NULL;
+    entry->next = entry_free_list;
+    entry_free_list = entry;
 }
 
 /* ============================================================================
@@ -328,11 +337,6 @@ ipc_result_t ipc_init(void) {
     for (uint32_t i = 0; i < MAX_CHANNELS; i++) {
         channels[i].channel_id = 0;
         channels[i].is_active = 0;
-    }
-
-    /* Initialize entry pool */
-    for (uint32_t i = 0; i < ENTRY_POOL_SIZE; i++) {
-        entry_in_use[i] = 0;
     }
 
     /* Clear statistics */
