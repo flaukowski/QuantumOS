@@ -5,6 +5,7 @@
 #include <kernel/ipc.h>
 #include <kernel/process.h>
 #include <kernel/scheduler.h>
+#include <kernel/capability.h>
 
 // External symbols from linker script
 extern uint8_t __bss_start;
@@ -147,6 +148,15 @@ static void core_services_init(void) {
     current_boot_state = BOOT_STATE_CORE_SERVICES;
     boot_log("Initializing core services...");
 
+    // Initialize capability system first — process creation grants
+    // each process its root capability
+    if (cap_init() != CAP_SUCCESS) {
+        boot_panic("Failed to initialize capability system");
+    }
+    if (cap_selftest() != CAP_SUCCESS) {
+        boot_panic("Capability self-test failed");
+    }
+
     // Initialize process management system
     process_subsystem_init();
 
@@ -154,7 +164,6 @@ static void core_services_init(void) {
     ipc_subsystem_init();
 
     // TODO: Initialize remaining core services
-    // - Capability system
     // - Quantum subsystem
 
     boot_log("Core services initialization complete");
