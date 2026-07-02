@@ -119,6 +119,7 @@ typedef struct process {
         bool is_quantum_aware;     /* Process can use quantum resources */
         uint32_t qubit_allocation; /* Allocated qubits */
         uint64_t quantum_runtime; /* Time spent on quantum operations */
+        uint32_t quantum_cap;      /* Capability for the shared qubit pool */
     } quantum;
     
     /* Internal kernel fields */

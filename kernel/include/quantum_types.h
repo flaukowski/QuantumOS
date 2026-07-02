@@ -15,13 +15,14 @@ typedef enum {
     QUANTUM_ERROR_CIRCUIT_TOO_DEEP = -6
 } quantum_result_t;
 
-// Process types for hybrid execution
+// Process classes for hybrid execution (distinct from the process
+// manager's process_type_t so both headers can coexist in one TU)
 typedef enum {
-    PROCESS_CLASSICAL,
-    PROCESS_QUANTUM,
-    PROCESS_HYBRID,
-    PROCESS_AGENT
-} process_type_t;
+    QPROC_CLASSICAL,
+    QPROC_QUANTUM,
+    QPROC_HYBRID,
+    QPROC_AGENT
+} quantum_process_type_t;
 
 // Physical or simulated qubit reference
 typedef struct {
@@ -84,7 +85,7 @@ typedef struct {
 
 // Process requirements
 typedef struct {
-    process_type_t type;
+    quantum_process_type_t type;
     uint32_t cpu_cores_required;
     uint32_t qubits_required;
     uint64_t time_budget;
