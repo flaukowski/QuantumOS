@@ -13,6 +13,7 @@
 #include <kernel/process.h>
 #include <kernel/scheduler.h>
 #include <kernel/capability.h>
+#include <kernel/syscall.h>
 #include <kernel/interrupts.h>
 #include <kernel/boot.h>
 
@@ -98,7 +99,8 @@ svc_result_t service_manager_init(void) {
 
 svc_result_t service_register(const service_definition_t *def,
                               uint32_t *service_id_out) {
-    if (!manager_initialized || !def || !def->name || !def->entry) {
+    if (!manager_initialized || !def || !def->name ||
+        (!def->entry && !def->user_elf_start)) {
         return SVC_ERROR_INVALID_ARG;
     }
     if (slot_by_name(def->name)) {
@@ -159,17 +161,29 @@ static svc_result_t start_slot(service_slot_t *slot) {
     slot->info.state = SERVICE_STATE_STARTING;
 
     uint32_t pid = 0;
-    if (kernel_thread_create(slot->info.name, slot->def.entry,
-                             PRIORITY_NORMAL, &pid) != STATUS_SUCCESS) {
-        slot->info.state = SERVICE_STATE_CRASHED;
-        slot->starting = 0;
-        return SVC_ERROR_SPAWN_FAILED;
-    }
-
-    /* Mark the process as a service and grant its service capability */
-    process_t *proc = process_get_by_pid(pid);
-    if (proc) {
-        proc->type = PROCESS_TYPE_SERVICE;
+    if (slot->def.user_elf_start) {
+        /* Isolated ring-3 user-process service, loaded from its ELF */
+        if (user_process_spawn_elf(slot->info.name, slot->def.user_elf_start,
+                                   slot->def.user_elf_end, &pid) != STATUS_SUCCESS) {
+            slot->info.state = SERVICE_STATE_CRASHED;
+            slot->starting = 0;
+            return SVC_ERROR_SPAWN_FAILED;
+        }
+    } else {
+        /* In-kernel thread service */
+        if (kernel_thread_create(slot->info.name, slot->def.entry,
+                                 PRIORITY_NORMAL, &pid) != STATUS_SUCCESS) {
+            slot->info.state = SERVICE_STATE_CRASHED;
+            slot->starting = 0;
+            return SVC_ERROR_SPAWN_FAILED;
+        }
+        /* Kernel-thread services are tagged SERVICE; user-process
+         * services keep PROCESS_TYPE_USER (their ring-3 context is
+         * already built) */
+        process_t *proc = process_get_by_pid(pid);
+        if (proc) {
+            proc->type = PROCESS_TYPE_SERVICE;
+        }
     }
     uint32_t svc_cap = CAP_ID_INVALID;
     if (cap_create(pid, CAP_RESOURCE_SERVICE, slot->info.service_id,

@@ -22,11 +22,15 @@
 #define SYS_YIELD   3
 #define SYS_EXIT    4   /* rdi = exit code */
 #define SYS_TICKS   5
+#define SYS_SEND    6   /* rdi = msg ptr, rsi = len; routed by IPC capability */
+#define SYS_RECV    7   /* rdi = buf ptr, rsi = len; returns sender pid (0 = empty) */
 
 /* Error returns (in rax) */
 #define SYSCALL_EINVAL   ((uint64_t)-1)
 #define SYSCALL_EFAULT   ((uint64_t)-2)
 #define SYSCALL_ENOSYS   ((uint64_t)-3)
+#define SYSCALL_EPERM    ((uint64_t)-4)   /* no capability authorising the op */
+#define SYSCALL_EIO      ((uint64_t)-5)   /* delivery failed (e.g. queue full) */
 
 /* User memory window: identity-mapped, user-bit pages above the
  * kernel heap. Each user process gets one 2 MB region (code at the

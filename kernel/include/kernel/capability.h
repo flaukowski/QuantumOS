@@ -128,6 +128,12 @@ cap_result_t cap_check(uint32_t cap_id, uint32_t pid,
 /* Look up a capability's current data (for diagnostics) */
 cap_result_t cap_get(uint32_t cap_id, capability_t *out);
 
+/* Find the first live capability owned by `pid` of the given resource
+ * type carrying all `required_perms`, and return the resource it
+ * guards. Used for capability-as-address routing (e.g. IPC send). */
+cap_result_t cap_find(uint32_t pid, cap_resource_type_t resource_type,
+                      uint32_t required_perms, uint32_t *resource_id_out);
+
 /* Revoke everything owned by a process (called on process destroy) */
 void cap_revoke_all_for_process(uint32_t pid);
 
