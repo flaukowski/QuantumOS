@@ -39,6 +39,8 @@ static qubit_pool_t pool_stats;
 static uint32_t next_context_id = 1;
 static uint32_t next_measurement_id = 1;
 static uint64_t prng_state = 0x9E3779B97F4A7C15ULL;
+static uint64_t boot_entropy = 0;
+static uint8_t boot_entropy_present = 0;
 static uint8_t quantum_initialized = 0;
 
 /* ============================================================================
@@ -71,6 +73,11 @@ static int qubit_decohered(const sim_qubit_t *q) {
  * Lifecycle
  * ============================================================================ */
 
+void quantum_set_boot_entropy(uint64_t seed) {
+    boot_entropy = seed;
+    boot_entropy_present = 1;
+}
+
 quantum_result_t quantum_init(void) {
     memset(pool, 0, sizeof(pool));
     memset(contexts, 0, sizeof(contexts));
@@ -86,7 +93,19 @@ quantum_result_t quantum_init(void) {
     pool_stats.available_qubits = QUANTUM_MAX_QUBITS;
     pool_stats.high_fidelity_qubits = QUANTUM_MAX_QUBITS;
 
-    prng_state ^= timer_get_ticks() + 1;
+    if (boot_entropy_present) {
+        /* Mix the externally supplied quantum entropy into the PRNG
+         * state (SplitMix-style avalanche so all bits diffuse) */
+        uint64_t z = boot_entropy + 0x9E3779B97F4A7C15ULL;
+        z = (z ^ (z >> 30)) * 0xBF58476D1CE4E5B9ULL;
+        z = (z ^ (z >> 27)) * 0x94D049BB133111EBULL;
+        prng_state ^= (z ^ (z >> 31));
+        boot_log("Quantum entropy: seeded from boot handoff (qBraid quantum lab)");
+    } else {
+        prng_state ^= timer_get_ticks() + 1;
+        boot_log("Quantum entropy: internal default (no boot seed)");
+    }
+
     quantum_initialized = 1;
     boot_log("Quantum resource manager initialized (simulated backend)");
     return QUANTUM_SUCCESS;

@@ -42,6 +42,12 @@
  * API
  * ============================================================================ */
 
+/* Provide externally sourced entropy (e.g. real QPU bits handed in by
+ * the qBraid boot harness via the qseed cmdline) to seed the PRNG.
+ * Call before quantum_init(); a zero/absent seed falls back to the
+ * internal default. */
+void quantum_set_boot_entropy(uint64_t seed);
+
 /* Initialize the quantum resource manager (before process_init) */
 quantum_result_t quantum_init(void);
 

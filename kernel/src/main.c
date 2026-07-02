@@ -31,6 +31,7 @@ static void core_services_init(void);
 static void ipc_subsystem_init(void);
 static void process_subsystem_init(void);
 static void scheduler_subsystem_init(void);
+static void parse_boot_cmdline(uint32_t info_addr);
 
 // Kernel main entry point
 void kernel_main(uint32_t magic, uint32_t info_addr) {
@@ -45,9 +46,13 @@ void kernel_main(uint32_t magic, uint32_t info_addr) {
     // Parse boot configuration
     boot_config.magic = magic;
     boot_config.boot_flags = *(uint32_t*)(uintptr_t)info_addr;
-    
+
     boot_log("QuantumOS v0.1 booting...");
     boot_log("Multiboot information validated");
+
+    // Parse the boot command line for a quantum entropy seed
+    // (qseed=<hex>) handed in by the qBraid boot harness
+    parse_boot_cmdline(info_addr);
     
     // Early initialization
     early_init();
@@ -275,6 +280,55 @@ static void scheduler_subsystem_init(void) {
     }
 
     scheduler_init();
+}
+
+// ============================================================================
+// Boot command-line parsing — quantum entropy handoff (qseed=<hex>)
+// ============================================================================
+
+static int hex_val(char c) {
+    if (c >= '0' && c <= '9') return c - '0';
+    if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+    if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+    return -1;
+}
+
+// Match "qseed=" at p; on hit, decode up to 16 hex digits into a u64.
+static void parse_boot_cmdline(uint32_t info_addr) {
+    uint32_t *info = (uint32_t *)(uintptr_t)info_addr;
+    // Multiboot v1: flags bit 2 => cmdline valid; cmdline ptr at word 4
+    if (!(info[0] & 0x4)) {
+        return;
+    }
+    const char *cmd = (const char *)(uintptr_t)info[4];
+    if (!cmd) {
+        return;
+    }
+
+    static const char key[] = "qseed=";
+    for (const char *p = cmd; *p; p++) {
+        // match key
+        int k = 0;
+        while (key[k] && p[k] == key[k]) k++;
+        if (key[k] != '\0') {
+            continue;
+        }
+        const char *h = p + k;
+        uint64_t seed = 0;
+        int digits = 0;
+        while (digits < 16 && hex_val(*h) >= 0) {
+            seed = (seed << 4) | (uint64_t)hex_val(*h);
+            h++;
+            digits++;
+        }
+        if (digits > 0) {
+            quantum_set_boot_entropy(seed);
+            boot_log("Boot entropy accepted from cmdline (qseed=)");
+            boot_log("  qseed value: ");
+            early_console_write_hex(seed);
+        }
+        return;
+    }
 }
 
 // Boot validation
