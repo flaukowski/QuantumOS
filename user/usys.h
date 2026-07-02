@@ -13,8 +13,9 @@
 #define SYS_YIELD   3
 #define SYS_EXIT    4
 #define SYS_TICKS   5
-#define SYS_SEND    6
-#define SYS_RECV    7
+#define SYS_SEND      6
+#define SYS_RECV      7
+#define SYS_HEARTBEAT 8
 
 static inline long usys0(long n) {
     long r;
@@ -38,6 +39,7 @@ static inline long getpid(void)              { return usys0(SYS_GETPID); }
 static inline void yield(void)               { usys0(SYS_YIELD); }
 static inline long ticks(void)               { return usys0(SYS_TICKS); }
 static inline void exit_(long code)          { usys1(SYS_EXIT, code); }
+static inline void heartbeat(void)           { usys0(SYS_HEARTBEAT); }
 
 /* Capability-routed send: goes to whatever destination this process
  * holds an IPC send-capability for. Returns 0 on success, negative on

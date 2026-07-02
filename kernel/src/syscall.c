@@ -31,6 +31,7 @@ extern const uint8_t user_rogue_start[], user_rogue_end[];
 extern const uint8_t _binary_init_elf_start[], _binary_init_elf_end[];
 extern const uint8_t _binary_echo_elf_start[], _binary_echo_elf_end[];
 extern const uint8_t _binary_client_elf_start[], _binary_client_elf_end[];
+extern const uint8_t _binary_hbsvc_elf_start[], _binary_hbsvc_elf_end[];
 
 static status_t finalize_user_process(address_space_t *as, const char *name,
                                       uint64_t entry, uint32_t *pid_out);
@@ -178,6 +179,10 @@ static void syscall_dispatch(cpu_state_t *state) {
         break;
     case SYS_RECV:
         state->rax = sys_recv(pid, state->rdi, state->rsi);
+        break;
+    case SYS_HEARTBEAT:
+        service_heartbeat();   /* uses the current process to find its slot */
+        state->rax = 0;
         break;
     default:
         state->rax = SYSCALL_ENOSYS;
@@ -381,4 +386,22 @@ void user_ipc_demo_init(void) {
     cap_create(echo_pid, CAP_RESOURCE_IPC, client_pid, CAP_READ | CAP_WRITE, 0, &cap);
 
     boot_log("IPC demo: echo service (ring 3) + client wired via capabilities");
+
+    /* A monitored user-process service: it heartbeats via SYS_HEARTBEAT
+     * and the watchdog restarts it when it goes silent — demonstrating
+     * that ring-3 services are first-class in the health monitor. */
+    service_definition_t watched_def = {
+        .name = "watched-svc",
+        .entry = NULL,
+        .user_elf_start = _binary_hbsvc_elf_start,
+        .user_elf_end = _binary_hbsvc_elf_end,
+        .dependencies = { NULL },
+        .max_restarts = 2,
+    };
+    uint32_t wsid = 0;
+    if (service_register(&watched_def, &wsid) == SVC_SUCCESS &&
+        service_start("watched-svc", NULL) == SVC_SUCCESS) {
+        service_monitor(wsid, true);
+        boot_log("Watchdog now monitoring a ring-3 user service (watched-svc)");
+    }
 }

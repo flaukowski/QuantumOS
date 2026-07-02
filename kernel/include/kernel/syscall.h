@@ -24,6 +24,7 @@
 #define SYS_TICKS   5
 #define SYS_SEND    6   /* rdi = msg ptr, rsi = len; routed by IPC capability */
 #define SYS_RECV    7   /* rdi = buf ptr, rsi = len; returns sender pid (0 = empty) */
+#define SYS_HEARTBEAT 8 /* report liveness to the service watchdog */
 
 /* Error returns (in rax) */
 #define SYSCALL_EINVAL   ((uint64_t)-1)
