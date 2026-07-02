@@ -19,7 +19,7 @@ QuantumOS is not just another operating system—it's a bold reimagining of what
 
 ### 🧠 **Quantum-Native Design**
 - **First-class quantum resources**: Qubits, coherence windows, and quantum circuits are native OS objects
-- **Resonant scheduler**: Novel scheduling with Kuramoto oscillator dynamics and chiral stability ([ghostmagicOS integration](docs/ghostmagicOS_INTEGRATION.md))
+- **Resonant scheduler**: Novel scheduling with Kuramoto oscillator dynamics and chiral stability ([ghostmagicOS integration](docs/GHOSTOS_INTEGRATION.md))
 - **Hybrid workloads**: Seamlessly blend classical and quantum computations
 - **Consciousness-verified processes**: IIT Phi verification for advanced computational workloads
 
@@ -184,7 +184,6 @@ We believe the future of computing is collaborative, and we welcome contribution
 
 ### 📖 **Guidelines**
 - Read our [Contributing Guidelines](CONTRIBUTING.md)
-- Follow our [Code of Conduct](CODE_OF_CONDUCT.md)
 - Check our [Issue Templates](.github/ISSUE_TEMPLATE/) for guidance
 - Join our [Discussions](https://github.com/flaukowski/QuantumOS/discussions)
 
@@ -225,13 +224,11 @@ We have specialized validation for AI-assisted development:
 
 ## 📖 Documentation
 
-- [**Architecture Overview**](docs/ARCHITECTURE.md) - System design and philosophy
+- [**Microkernel Design**](docs/MICROKERNEL_DESIGN.md) - System design, philosophy, and microkernel architecture
 - [**Kernel Roadmap**](docs/KERNEL_ROADMAP.md) - Implementation roadmap
-- [**Microkernel Design**](docs/MICROKERNEL_DESIGN.md) - Microkernel architecture
 - [**Quantum Scheduler**](docs/QUANTUM_SCHEDULER.md) - Quantum resource management
-- [**ghostmagicOS Integration**](docs/ghostmagicOS_INTEGRATION.md) - Resonant scheduler and consciousness verification
+- [**ghostmagicOS Integration**](docs/GHOSTOS_INTEGRATION.md) - Resonant scheduler and consciousness verification
 - [**Bootstrap Guide**](BOOTSTRAP_GUIDE.md) - Getting started guide
-- [**API Documentation**](docs/API.md) - System APIs and interfaces
 
 ## 🏆 Acknowledgments
 
