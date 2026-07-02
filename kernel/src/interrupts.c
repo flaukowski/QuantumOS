@@ -1,6 +1,8 @@
 #include <kernel/types.h>
 #include <kernel/interrupts.h>
 #include <kernel/boot.h>
+#include <kernel/process.h>
+#include <kernel/scheduler.h>
 
 // Forward declarations for I/O port functions
 static inline void __outb(uint16_t port, uint8_t value);
@@ -254,8 +256,32 @@ void interrupt_handler(cpu_state_t *state) {
     }
 }
 
+/**
+ * Contain a fault raised from ring 3: kill the offending process and
+ * reschedule instead of panicking the kernel. Returns 1 if the fault
+ * was contained (caller should return), 0 if it came from ring 0.
+ */
+static int contain_user_fault(cpu_state_t *state, const char *what) {
+    if ((state->cs & 3) == 0) {
+        return 0; /* kernel fault — fatal */
+    }
+
+    process_t *cur = process_get_current();
+    boot_log("FAULT CONTAINED: ring-3 fault, killing offending process:");
+    boot_log(what);
+    if (cur) {
+        boot_log(cur->name);
+        process_set_state(cur->pid, PROCESS_STATE_TERMINATED);
+    }
+    scheduler_kill_current(state);
+    return 1;
+}
+
 // Exception handlers
 void divide_error_handler(cpu_state_t *state) {
+    if (contain_user_fault(state, "divide error")) {
+        return;
+    }
     boot_log("Divide by zero exception");
     dump_cpu_state(state);
     boot_panic("Divide by zero");
@@ -264,7 +290,11 @@ void divide_error_handler(cpu_state_t *state) {
 void page_fault_handler(cpu_state_t *state) {
     uint64_t fault_addr;
     __asm__ volatile("mov %%cr2, %0" : "=r"(fault_addr));
-    
+
+    if (contain_user_fault(state, "page fault")) {
+        return;
+    }
+
     boot_log("Page fault at address: ");
     early_console_write_hex(fault_addr);
     boot_log("Error code: ");
@@ -275,6 +305,9 @@ void page_fault_handler(cpu_state_t *state) {
 }
 
 void general_protection_fault_handler(cpu_state_t *state) {
+    if (contain_user_fault(state, "general protection fault")) {
+        return;
+    }
     boot_log("General protection fault");
     boot_log("Error code: ");
     early_console_write_hex(state->err_code);

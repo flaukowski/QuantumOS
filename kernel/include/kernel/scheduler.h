@@ -34,4 +34,12 @@ uint64_t scheduler_get_switches(void);
 /* Timer callback (exposed for diagnostics/testing) */
 void scheduler_tick(cpu_state_t *state);
 
+/* Immediate reschedule (voluntary yield): save the current context and
+ * swap the frame to the next READY process, resetting the quantum. */
+void scheduler_reschedule(cpu_state_t *state);
+
+/* Switch away from the current process WITHOUT saving its context
+ * (used after it has been terminated/killed). */
+void scheduler_kill_current(cpu_state_t *state);
+
 #endif /* SCHEDULER_H */

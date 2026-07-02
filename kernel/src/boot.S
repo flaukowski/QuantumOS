@@ -254,6 +254,9 @@ gdt64_ptr:
 # ============================================================================
 .section .bss
 .align 4096
+.global boot_pml4
+.global boot_pdpt
+.global boot_pd
 boot_pml4:
     .space 4096
 boot_pdpt:

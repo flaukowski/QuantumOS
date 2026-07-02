@@ -52,6 +52,9 @@ ISR_NOERRCODE 29    # Reserved
 ISR_ERRCODE   30    # Security exception
 ISR_NOERRCODE 31    # Reserved
 
+# System call entry (int 0x80, gate installed with DPL 3)
+ISR_NOERRCODE 128
+
 # IRQ handlers (32-47)
 .macro IRQ num
 .global irq\num

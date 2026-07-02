@@ -52,6 +52,10 @@ void scheduler_tick(cpu_state_t *state) {
     if (++quantum_counter < SCHED_QUANTUM_TICKS) {
         return;
     }
+    scheduler_reschedule(state);
+}
+
+void scheduler_reschedule(cpu_state_t *state) {
     quantum_counter = 0;
 
     process_t *cur = process_get_current();
@@ -85,6 +89,21 @@ void scheduler_tick(cpu_state_t *state) {
     if (switch_count == 1) {
         boot_log("scheduler: first context switch");
     }
+}
+
+void scheduler_kill_current(cpu_state_t *state) {
+    process_t *cur = process_get_current();
+    process_t *next = pick_next(cur ? cur->pid : 0);
+    if (!next) {
+        boot_panic("scheduler: nothing runnable after kill");
+        return;
+    }
+
+    /* Do not save the dead process's context */
+    process_switch_to(next);
+    process_set_state(next->pid, PROCESS_STATE_RUNNING);
+    *state = next->context;
+    switch_count++;
 }
 
 uint64_t scheduler_get_switches(void) {
