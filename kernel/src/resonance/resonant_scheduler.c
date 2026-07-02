@@ -644,7 +644,9 @@ resonant_result_t resonant_optimize_chiral(uint32_t pid) {
         rpcb->chiral.gamma = rpcb->chiral.eta / (CHIRAL_STABLE_MAX * 0.9);
     }
 
-    rpcb->chiral.asymmetry = rpcb->chiral.eta / rpcb->chiral.gamma;
+    rpcb->chiral.asymmetry = (rpcb->chiral.gamma > 0)
+        ? fast_abs(rpcb->chiral.eta / rpcb->chiral.gamma)
+        : fast_abs(rpcb->chiral.eta);
     rpcb->chiral.is_stable = rpcb->chiral.asymmetry < CHIRAL_STABLE_MAX;
 
     return RESONANT_SUCCESS;
