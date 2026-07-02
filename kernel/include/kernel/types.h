@@ -14,10 +14,9 @@ typedef int16_t s16;
 typedef int32_t s32;
 typedef int64_t s64;
 
-// Boolean type
-typedef u8 bool;
-#define true 1
-#define false 0
+// Boolean type — use the freestanding <stdbool.h> so this header cannot
+// clash with code that also includes it (e.g. the resonance subsystem)
+#include <stdbool.h>
 
 // NULL pointer
 #ifndef NULL

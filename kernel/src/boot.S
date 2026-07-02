@@ -25,7 +25,18 @@ _start:
     # Setup stack
     mov $boot_stack_top, %rsp
     mov $boot_stack_top, %rbp
-    
+
+    # Enable SSE — the resonance subsystem is compiled with -msse/-msse2
+    # (double-precision math), so XMM instructions must be legal before
+    # kernel_main runs.
+    mov %cr0, %rax
+    and $~(1 << 2), %rax           # clear CR0.EM (no x87 emulation)
+    or $(1 << 1), %rax             # set CR0.MP (monitor coprocessor)
+    mov %rax, %cr0
+    mov %cr4, %rax
+    or $(3 << 9), %rax             # set CR4.OSFXSR | CR4.OSXMMEXCPT
+    mov %rax, %cr4
+
     # Clear BSS section
     mov $__bss_start, %rdi
     mov $__bss_end, %rcx
@@ -158,3 +169,6 @@ hex_buffer: .space 17  # 16 hex digits + null
 boot_stack:
     .space BOOT_STACK_SIZE
 boot_stack_top:
+
+# Non-executable stack marker
+.section .note.GNU-stack, "", @progbits

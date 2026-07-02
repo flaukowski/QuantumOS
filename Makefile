@@ -46,13 +46,11 @@ endif
 # Source files
 # KERNEL_SOURCES captures all .c files in kernel/src/ (including process*.c)
 KERNEL_SOURCES = $(wildcard $(KERNEL_DIR)/src/*.c)
-PROCESS_SOURCES = $(wildcard $(KERNEL_DIR)/src/process*.c)
 IPC_SOURCES = $(wildcard $(KERNEL_DIR)/src/ipc/*.c)
 RESONANCE_SOURCES = $(wildcard $(KERNEL_DIR)/src/resonance/*.c)
 ASSEMBLY_SOURCES = $(wildcard $(KERNEL_DIR)/src/*.S)
 # Assembly files compile to *_asm.o to avoid naming collisions with C files
 OBJECTS = $(KERNEL_SOURCES:$(KERNEL_DIR)/src/%.c=$(BUILD_DIR)/%.o) \
-          $(PROCESS_SOURCES:$(KERNEL_DIR)/src/%.c=$(BUILD_DIR)/%.o) \
           $(IPC_SOURCES:$(KERNEL_DIR)/src/ipc/%.c=$(BUILD_DIR)/ipc/%.o) \
           $(RESONANCE_SOURCES:$(KERNEL_DIR)/src/resonance/%.c=$(BUILD_DIR)/resonance/%.o) \
           $(ASSEMBLY_SOURCES:$(KERNEL_DIR)/src/%.S=$(BUILD_DIR)/%_asm.o)
@@ -86,10 +84,16 @@ $(BUILD_DIR)/ipc/%.o: $(KERNEL_DIR)/src/ipc/%.c
 	@echo "Compiling IPC: $<..."
 	$(CC) $(CFLAGS) -c $< -o $@
 
+# Resonance subsystem does double-precision math, which the x86_64 ABI
+# returns in XMM registers — it needs SSE even though the rest of the
+# kernel is compiled without it. boot.S enables SSE (CR0/CR4) before
+# kernel_main so these instructions are legal at runtime.
+RESONANCE_CFLAGS = $(filter-out -mno-sse -mno-sse2 -mno-mmx,$(CFLAGS)) -msse -msse2
+
 $(BUILD_DIR)/resonance/%.o: $(KERNEL_DIR)/src/resonance/%.c
 	@mkdir -p $(dir $@)
 	@echo "Compiling Resonance: $<..."
-	$(CC) $(CFLAGS) -c $< -o $@
+	$(CC) $(RESONANCE_CFLAGS) -c $< -o $@
 
 # Create bootable image
 $(BUILD_DIR)/kernel.iso: $(BUILD_DIR)/kernel.elf
