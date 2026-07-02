@@ -350,3 +350,6 @@ write_cr0:
 write_cr4:
     mov %rdi, %cr4
     ret
+
+# Non-executable stack marker
+.section .note.GNU-stack, "", @progbits

@@ -27,15 +27,6 @@
  * Mathematical Helpers
  * ============================================================================ */
 
-static double fast_sqrt(double x) {
-    if (x <= 0) return 0;
-    double guess = x / 2.0;
-    for (int i = 0; i < 10; i++) {
-        guess = (guess + x / guess) / 2.0;
-    }
-    return guess;
-}
-
 static double fabs_d(double x) {
     return x < 0.0 ? -x : x;
 }

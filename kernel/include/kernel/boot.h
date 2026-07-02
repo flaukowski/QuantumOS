@@ -2,6 +2,7 @@
 #define BOOT_H
 
 #include <stdint.h>
+#include <stddef.h>
 
 // Boot magic numbers
 #define MULTIBOOT2_MAGIC 0x36d76289
