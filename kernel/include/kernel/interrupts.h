@@ -87,6 +87,17 @@ typedef struct {
 // Interrupt handler function type
 typedef void (*interrupt_handler_t)(cpu_state_t *state);
 
+// Timer tick callback (scheduler hook)
+typedef void (*timer_callback_t)(cpu_state_t *state);
+
+// PIT (8253/8254) programmable interval timer
+#define PIT_BASE_FREQUENCY 1193182  // Hz
+#define TIMER_DEFAULT_HZ   100      // 10 ms tick
+
+void pit_init(uint32_t frequency_hz);
+uint64_t timer_get_ticks(void);
+void timer_set_callback(timer_callback_t callback);
+
 // Interrupt handler registration
 typedef struct {
     interrupt_handler_t handler;
@@ -154,8 +165,10 @@ void interrupt_stats(void);
 #define GATE_TYPE_TASK         0x05
 
 // Gate privileges
+// DPL occupies bits 5-6 of type_attr; bit 7 is Present
 #define DPL_KERNEL    0x00
-#define DPL_USER      0x03
+#define DPL_USER      0x60
+#define GATE_PRESENT  0x80
 
 // IST indices
 #define IST_NONE      0
