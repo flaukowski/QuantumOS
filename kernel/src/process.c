@@ -14,6 +14,7 @@
 #include <kernel/boot.h>
 #include <kernel/types.h>
 #include <kernel/capability.h>
+#include <kernel/quantum.h>
 
 /* Local strncpy implementation (no libc in freestanding kernel) */
 static char *strncpy_local(char *dest, const char *src, size_t n) {
@@ -349,6 +350,18 @@ status_t process_create(const process_create_params_t *params, process_t **proce
                    &root_cap) == CAP_SUCCESS) {
         process_table[pid].capability_root = root_cap;
         process_table[pid].capability_count = 1;
+    }
+
+    /* Quantum-aware processes additionally get a capability for the
+     * shared qubit pool */
+    process_table[pid].quantum.quantum_cap = CAP_ID_INVALID;
+    if (params->is_quantum_aware) {
+        uint32_t qcap = CAP_ID_INVALID;
+        if (quantum_grant(pid, CAP_QUANTUM | CAP_READ | CAP_WRITE | CAP_EXECUTE,
+                          &qcap) == QUANTUM_SUCCESS) {
+            process_table[pid].quantum.quantum_cap = qcap;
+            process_table[pid].capability_count++;
+        }
     }
     
     /* Update statistics */

@@ -6,6 +6,7 @@
 #include <kernel/process.h>
 #include <kernel/scheduler.h>
 #include <kernel/capability.h>
+#include <kernel/quantum.h>
 
 // External symbols from linker script
 extern uint8_t __bss_start;
@@ -157,14 +158,20 @@ static void core_services_init(void) {
         boot_panic("Capability self-test failed");
     }
 
+    // Initialize quantum resource manager (before processes — quantum-
+    // aware processes are granted pool capabilities at creation)
+    if (quantum_init() != QUANTUM_SUCCESS) {
+        boot_panic("Failed to initialize quantum resource manager");
+    }
+    if (quantum_selftest() != QUANTUM_SUCCESS) {
+        boot_panic("Quantum self-test failed");
+    }
+
     // Initialize process management system
     process_subsystem_init();
 
     // Initialize IPC system
     ipc_subsystem_init();
-
-    // TODO: Initialize remaining core services
-    // - Quantum subsystem
 
     boot_log("Core services initialization complete");
 }
