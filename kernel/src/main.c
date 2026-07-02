@@ -11,6 +11,19 @@
 #include <kernel/gdt.h>
 #include <kernel/syscall.h>
 #include <kernel/vga.h>
+#include <kernel/fb.h>
+
+// Boot splash dispatch: framebuffer when available, else VGA text
+static void splash_begin(void) {
+    if (fb_available()) fb_boot_splash(); else vga_boot_splash();
+}
+static void splash_stage(const char *label, int percent) {
+    if (fb_available()) fb_boot_stage(label, percent);
+    else vga_boot_stage(label, percent);
+}
+static void splash_ready(void) {
+    if (fb_available()) fb_boot_ready(); else vga_boot_ready();
+}
 
 // External symbols from linker script
 extern uint8_t __bss_start;
@@ -53,6 +66,16 @@ void kernel_main(uint32_t magic, uint32_t info_addr) {
     // Parse the boot command line for a quantum entropy seed
     // (qseed=<hex>) handed in by the qBraid boot harness
     parse_boot_cmdline(info_addr);
+
+    // Use a linear framebuffer if the loader provided one (GRUB ISO /
+    // real hardware); otherwise the VGA text splash. The QEMU -kernel
+    // path — CI and the qBraid watch window — provides none and stays
+    // in text mode.
+    if (fb_init_from_multiboot(info_addr)) {
+        boot_log("Linear framebuffer active — graphical boot splash");
+    } else {
+        boot_log("No framebuffer — VGA text boot splash");
+    }
     
     // Early initialization
     early_init();
@@ -83,47 +106,47 @@ static void kernel_init(void) {
 
     // Draw the boot splash; each subsystem advances the progress bar
     // and travels the interference wave one step further
-    vga_boot_splash();
-    vga_boot_stage("hardware abstraction layer", 5);
+    splash_begin();
+    splash_stage("hardware abstraction layer", 5);
 
     // Initialize HAL
     hal_init();
 
     // Initialize memory management
-    vga_boot_stage("memory management", 20);
+    splash_stage("memory management", 20);
     memory_subsystem_init();
 
     // Initialize interrupt system
-    vga_boot_stage("interrupt controller", 35);
+    splash_stage("interrupt controller", 35);
     interrupts_subsystem_init();
 
     // Install the full GDT + TSS (user-mode descriptors, ring-3 entry
     // stack) and the syscall gate
-    vga_boot_stage("descriptor tables + syscalls", 45);
+    splash_stage("descriptor tables + syscalls", 45);
     gdt_init();
     syscall_init();
 
     // Initialize core services
-    vga_boot_stage("capabilities + quantum resources", 60);
+    splash_stage("capabilities + quantum resources", 60);
     core_services_init();
 
     // Spawn demo kernel threads and attach the scheduler
-    vga_boot_stage("scheduler + services", 75);
+    splash_stage("scheduler + services", 75);
     scheduler_subsystem_init();
 
     // Map the user memory window and spawn the user-mode processes
-    vga_boot_stage("user-space processes", 90);
+    splash_stage("user-space processes", 90);
     user_init();
 
     // Start the periodic timer and enable interrupts
-    vga_boot_stage("timer + interrupts", 98);
+    splash_stage("timer + interrupts", 98);
     pit_init(TIMER_DEFAULT_HZ);
     interrupt_enable(IRQ_BASE + IRQ_TIMER);
     interrupt_enable_all();
     boot_log("Timer started, interrupts enabled");
 
     boot_log("Kernel initialization complete");
-    vga_boot_ready();
+    splash_ready();
     boot_log("QuantumOS ready");
 
     // Idle loop for the kernel process — the scheduler preempts this
