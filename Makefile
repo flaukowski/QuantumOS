@@ -135,6 +135,8 @@ $(BUILD_DIR)/kernel.iso: $(BUILD_DIR)/kernel.elf32
 	@cp $< $(BUILD_DIR)/iso/boot/kernel.elf
 	@echo "set timeout=0" > $(BUILD_DIR)/iso/boot/grub/grub.cfg
 	@echo "set default=0" >> $(BUILD_DIR)/iso/boot/grub/grub.cfg
+	@echo "insmod all_video" >> $(BUILD_DIR)/iso/boot/grub/grub.cfg
+	@echo "set gfxpayload=1024x768x32" >> $(BUILD_DIR)/iso/boot/grub/grub.cfg
 	@echo "menuentry \"QuantumOS\" {" >> $(BUILD_DIR)/iso/boot/grub/grub.cfg
 	@echo "    multiboot /boot/kernel.elf" >> $(BUILD_DIR)/iso/boot/grub/grub.cfg
 	@echo "    boot" >> $(BUILD_DIR)/iso/boot/grub/grub.cfg

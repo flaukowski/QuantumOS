@@ -10,15 +10,29 @@
 #define BOOT_STACK_SIZE 16384
 
 #define MB1_MAGIC 0x1BADB002
-#define MB1_FLAGS 0x00000003        /* page-align modules + memory info */
+/* bit0 page-align modules, bit1 memory info, bit2 request video mode */
+#define MB1_FLAGS 0x00000007
 
 /* Multiboot v1 header — must be in the first 8 KB of the image; link.ld
- * places .multiboot_header first. No AOUT kludge needed for ELF. */
+ * places .multiboot_header first. With the video bit set we also supply
+ * the address fields (zero; we are ELF so they are ignored) and the
+ * preferred graphics mode. The loader gives us a linear framebuffer if
+ * it can, and reports it back in the multiboot info; the kernel falls
+ * back to VGA text if no usable framebuffer is provided. */
 .section .multiboot_header, "a"
 .align 4
     .long MB1_MAGIC
     .long MB1_FLAGS
     .long -(MB1_MAGIC + MB1_FLAGS)
+    .long 0        /* header_addr   (unused: ELF) */
+    .long 0        /* load_addr */
+    .long 0        /* load_end_addr */
+    .long 0        /* bss_end_addr */
+    .long 0        /* entry_addr */
+    .long 0        /* mode_type: 0 = linear graphics */
+    .long 1024     /* width  (preferred) */
+    .long 768      /* height */
+    .long 32       /* depth  (bpp) */
 
 .section .text
 .global _start
@@ -257,11 +271,16 @@ gdt64_ptr:
 .global boot_pml4
 .global boot_pdpt
 .global boot_pd
+.global fb_map_pd
 boot_pml4:
     .space 4096
 boot_pdpt:
     .space 4096
 boot_pd:
+    .space 4096
+/* Spare page directory used to identity-map a high framebuffer region
+ * (set up at runtime by fb_init when a linear framebuffer is present) */
+fb_map_pd:
     .space 4096
 .align 16
 boot_stack:
