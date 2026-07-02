@@ -29,7 +29,7 @@ CFLAGS = -Wall -Wextra -Werror -nostdlib -ffreestanding -mno-red-zone \
          -I$(KERNEL_DIR)/include -I$(KERNEL_DIR)/../msi/include
 
 # Linker flags
-LDFLAGS = -nostdlib -z max-page-size=0x1000 -T $(KERNEL_DIR)/link.ld
+LDFLAGS = -nostdlib -z noexecstack -z max-page-size=0x1000 -T $(KERNEL_DIR)/link.ld
 
 # Debug flags
 DEBUG_CFLAGS = -g -O0
@@ -50,10 +50,17 @@ IPC_SOURCES = $(wildcard $(KERNEL_DIR)/src/ipc/*.c)
 RESONANCE_SOURCES = $(wildcard $(KERNEL_DIR)/src/resonance/*.c)
 ASSEMBLY_SOURCES = $(wildcard $(KERNEL_DIR)/src/*.S)
 # Assembly files compile to *_asm.o to avoid naming collisions with C files
+# Embedded user programs: compiled ELF images objcopy'd into linkable
+# objects (symbols _binary_<name>_elf_start/_end)
+USER_DIR = user
+USER_BUILD = $(BUILD_DIR)/user
+USER_ELF_OBJ = $(USER_BUILD)/init_elf.o
+
 OBJECTS = $(KERNEL_SOURCES:$(KERNEL_DIR)/src/%.c=$(BUILD_DIR)/%.o) \
           $(IPC_SOURCES:$(KERNEL_DIR)/src/ipc/%.c=$(BUILD_DIR)/ipc/%.o) \
           $(RESONANCE_SOURCES:$(KERNEL_DIR)/src/resonance/%.c=$(BUILD_DIR)/resonance/%.o) \
-          $(ASSEMBLY_SOURCES:$(KERNEL_DIR)/src/%.S=$(BUILD_DIR)/%_asm.o)
+          $(ASSEMBLY_SOURCES:$(KERNEL_DIR)/src/%.S=$(BUILD_DIR)/%_asm.o) \
+          $(USER_ELF_OBJ)
 
 # Targets
 .PHONY: all clean kernel run debug dump test test-list test-coverage
@@ -74,6 +81,25 @@ $(BUILD_DIR)/kernel.elf: $(OBJECTS) $(KERNEL_DIR)/link.ld
 $(BUILD_DIR)/kernel.elf32: $(BUILD_DIR)/kernel.elf
 	$(OBJCOPY) -O elf32-i386 $< $@
 	@echo "Boot image created: $@"
+
+# --- Embedded user programs -------------------------------------------------
+# Freestanding, no CRT, linked at USER_VBASE (0x40000000). Built with the
+# system/cross gcc as a normal ET_EXEC ELF64, then wrapped into a linkable
+# object so the kernel can carry it and the ELF loader can map it.
+USER_CFLAGS = -Wall -Wextra -Werror -nostdlib -ffreestanding -fno-pic -fno-pie \
+              -no-pie -static -mno-red-zone -mno-mmx -mno-sse -mno-sse2 \
+              -fno-stack-protector -fno-asynchronous-unwind-tables -O2
+
+$(USER_BUILD)/init.elf: $(USER_DIR)/init.c $(USER_DIR)/user.ld
+	@mkdir -p $(USER_BUILD)
+	@echo "Building user program: $<..."
+	$(CC) $(USER_CFLAGS) -T $(USER_DIR)/user.ld -o $@ $<
+
+# Wrap the ELF as an object. Run objcopy from inside the build dir so the
+# generated symbols are _binary_init_elf_{start,end,size}.
+$(USER_ELF_OBJ): $(USER_BUILD)/init.elf
+	cd $(USER_BUILD) && $(OBJCOPY) -I binary -O elf64-x86-64 -B i386:x86-64 \
+		init.elf init_elf.o
 
 $(BUILD_DIR)/%.o: $(KERNEL_DIR)/src/%.c
 	@mkdir -p $(dir $@)

@@ -47,4 +47,8 @@ void user_init(void);
 status_t user_process_spawn(const char *name, const void *blob_start,
                             const void *blob_end, uint32_t *pid_out);
 
+/* Spawn a user process from an embedded ELF64 image [start, end). */
+status_t user_process_spawn_elf(const char *name, const void *elf_start,
+                                const void *elf_end, uint32_t *pid_out);
+
 #endif /* SYSCALL_H */
