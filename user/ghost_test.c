@@ -1,0 +1,97 @@
+/**
+ * QuantumOS ghost_test — boot self-test client for ghostd (#48).
+ *
+ * Imprints three distinct patterns, then recalls each from a
+ * deterministically corrupted probe (~15% of bits flipped — every 7th
+ * bit, no randomness on the gate path). It talks to ghostd over
+ * capability-checked IPC (it holds exactly one IPC send-cap, to ghostd)
+ * and prints a single merge-gate line:
+ *
+ *     GHOSTD: 3/3 RECALL OK R=0.xx
+ *
+ * ci-smoke and the CI boot test grep for "GHOSTD: 3/3 RECALL OK" the
+ * same way they gate on "QuantumOS ready".
+ *
+ * SPDX-License-Identifier: GPL-2.0-only
+ */
+
+#include "ghost.h"
+
+/* Deterministic ~15% corruption: flip every 7th bit (37/256 = 14.5%). */
+static void corrupt(uint32_t *pat) {
+    for (int i = 0; i < GHOST_N; i += 7)
+        ghost_setbit(pat, i, !ghost_bit(pat, i));
+}
+
+/* Send one request and block (bounded) for ghostd's reply. */
+static int request(const ghost_req_t *req, ghost_rep_t *rep) {
+    if (send_msg((const char *)req, (long)sizeof(*req)) != 0) {
+        return 0;
+    }
+    char buf[sizeof(ghost_rep_t) + 8];
+    for (long spins = 0; spins < 4000000; spins++) {
+        long sender = recv_msg(buf, sizeof(buf));
+        if (sender != 0) {
+            for (unsigned i = 0; i < sizeof(*rep); i++)
+                ((uint8_t *)rep)[i] = (uint8_t)buf[i];
+            return 1;
+        }
+        yield();
+    }
+    return 0;
+}
+
+void _start(void) {
+    write_str("ghost-test: online — imprinting 3 patterns, then noisy recall");
+
+    const uint32_t seeds[3] = { GHOST_SEED_0, GHOST_SEED_1, GHOST_SEED_2 };
+    uint32_t pats[3][GHOST_PW];
+
+    /* Imprint */
+    for (int p = 0; p < 3; p++) {
+        ghost_gen_pattern(pats[p], seeds[p]);
+        ghost_req_t req;
+        for (unsigned i = 0; i < sizeof(req); i++) ((uint8_t *)&req)[i] = 0;
+        req.op = GHOST_REMEMBER;
+        req.slot = (uint8_t)p;
+        for (int w = 0; w < GHOST_PW; w++) req.bits[w] = pats[p][w];
+        ghost_rep_t rep;
+        if (!request(&req, &rep)) {
+            write_str("ghost-test: imprint FAILED (no reply)");
+            exit_(1);
+        }
+    }
+
+    /* Recall from corrupted probes */
+    int ok = 0;
+    uint64_t r_sum = 0;
+    for (int p = 0; p < 3; p++) {
+        uint32_t probe[GHOST_PW];
+        for (int w = 0; w < GHOST_PW; w++) probe[w] = pats[p][w];
+        corrupt(probe);
+
+        ghost_req_t req;
+        for (unsigned i = 0; i < sizeof(req); i++) ((uint8_t *)&req)[i] = 0;
+        req.op = GHOST_RECALL;
+        for (int w = 0; w < GHOST_PW; w++) req.bits[w] = probe[w];
+
+        ghost_rep_t rep;
+        if (request(&req, &rep) && rep.match == (int8_t)p) {
+            ok++;
+            r_sum += rep.r_q16;
+        }
+    }
+
+    /* The one gate line. R is the mean order parameter of the recalls. */
+    uint32_t r_avg = ok ? (uint32_t)(r_sum / (uint64_t)ok) : 0;
+    char line[64];
+    int o = ghost_put(line, 0, "GHOSTD: ");
+    o = ghost_put_u(line, o, (unsigned)ok);
+    o = ghost_put(line, o, "/3 RECALL OK R=");
+    o = ghost_put_r(line, o, r_avg);
+    line[o] = 0;
+    write_str(line);
+
+    exit_(0);
+    for (;;) { }
+}

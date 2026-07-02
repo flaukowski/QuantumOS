@@ -106,6 +106,16 @@ When QuantumOS boots, you'll see:
 [BOOT] QuantumOS ready
 ```
 
+Once the timer starts, the ring-3 services run and self-test. The
+`ghostd` associative-memory service (ghostOS phase 1) imprints three
+patterns and recalls each from a ~15%-corrupted probe:
+```
+[user pid=...] GHOSTD: field born — 256 oscillators, 16 pattern slots
+[user pid=...] GHOSTD: imprinted slot 0 (fidelity 1.00, coherence deadline set)
+[user pid=...] GHOSTD: 3/3 RECALL OK R=0.99
+```
+`make ci-smoke` gates on both `QuantumOS ready` and `GHOSTD: 3/3 RECALL OK`.
+
 ## 🏛️ Architecture
 
 ```

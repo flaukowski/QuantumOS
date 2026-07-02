@@ -296,6 +296,15 @@ void service_heartbeat(void) {
     }
 }
 
+int32_t service_current_restart_count(void) {
+    process_t *self = process_get_current();
+    if (!self) {
+        return -1;
+    }
+    service_slot_t *slot = slot_by_pid(self->pid);
+    return slot ? (int32_t)slot->info.restart_count : -1;
+}
+
 svc_result_t service_find(const char *name, uint32_t *service_id_out) {
     service_slot_t *slot = name ? slot_by_name(name) : NULL;
     if (!slot || !service_id_out) {

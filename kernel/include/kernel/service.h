@@ -115,6 +115,11 @@ svc_result_t service_monitor(uint32_t service_id, bool enable);
 /* Called by a service from its own thread to report liveness */
 void service_heartbeat(void);
 
+/* Restart count of the currently running service (looked up by the
+ * current pid), or -1 if the caller is not a running service. Lets a
+ * service detect that the watchdog restarted it (rebirth). */
+int32_t service_current_restart_count(void);
+
 /* Look up a service id by name */
 svc_result_t service_find(const char *name, uint32_t *service_id_out);
 

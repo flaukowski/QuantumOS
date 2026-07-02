@@ -32,10 +32,13 @@ extern const uint8_t _binary_init_elf_start[], _binary_init_elf_end[];
 extern const uint8_t _binary_echo_elf_start[], _binary_echo_elf_end[];
 extern const uint8_t _binary_client_elf_start[], _binary_client_elf_end[];
 extern const uint8_t _binary_hbsvc_elf_start[], _binary_hbsvc_elf_end[];
+extern const uint8_t _binary_ghostd_elf_start[], _binary_ghostd_elf_end[];
+extern const uint8_t _binary_ghost_test_elf_start[], _binary_ghost_test_elf_end[];
 
 static status_t finalize_user_process(address_space_t *as, const char *name,
                                       uint64_t entry, uint32_t *pid_out);
 void user_ipc_demo_init(void);
+void user_ghost_demo_init(void);
 
 /* int 0x80 stub (kernel/src/interrupts.S) */
 extern void isr128(void);
@@ -183,6 +186,9 @@ static void syscall_dispatch(cpu_state_t *state) {
     case SYS_HEARTBEAT:
         service_heartbeat();   /* uses the current process to find its slot */
         state->rax = 0;
+        break;
+    case SYS_SVC_RESTARTS:
+        state->rax = (uint64_t)(int64_t)service_current_restart_count();
         break;
     default:
         state->rax = SYSCALL_ENOSYS;
@@ -341,6 +347,7 @@ void user_init(void) {
     boot_log("User processes spawned (init ELF, 2x canary, 1x rogue)");
 
     user_ipc_demo_init();
+    user_ghost_demo_init();
 }
 
 /* Bring up a user-space service (echo) via the service framework and a
@@ -404,4 +411,52 @@ void user_ipc_demo_init(void) {
         service_monitor(wsid, true);
         boot_log("Watchdog now monitoring a ring-3 user service (watched-svc)");
     }
+}
+
+/* Bring up ghostd — a Hopfield–Kuramoto associative-memory service
+ * (ghostOS phase 1) — as a monitored ring-3 user-process service, and a
+ * ghost_test client that drives the boot self-test / merge gate over
+ * capability-checked IPC. Same shape as the echo demo: register + start
+ * the service, spawn the client, then grant each side exactly one IPC
+ * send-capability to the other (capability-as-address). */
+void user_ghost_demo_init(void) {
+    service_definition_t ghostd_def = {
+        .name = "ghostd",
+        .entry = NULL,                        /* user-process service */
+        .user_elf_start = _binary_ghostd_elf_start,
+        .user_elf_end = _binary_ghostd_elf_end,
+        .dependencies = { NULL },
+        .max_restarts = 2,
+    };
+
+    uint32_t sid = 0;
+    uint32_t ghostd_pid = 0, test_pid = 0;
+
+    if (service_register(&ghostd_def, &sid) == SVC_SUCCESS &&
+        service_start("ghostd", NULL) == SVC_SUCCESS) {
+        service_info_t info;
+        if (service_status(sid, &info) == SVC_SUCCESS) {
+            ghostd_pid = info.pid;
+        }
+    }
+    if (ghostd_pid == 0) {
+        boot_log("Warning: ghostd service failed to start");
+        return;
+    }
+
+    if (user_process_spawn_elf("ghost-test", _binary_ghost_test_elf_start,
+                               _binary_ghost_test_elf_end, &test_pid) != STATUS_SUCCESS) {
+        boot_log("Warning: ghost-test failed to spawn");
+        return;
+    }
+
+    uint32_t cap = CAP_ID_INVALID;
+    cap_create(test_pid, CAP_RESOURCE_IPC, ghostd_pid, CAP_READ | CAP_WRITE, 0, &cap);
+    cap_create(ghostd_pid, CAP_RESOURCE_IPC, test_pid, CAP_READ | CAP_WRITE, 0, &cap);
+
+    /* Let the watchdog keep ghostd alive; it heartbeats via SYS_HEARTBEAT
+     * and reprints "GHOSTD: FIELD REBORN" if it is ever restarted. */
+    service_monitor(sid, true);
+
+    boot_log("ghostOS: ghostd (ring 3) + ghost-test wired via capabilities");
 }

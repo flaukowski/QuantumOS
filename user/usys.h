@@ -16,6 +16,7 @@
 #define SYS_SEND      6
 #define SYS_RECV      7
 #define SYS_HEARTBEAT 8
+#define SYS_SVC_RESTARTS 9
 
 static inline long usys0(long n) {
     long r;
@@ -40,6 +41,9 @@ static inline void yield(void)               { usys0(SYS_YIELD); }
 static inline long ticks(void)               { return usys0(SYS_TICKS); }
 static inline void exit_(long code)          { usys1(SYS_EXIT, code); }
 static inline void heartbeat(void)           { usys0(SYS_HEARTBEAT); }
+/* Restart count of the calling process's service slot, or -1 if the
+ * caller is not a registered service. Used to detect a watchdog rebirth. */
+static inline long svc_restarts(void)         { return usys0(SYS_SVC_RESTARTS); }
 
 /* Capability-routed send: goes to whatever destination this process
  * holds an IPC send-capability for. Returns 0 on success, negative on
