@@ -1,30 +1,106 @@
 # QuantumOS Kernel Bootstrap (x86_64)
+#
+# Multiboot v1 loaders (GRUB "multiboot", QEMU -kernel) enter at _start in
+# 32-bit protected mode with paging off, EAX = 0x2BADB002 and EBX = the
+# physical address of the multiboot info structure. This stub saves those,
+# clears BSS, identity-maps the first 1 GB with 2 MB pages, switches to
+# long mode, enables SSE (the resonance subsystem is compiled with -msse),
+# and calls kernel_main(magic, info_addr).
 
 #define BOOT_STACK_SIZE 16384
+
+#define MB1_MAGIC 0x1BADB002
+#define MB1_FLAGS 0x00000003        /* page-align modules + memory info */
+
+/* Multiboot v1 header — must be in the first 8 KB of the image; link.ld
+ * places .multiboot_header first. No AOUT kludge needed for ELF. */
+.section .multiboot_header, "a"
+.align 4
+    .long MB1_MAGIC
+    .long MB1_FLAGS
+    .long -(MB1_MAGIC + MB1_FLAGS)
 
 .section .text
 .global _start
 .extern kernel_main
 
-# Multiboot2 header
-.align 8
-multiboot_header:
-    .long 0xe85250d6               # Multiboot2 magic
-    .long 0                        # Architecture 0 (i386)
-    .long multiboot_header_end - multiboot_header
-    .long 0xe85250d6               # Checksum
-    .long 0                        # Header tags start
-    .long 8                        # Header tags end
-    .long 0                        # End tag type
-    .long 8                        # End tag size
-multiboot_header_end:
-
-# Kernel entry point
-.align 16
+# ============================================================================
+# 32-bit entry (protected mode, flat segments, paging off)
+# ============================================================================
+.code32
 _start:
-    # Setup stack
-    mov $boot_stack_top, %rsp
-    mov $boot_stack_top, %rbp
+    cli
+    movl $boot_stack_top, %esp
+
+    /* Save multiboot registers to .data (survives the BSS clear) */
+    movl %eax, multiboot_magic
+    movl %ebx, multiboot_info
+
+    /* Clear BSS now — the boot page tables live there */
+    movl $__bss_start, %edi
+    movl $__bss_end, %ecx
+    subl %edi, %ecx
+    xorl %eax, %eax
+    rep stosb
+
+    /* Identity-map the first 1 GB: PML4[0] -> PDPT[0] -> PD with 512
+     * 2 MB entries. Non-zero entries only at index 0; the rest are zero
+     * from the BSS clear. */
+    movl $boot_pdpt, %eax
+    orl $0x3, %eax                  /* present | writable */
+    movl %eax, boot_pml4
+
+    movl $boot_pd, %eax
+    orl $0x3, %eax
+    movl %eax, boot_pdpt
+
+    movl $boot_pd, %edi
+    movl $0x83, %eax                /* present | writable | 2MB page */
+    movl $512, %ecx
+.fill_pd:
+    movl %eax, (%edi)
+    addl $0x200000, %eax
+    addl $8, %edi
+    loop .fill_pd
+
+    /* Enable PAE */
+    movl %cr4, %eax
+    orl $(1 << 5), %eax
+    movl %eax, %cr4
+
+    /* Load the page tables */
+    movl $boot_pml4, %eax
+    movl %eax, %cr3
+
+    /* Enable long mode (EFER.LME) */
+    movl $0xC0000080, %ecx
+    rdmsr
+    orl $(1 << 8), %eax
+    wrmsr
+
+    /* Enable paging — CPU enters compatibility mode */
+    movl %cr0, %eax
+    orl $0x80000001, %eax           /* PG | PE */
+    movl %eax, %cr0
+
+    /* Jump into 64-bit code via the 64-bit GDT */
+    lgdt gdt64_ptr
+    ljmp $0x08, $long_mode_entry
+
+# ============================================================================
+# 64-bit entry
+# ============================================================================
+.code64
+long_mode_entry:
+    movw $0x10, %ax
+    movw %ax, %ds
+    movw %ax, %es
+    movw %ax, %ss
+    movw %ax, %fs
+    movw %ax, %gs
+
+    movq $boot_stack_top, %rsp
+    movq %rsp, %rbp
 
     # Enable SSE — the resonance subsystem is compiled with -msse/-msse2
     # (double-precision math), so XMM instructions must be legal before
@@ -37,76 +113,66 @@ _start:
     or $(3 << 9), %rax             # set CR4.OSFXSR | CR4.OSXMMEXCPT
     mov %rax, %cr4
 
-    # Clear BSS section
-    mov $__bss_start, %rdi
-    mov $__bss_end, %rcx
-    sub %rdi, %rcx
-    xor %rax, %rax
-    rep stosb
-    
-    # Save multiboot information
-    mov %rdi, multiboot_magic    # magic in RDI
-    mov %rsi, multiboot_info     # info in RSI
-    
-    # Call kernel main
+    # kernel_main(uint32_t magic, uint32_t info_addr)
+    movl multiboot_magic, %edi
+    movl multiboot_info, %esi
     call kernel_main
-    
+
     # Should never return
     cli
 .halt:
     hlt
     jmp .halt
 
-# Boot panic routine
+# Boot panic routine — C ABI: message in %rdi
 .global boot_panic
 boot_panic:
-    # Save registers
-    push %rax
-    push %rbx
-    push %rcx
-    push %rdx
-    
     # Print panic message
-    mov %rdi, %rsi    # message pointer
     call early_console_write
-    
+
     # Print newline
-    mov $panic_newline, %rsi
+    mov $panic_newline, %rdi
     call early_console_write
-    
-    # Restore registers
-    pop %rdx
-    pop %rcx
-    pop %rbx
-    pop %rax
-    
+
     # Halt system
     cli
 .panic_loop:
     hlt
     jmp .panic_loop
 
-# Early console output (simplified)
+# Early console output — C ABI: string in %rdi
 .global early_console_write
 early_console_write:
     push %rax
     push %rdi
     push %rsi
+    push %rcx
     push %rdx
-    
-    mov %rsi, %rdi    # string pointer
+
+    mov %rdi, %rsi    # keep string pointer; strlen takes %rdi
     call strlen
     mov %rax, %rcx    # length
-    
-    # Write to COM1 port (0x3F8)
-    mov $0x3F8, %dx
+    test %rcx, %rcx
+    jz .write_done
+
+    # Write to COM1 (0x3F8), waiting for the transmit holding register
+    # to drain before each byte (LSR bit 5) so bytes are not dropped
 .write_loop:
+    mov $0x3FD, %dx   # Line Status Register
+.wait_thr:
+    in %dx, %al
+    test $0x20, %al   # THR empty?
+    jz .wait_thr
+
+    mov $0x3F8, %dx
     mov (%rsi), %al
     out %al, %dx
     inc %rsi
     loop .write_loop
-    
+
+.write_done:
     pop %rdx
+    pop %rcx
     pop %rsi
     pop %rdi
     pop %rax
@@ -120,35 +186,35 @@ early_console_write_hex:
     push %rsi
     push %rdx
     push %rcx
-    
+
     mov %rdi, %rax    # value to print
     mov $hex_buffer, %rsi
     mov $16, %ecx     # 16 hex digits
-    
+
 .hex_loop:
     rol $4, %rax      # rotate left 4 bits
     mov %rax, %rdx
     and $0xF, %rdx    # get low nibble
-    
+
     cmp $10, %rdx
     jl .digit
     add $('A' - 10), %rdx
     jmp .write_digit
 .digit:
     add $'0', %rdx
-    
+
 .write_digit:
     mov %dl, (%rsi)
     inc %rsi
     loop .hex_loop
-    
+
     # Null terminate
     movb $0, (%rsi)
-    
+
     # Print the hex string
-    mov $hex_buffer, %rsi
+    mov $hex_buffer, %rdi
     call early_console_write
-    
+
     pop %rcx
     pop %rdx
     pop %rsi
@@ -156,15 +222,39 @@ early_console_write_hex:
     pop %rax
     ret
 
-# Data section
+# ============================================================================
+# Data
+# ============================================================================
 .section .data
 multiboot_magic: .quad 0
 multiboot_info: .quad 0
 panic_newline: .asciz "\r\n*** KERNEL PANIC ***\r\n"
 hex_buffer: .space 17  # 16 hex digits + null
 
-# Stack section
+# 64-bit GDT: null, code (L=1), data. The pointer layout works for both
+# the 32-bit lgdt (word + dword) and 64-bit reloads (word + qword) since
+# the GDT sits below 4 GB.
+.align 8
+gdt64:
+    .quad 0
+    .quad 0x00209A0000000000
+    .quad 0x0000920000000000
+gdt64_end:
+gdt64_ptr:
+    .word gdt64_end - gdt64 - 1
+    .quad gdt64
+
+# ============================================================================
+# BSS: boot stack and boot page tables
+# ============================================================================
 .section .bss
+.align 4096
+boot_pml4:
+    .space 4096
+boot_pdpt:
+    .space 4096
+boot_pd:
+    .space 4096
 .align 16
 boot_stack:
     .space BOOT_STACK_SIZE

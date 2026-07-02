@@ -176,7 +176,9 @@ static void process_subsystem_init(void) {
 
 // Boot validation
 bool boot_validate_multiboot(uint32_t magic, uint32_t info_addr) {
-    if (magic != MULTIBOOT2_MAGIC) {
+    /* boot.S carries a Multiboot v1 header; accept v2 as well in case a
+     * v2-capable loader is used later. */
+    if (magic != MULTIBOOT1_MAGIC && magic != MULTIBOOT2_MAGIC) {
         return false;
     }
     

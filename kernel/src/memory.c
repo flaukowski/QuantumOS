@@ -4,6 +4,8 @@
 
 // External symbols
 extern uint8_t __end;
+extern uint8_t __heap_start;
+extern uint8_t __heap_end;
 
 // Global memory managers
 static physical_memory_t pmm;
@@ -111,17 +113,11 @@ mem_result_t vmm_init(void) {
     // Clear PML4 table
     memset(vmm.pml4_table, 0, PAGE_SIZE);
     
-    // Initialize kernel heap
-    kernel_heap.start = (void*)KERNEL_HEAP_START;
-    kernel_heap.end = (void*)(KERNEL_HEAP_START + KERNEL_HEAP_SIZE);
-    kernel_heap.current = kernel_heap.start;
-    kernel_heap.total_size = KERNEL_HEAP_SIZE;
-    kernel_heap.used_size = 0;
-    kernel_heap.free_size = KERNEL_HEAP_SIZE;
-    
+    // Kernel heap setup is done by kheap_init() (called from memory_init)
+
     // Map kernel space
     // TODO: Map kernel code, data, and heap
-    
+
     boot_log("Virtual memory manager initialized");
     return MEM_SUCCESS;
 }
@@ -250,14 +246,18 @@ mem_result_t memory_unmap_page(void *virt_addr) {
 // Kernel heap implementation
 mem_result_t kheap_init(void) {
     boot_log("Initializing kernel heap...");
-    
-    kernel_heap.start = (void*)KERNEL_HEAP_START;
-    kernel_heap.end = (void*)(KERNEL_HEAP_START + KERNEL_HEAP_SIZE);
+
+    // Use the .heap region from link.ld — identity-mapped by the boot
+    // page tables. (KERNEL_HEAP_START is higher-half virtual space that
+    // is not mapped yet; using it would fault on first kmalloc.)
+    size_t heap_size = (size_t)(&__heap_end - &__heap_start);
+    kernel_heap.start = (void*)&__heap_start;
+    kernel_heap.end = (void*)&__heap_end;
     kernel_heap.current = kernel_heap.start;
-    kernel_heap.total_size = KERNEL_HEAP_SIZE;
+    kernel_heap.total_size = heap_size;
     kernel_heap.used_size = 0;
-    kernel_heap.free_size = KERNEL_HEAP_SIZE;
-    
+    kernel_heap.free_size = heap_size;
+
     boot_log("Kernel heap initialized");
     return MEM_SUCCESS;
 }

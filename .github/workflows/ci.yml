@@ -314,7 +314,7 @@ jobs:
 
         # Measure boot time
         echo "Measuring boot time..."
-        timeout 10s qemu-system-x86_64 -kernel build/x86_64/kernel.elf \
+        timeout 10s qemu-system-x86_64 -kernel build/x86_64/kernel.elf32 \
           -serial stdio -m 128M -display none -no-reboot 2>&1 | head -50 > boot_output.txt || true
         echo "" >> performance_report.txt
         echo "Boot output captured (first 50 lines)" >> performance_report.txt
@@ -366,7 +366,7 @@ jobs:
         make test || true
 
         # Boot the kernel briefly to execute initialization code paths
-        timeout 5s qemu-system-x86_64 -kernel build/x86_64/kernel.elf \
+        timeout 5s qemu-system-x86_64 -kernel build/x86_64/kernel.elf32 \
           -serial stdio -m 128M -display none -no-reboot 2>&1 || true
 
     - name: Generate coverage report
@@ -509,7 +509,7 @@ jobs:
         INTEGRATION_FAILURES=0
 
         # Find the kernel ELF
-        KERNEL_ELF=$(find build/ -name "kernel.elf" | head -1)
+        KERNEL_ELF=$(find build/ -name "kernel.elf32" | head -1)
 
         if [ -z "$KERNEL_ELF" ]; then
           echo "[FAIL] Kernel ELF not found in artifacts" >> integration_results.txt
@@ -525,10 +525,11 @@ jobs:
         timeout 15s qemu-system-x86_64 -kernel "$KERNEL_ELF" \
           -serial stdio -m 128M -display none -no-reboot 2>&1 | tee boot_output.txt || true
 
-        if grep -q "QuantumOS" boot_output.txt 2>/dev/null; then
-          echo "  [PASS] Boot banner detected" >> integration_results.txt
+        if grep -q "QuantumOS ready" boot_output.txt 2>/dev/null; then
+          echo "  [PASS] Kernel booted to idle loop (QuantumOS ready)" >> integration_results.txt
         else
-          echo "  [WARN] Boot banner not found (may be expected)" >> integration_results.txt
+          echo "  [FAIL] Kernel did not reach 'QuantumOS ready'" >> integration_results.txt
+          INTEGRATION_FAILURES=$((INTEGRATION_FAILURES + 1))
         fi
 
         # Test 2: Check for kernel panic or errors

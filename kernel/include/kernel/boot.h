@@ -4,7 +4,8 @@
 #include <stdint.h>
 #include <stddef.h>
 
-// Boot magic numbers
+// Boot magic numbers (bootloader -> kernel, in EAX at entry)
+#define MULTIBOOT1_MAGIC 0x2BADB002
 #define MULTIBOOT2_MAGIC 0x36d76289
 
 // Kernel entry point signature

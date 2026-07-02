@@ -231,26 +231,30 @@ status_t process_init(void) {
     
     /* Initialize statistics */
     memset(&process_statistics, 0, sizeof(process_statistics));
-    
+
+    /* Mark the table initialized before creating the bootstrap
+     * processes -- process_create() refuses to run otherwise */
+    process_table_initialized = true;
+
     /* Create kernel process */
     status_t result = process_init_kernel_process();
     if (result != STATUS_SUCCESS) {
+        process_table_initialized = false;
         boot_panic("Failed to create kernel process");
         return result;
     }
-    
+
     /* Create idle process */
     result = process_init_idle_process();
     if (result != STATUS_SUCCESS) {
+        process_table_initialized = false;
         boot_panic("Failed to create idle process");
         return result;
     }
-    
+
     current_process = &process_table[KERNEL_PROCESS_ID];
     current_pid = KERNEL_PROCESS_ID;
-    
-    process_table_initialized = true;
-    
+
     boot_log("Process management system initialized");
     return STATUS_SUCCESS;
 }
