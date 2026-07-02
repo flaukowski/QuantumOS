@@ -532,6 +532,17 @@ jobs:
           INTEGRATION_FAILURES=$((INTEGRATION_FAILURES + 1))
         fi
 
+        # Test 1b: ghostOS phase-1 gate — the ring-3 ghostd service must
+        # recall all three noisy probes to their stored patterns (issue #48)
+        echo "" >> integration_results.txt
+        echo "Test 1b: ghostd associative-memory self-test..." >> integration_results.txt
+        if grep -q "GHOSTD: 3/3 RECALL OK" boot_output.txt 2>/dev/null; then
+          echo "  [PASS] ghostd recalled 3/3 patterns (GHOSTD: 3/3 RECALL OK)" >> integration_results.txt
+        else
+          echo "  [FAIL] ghostd self-test gate missing (GHOSTD: 3/3 RECALL OK)" >> integration_results.txt
+          INTEGRATION_FAILURES=$((INTEGRATION_FAILURES + 1))
+        fi
+
         # Test 2: Check for kernel panic or errors
         echo "" >> integration_results.txt
         echo "Test 2: Checking for kernel panics..." >> integration_results.txt

@@ -94,6 +94,42 @@ A feature is complete for v0.2 when:
 - [ ] Advanced security features
 - [ ] Performance optimization
 
+## ghostOS — Wave-Interference Associative Memory 🔄 PHASE 1
+
+Epic #47 brings a Hopfield–Kuramoto associative memory into userspace as an
+isolated ring-3 service. Phase 1 (issue #48) landed the field, storage, and
+attractor recall behind the microkernel's capability-checked IPC.
+
+### Phase 1 Components ✅
+- [x] **`ghostd`** — ring-3 service; N=256 phase oscillators, M=16 pattern
+  slots, all integer/fixed-point (phase = uint32 turns; Q15 sine table;
+  Q16 order parameter). No floats anywhere in the field.
+- [x] **REMEMBER** — imprint a binary pattern ξ ∈ {0, π}^256 into a slot
+  (Hopfield coupling recomputed on the fly, never materialised).
+- [x] **RECALL** — attractor *relaxation* (not similarity lookup): the field
+  is initialised at the corrupted probe and relaxed under the imprinted
+  coupling; a probe with ~15% flipped bits recovers the stored pattern.
+  Reports the order parameter R.
+- [x] **λ-damping** — adaptive "Resonant Constraint Law" holds R inside a
+  band on free-running ticks (rate-limited log on intervention).
+- [x] **Honest forgetting** — per-slot fidelity decay + coherence deadline;
+  expired slots are reclaimed, a spent basin fails recall honestly.
+- [x] **Heartbeat + rebirth** — `ghostd` is a watched service; a watchdog
+  restart reprints `GHOSTD: FIELD REBORN` (keyed on the service restart
+  count via the new `SYS_SVC_RESTARTS` syscall).
+- [x] **Merge gate** — `ghost_test` imprints 3 patterns, recalls each from a
+  deterministic ~15% corruption, and prints `GHOSTD: 3/3 RECALL OK R=0.xx`;
+  `make ci-smoke` and the CI boot test gate on it alongside "QuantumOS ready".
+
+### Phase 1 Files
+```c
+user/ghost.h        # shared field geometry, IPC protocol, pattern gen
+user/ghostd.c       # the ring-3 associative-memory service
+user/ghost_test.c   # boot self-test client / merge gate
+```
+
+---
+
 ## Current Implementation Files
 
 ### Completed Files
