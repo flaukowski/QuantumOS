@@ -16,12 +16,20 @@
 #include <kernel/gdt.h>
 #include <kernel/vmspace.h>
 #include <kernel/memory.h>
+#include <kernel/elf.h>
 #include <kernel/boot.h>
 
 /* Embedded user programs (kernel/src/user_blob.S) */
 extern const uint8_t user_hello_start[], user_hello_end[];
 extern const uint8_t user_canary_start[], user_canary_end[];
 extern const uint8_t user_rogue_start[], user_rogue_end[];
+
+/* Embedded ELF user program (build/x86_64/user/init.elf via objcopy) */
+extern const uint8_t _binary_init_elf_start[];
+extern const uint8_t _binary_init_elf_end[];
+
+static status_t finalize_user_process(address_space_t *as, const char *name,
+                                      uint64_t entry, uint32_t *pid_out);
 
 /* int 0x80 stub (kernel/src/interrupts.S) */
 extern void isr128(void);
@@ -170,10 +178,18 @@ status_t user_process_spawn(const char *name, const void *blob_start,
         return STATUS_NO_MEMORY;
     }
 
+    /* Stack + process creation shared with the ELF path */
+    return finalize_user_process(&as, name, USER_VBASE, pid_out);
+}
+
+/* Map the user stack and create the ring-3 process bound to `as`, with
+ * the given entry point. Shared by the flat-blob and ELF spawn paths. */
+static status_t finalize_user_process(address_space_t *as, const char *name,
+                                      uint64_t entry, uint32_t *pid_out) {
     /* User stack, mapped just below USER_STACK_TOP */
     for (uint32_t p = 1; p <= USER_STACK_PAGES; p++) {
         uint64_t uvaddr = USER_STACK_TOP - (uint64_t)p * PAGE_SIZE;
-        if (!map_fresh_page(&as, uvaddr, true)) {
+        if (!map_fresh_page(as, uvaddr, true)) {
             return STATUS_NO_MEMORY;
         }
     }
@@ -183,7 +199,7 @@ status_t user_process_spawn(const char *name, const void *blob_start,
         .type = PROCESS_TYPE_USER,
         .priority = PRIORITY_NORMAL,
         .parent_pid = KERNEL_PROCESS_ID,
-        .entry_point = (void *)USER_VBASE,
+        .entry_point = (void *)entry,
         .stack_address = (void *)(USER_STACK_TOP - USER_REGION_SIZE),
         .stack_size = USER_REGION_SIZE,   /* so stack_top == USER_STACK_TOP */
         .is_quantum_aware = false
@@ -196,8 +212,8 @@ status_t user_process_spawn(const char *name, const void *blob_start,
     }
 
     /* Bind the process to its private address space */
-    proc->cr3 = as.cr3;
-    proc->virtual_address_space = as.pml4;
+    proc->cr3 = as->cr3;
+    proc->virtual_address_space = as->pml4;
 
     if (pid_out) {
         *pid_out = proc->pid;
@@ -205,20 +221,47 @@ status_t user_process_spawn(const char *name, const void *blob_start,
     return STATUS_SUCCESS;
 }
 
+/* Spawn a user process from an embedded ELF64 image: the loader maps
+ * and populates the program's PT_LOAD segments into a private address
+ * space, then the process starts at the ELF entry point. */
+status_t user_process_spawn_elf(const char *name, const void *elf_start,
+                                const void *elf_end, uint32_t *pid_out) {
+    size_t elf_size = (size_t)((const uint8_t *)elf_end -
+                               (const uint8_t *)elf_start);
+
+    address_space_t as = vmspace_create();
+    if (!as.pml4) {
+        return STATUS_NO_MEMORY;
+    }
+
+    uint64_t entry = 0;
+    if (elf_load(&as, (const uint8_t *)elf_start, elf_size, &entry) != ELF_OK) {
+        return STATUS_ERROR;
+    }
+
+    return finalize_user_process(&as, name, entry, pid_out);
+}
+
 void user_init(void) {
     boot_log("Per-process address spaces enabled (private CR3 per user proc)");
 
     uint32_t pid = 0;
+
+    /* A real compiled-C program, loaded from its embedded ELF image */
+    if (user_process_spawn_elf("init", _binary_init_elf_start,
+                               _binary_init_elf_end, &pid) != STATUS_SUCCESS) {
+        boot_log("Warning: failed to load init ELF");
+    }
+
+    /* Hand-written blobs for the isolation + fault-containment demos */
     if (user_process_spawn("user-canary-1", user_canary_start, user_canary_end,
                            &pid) != STATUS_SUCCESS ||
         user_process_spawn("user-canary-2", user_canary_start, user_canary_end,
-                           &pid) != STATUS_SUCCESS ||
-        user_process_spawn("user-hello", user_hello_start, user_hello_end,
                            &pid) != STATUS_SUCCESS ||
         user_process_spawn("user-rogue", user_rogue_start, user_rogue_end,
                            &pid) != STATUS_SUCCESS) {
         boot_log("Warning: failed to spawn user processes");
         return;
     }
-    boot_log("User processes spawned (2x canary, 1x hello, 1x rogue)");
+    boot_log("User processes spawned (init ELF, 2x canary, 1x rogue)");
 }
