@@ -5,8 +5,12 @@ ENTRY(_start)
 /* Define memory regions */
 MEMORY
 {
-    kernel (rwx) : ORIGIN = 0x00100000, LENGTH = 96M   /* Kernel loaded at 1MB, includes BSS */
-    ram (rwx)    : ORIGIN = 0x06100000, LENGTH = 128M  /* Rest of low memory for stack/heap */
+    /* Kernel loaded at 1MB. Image is well under 1MB now that the IPC
+     * entry pool is heap-allocated (was 96M to hold ~67MB of BSS). */
+    kernel (rwx) : ORIGIN = 0x00100000, LENGTH = 16M
+    /* Stack/heap directly after the kernel region; ends at 113MB so it
+     * fits inside the 128MB the kernel assumes (memory_init). */
+    ram (rwx)    : ORIGIN = 0x01100000, LENGTH = 96M
 }
 
 /* Sections */
