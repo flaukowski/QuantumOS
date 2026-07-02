@@ -19,12 +19,14 @@
 #define PROCESS_H
 
 #include <kernel/types.h>
+#include <kernel/interrupts.h>
 
 /* ============================================================================
  * Constants
  * ============================================================================ */
 
 #define MAX_PROCESSES              256     /* Maximum concurrent processes */
+#define PROCESS_STACK_SIZE         8192    /* Default kernel stack size */
 #define MAX_THREADS_PER_PROCESS    16      /* Maximum threads per process */
 #define PROCESS_NAME_MAX_LEN       64      /* Maximum process name length */
 #define KERNEL_PROCESS_ID          0       /* Reserved for kernel process */
@@ -81,6 +83,9 @@ typedef struct process {
     uint64_t rsp;                  /* Stack pointer */
     uint64_t rbp;                  /* Base pointer */
     uint64_t cr3;                  /* Page table physical address */
+    cpu_state_t context;           /* Full register state (saved/restored by
+                                      the scheduler on the interrupt frame) */
+    bool context_valid;            /* context holds a runnable state */
     
     /* Memory management */
     void *virtual_address_space;   /* Virtual memory root */

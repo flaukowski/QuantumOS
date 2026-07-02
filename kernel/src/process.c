@@ -31,8 +31,7 @@ static char *strncpy_local(char *dest, const char *src, size_t n) {
  * Internal Constants
  * ============================================================================ */
 
-#define PROCESS_STACK_SIZE    8192    /* Default kernel stack size */
-#define KERNEL_STACK_BASE     0xFFFF800000000000  /* High half kernel stack */
+/* PROCESS_STACK_SIZE lives in process.h */
 
 /* ============================================================================
  * Internal State
@@ -278,20 +277,46 @@ status_t process_create(const process_create_params_t *params, process_t **proce
         return PROCESS_ERROR_TOO_MANY_PROCESSES;
     }
     
-    /* Allocate memory for process */
-    void *stack_memory = NULL;
-    if (params->type != PROCESS_TYPE_KERNEL) {
-        /* TODO: Allocate from user memory pool */
-        stack_memory = (void*)((uintptr_t)0x400000 + (pid * PROCESS_STACK_SIZE));
-    } else {
-        stack_memory = &kernel_stack;
+    /* Allocate memory for process stack */
+    void *stack_memory = params->stack_address;
+    if (!stack_memory) {
+        if (params->type == PROCESS_TYPE_KERNEL) {
+            stack_memory = kmalloc(params->stack_size);
+            if (!stack_memory) {
+                return PROCESS_ERROR_NO_MEMORY;
+            }
+        } else {
+            /* TODO: Allocate from user memory pool */
+            stack_memory = (void*)((uintptr_t)0x400000 + (pid * PROCESS_STACK_SIZE));
+        }
     }
-    (void)stack_memory; /* TODO: Use for stack setup */
-    
+
     /* Initialize PCB */
     result = init_process_pcb(&process_table[pid], params, pid);
     if (result != STATUS_SUCCESS) {
         return result;
+    }
+
+    /* Stack bookkeeping */
+    process_table[pid].stack_bottom = stack_memory;
+    process_table[pid].stack_top = (uint8_t*)stack_memory + params->stack_size;
+
+    /* Build a runnable register state for kernel threads so the
+     * scheduler can iretq into them. The kernel process (PID 0) is the
+     * boot flow itself — its context is captured at first preemption. */
+    if (params->entry_point && pid != KERNEL_PROCESS_ID &&
+        params->type == PROCESS_TYPE_KERNEL) {
+        cpu_state_t *ctx = &process_table[pid].context;
+        memset(ctx, 0, sizeof(*ctx));
+        ctx->rip = (uint64_t)params->entry_point;
+        ctx->cs = 0x08;
+        ctx->eflags = 0x202; /* IF set — threads run preemptible */
+        /* 16-align, then bias by 8 to mimic the post-call alignment the
+         * SysV ABI guarantees at function entry */
+        ctx->rsp = (((uint64_t)process_table[pid].stack_top) & ~0xFULL) - 8;
+        ctx->ss = 0x10;
+        process_table[pid].rsp = ctx->rsp;
+        process_table[pid].context_valid = true;
     }
     
     /* Set up memory management */
@@ -648,8 +673,9 @@ status_t process_init_kernel_process(void) {
         return result;
     }
     
-    /* Set kernel process as running */
-    kernel_process->state = PROCESS_STATE_RUNNING;
+    /* Set kernel process as running (via set_state so it is removed
+     * from the ready queue) */
+    process_set_state(kernel_process->pid, PROCESS_STATE_RUNNING);
     
     return STATUS_SUCCESS;
 }
@@ -664,7 +690,7 @@ status_t process_init_idle_process(void) {
         .priority = PRIORITY_IDLE,
         .parent_pid = KERNEL_PROCESS_ID,
         .entry_point = (void*)process_idle_task,
-        .stack_address = (void*)(KERNEL_STACK_BASE + PROCESS_STACK_SIZE),
+        .stack_address = NULL, /* process_create kmallocs a stack */
         .stack_size = PROCESS_STACK_SIZE,
         .is_quantum_aware = false
     };
