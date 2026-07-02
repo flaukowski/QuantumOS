@@ -80,14 +80,15 @@ IRQ 15  # Secondary ATA
 
 # Common interrupt handler for exceptions
 isr_common:
-    # Save all registers
+    # Save all registers (order matches cpu_state_t: memory low->high is
+    # r15..r8, rdi, rsi, rbp, rbx, rdx, rcx, rax)
     push %rax
-    push %rbx
     push %rcx
     push %rdx
+    push %rbx
+    push %rbp
     push %rsi
     push %rdi
-    push %rbp
     push %r8
     push %r9
     push %r10
@@ -129,12 +130,12 @@ isr_common:
     pop %r10
     pop %r9
     pop %r8
-    pop %rbp
     pop %rdi
     pop %rsi
+    pop %rbp
+    pop %rbx
     pop %rdx
     pop %rcx
-    pop %rbx
     pop %rax
     
     # Clean up error code and interrupt number
@@ -145,14 +146,15 @@ isr_common:
 
 # Common interrupt handler for IRQs
 irq_common:
-    # Save all registers
+    # Save all registers (order matches cpu_state_t: memory low->high is
+    # r15..r8, rdi, rsi, rbp, rbx, rdx, rcx, rax)
     push %rax
-    push %rbx
     push %rcx
     push %rdx
+    push %rbx
+    push %rbp
     push %rsi
     push %rdi
-    push %rbp
     push %r8
     push %r9
     push %r10
@@ -194,12 +196,12 @@ irq_common:
     pop %r10
     pop %r9
     pop %r8
-    pop %rbp
     pop %rdi
     pop %rsi
+    pop %rbp
+    pop %rbx
     pop %rdx
     pop %rcx
-    pop %rbx
     pop %rax
     
     # Clean up error code and interrupt number

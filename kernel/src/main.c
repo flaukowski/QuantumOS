@@ -79,11 +79,17 @@ static void kernel_init(void) {
     
     // Initialize core services
     core_services_init();
-    
+
+    // Start the periodic timer and enable interrupts
+    pit_init(TIMER_DEFAULT_HZ);
+    interrupt_enable(IRQ_BASE + IRQ_TIMER);
+    interrupt_enable_all();
+    boot_log("Timer started, interrupts enabled");
+
     boot_log("Kernel initialization complete");
     boot_log("QuantumOS ready");
-    
-    // Enter idle loop (for now)
+
+    // Idle loop — woken by the timer tick
     while (1) {
         __asm__ volatile("hlt");
     }

@@ -115,9 +115,14 @@ irq_result_t interrupts_init(void) {
     idt_set_gate(EXC_SECURITY, (uint64_t)isr30, 0x08, GATE_TYPE_INTERRUPT | DPL_KERNEL);
     idt_set_gate(EXC_RESERVED, (uint64_t)isr31, 0x08, GATE_TYPE_INTERRUPT | DPL_KERNEL);
     
-    // Setup IRQ handlers
+    // Setup IRQ handlers (each stub is a distinct symbol — pointer
+    // arithmetic on &irq0 lands inside irq0's code, not on the stubs)
+    static void (*const irq_stubs[16])(void) = {
+        irq0,  irq1,  irq2,  irq3,  irq4,  irq5,  irq6,  irq7,
+        irq8,  irq9,  irq10, irq11, irq12, irq13, irq14, irq15
+    };
     for (int i = 0; i < 16; i++) {
-        idt_set_gate(IRQ_BASE + i, (uint64_t)(&irq0 + i), 0x08, GATE_TYPE_INTERRUPT | DPL_KERNEL);
+        idt_set_gate(IRQ_BASE + i, (uint64_t)irq_stubs[i], 0x08, GATE_TYPE_INTERRUPT | DPL_KERNEL);
     }
     
     // Install IDT
@@ -141,7 +146,7 @@ void idt_set_gate(uint8_t vector, uint64_t handler_addr, uint16_t selector, uint
     entry->offset_low = handler_addr & 0xFFFF;
     entry->selector = selector;
     entry->ist = 0;
-    entry->type_attr = type_attr;
+    entry->type_attr = type_attr | GATE_PRESENT;  // a registered gate is always present
     entry->offset_mid = (handler_addr >> 16) & 0xFFFF;
     entry->offset_high = (handler_addr >> 32) & 0xFFFFFFFF;
     entry->reserved = 0;
@@ -306,18 +311,33 @@ void irq_handler(cpu_state_t *state) {
     pic_send_eoi(irq);
 }
 
+// Timer state
+static volatile uint64_t timer_ticks_count = 0;
+static timer_callback_t timer_callback = NULL;
+
+uint64_t timer_get_ticks(void) {
+    return timer_ticks_count;
+}
+
+void timer_set_callback(timer_callback_t callback) {
+    timer_callback = callback;
+}
+
 // Timer IRQ handler
 void timer_irq_handler(cpu_state_t *state) {
-    (void)state;  // Unused for now
+    timer_ticks_count++;
 
-    static uint64_t tick_count = 0;
-    tick_count++;
-
-    // TODO: Update system time, scheduler, etc.
-
-    if (tick_count % 100 == 0) {
+    /* Proof-of-life on first tick, then once per second (at 100 Hz) */
+    if (timer_ticks_count == 1) {
+        boot_log("Timer tick 1 received — interrupts are live");
+    } else if (timer_ticks_count % TIMER_DEFAULT_HZ == 0) {
         boot_log("Timer tick: ");
-        early_console_write_hex(tick_count);
+        early_console_write_hex(timer_ticks_count);
+    }
+
+    /* Scheduler (or other subscriber) hook */
+    if (timer_callback) {
+        timer_callback(state);
     }
 }
 
@@ -333,10 +353,6 @@ void keyboard_irq_handler(cpu_state_t *state) {
 
 // PIC initialization
 void pic_init(void) {
-    // Save masks
-    uint8_t mask1 = __inb(0x21);
-    uint8_t mask2 = __inb(0xA1);
-    
     // Start initialization sequence
     __outb(0x20, 0x11);  // ICW1: init + ICW4
     __outb(0xA0, 0x11);
@@ -352,10 +368,26 @@ void pic_init(void) {
     // ICW4: mode
     __outb(0x21, 0x01);  // 8086 mode
     __outb(0xA1, 0x01);
-    
-    // Restore masks
-    __outb(0x21, mask1);
-    __outb(0xA1, mask2);
+
+    // Mask everything except the cascade line; individual IRQs are
+    // unmasked explicitly via interrupt_enable() when a handler is ready
+    __outb(0x21, 0xFB);  // Master: only IRQ2 (cascade) unmasked
+    __outb(0xA1, 0xFF);  // Slave: all masked
+}
+
+// Program the PIT (channel 0, mode 2 rate generator) for a periodic tick
+void pit_init(uint32_t frequency_hz) {
+    if (frequency_hz == 0) {
+        frequency_hz = TIMER_DEFAULT_HZ;
+    }
+
+    uint32_t divisor = PIT_BASE_FREQUENCY / frequency_hz;
+    if (divisor == 0) divisor = 1;
+    if (divisor > 0xFFFF) divisor = 0xFFFF;
+
+    __outb(0x43, 0x34);                          // channel 0, lobyte/hibyte, mode 2
+    __outb(0x40, (uint8_t)(divisor & 0xFF));     // divisor low byte
+    __outb(0x40, (uint8_t)((divisor >> 8) & 0xFF)); // divisor high byte
 }
 
 // Send EOI to PIC
