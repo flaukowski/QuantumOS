@@ -1,0 +1,443 @@
+/**
+ * QuantumOS User-Space Services Framework Implementation (#6)
+ *
+ * Central service manager: registry, dependency-ordered startup,
+ * capability grants, heartbeat health monitoring with automatic
+ * restart. Services run as PROCESS_TYPE_SERVICE kernel threads until
+ * user mode lands.
+ *
+ * SPDX-License-Identifier: GPL-2.0-only
+ */
+
+#include <kernel/service.h>
+#include <kernel/process.h>
+#include <kernel/scheduler.h>
+#include <kernel/capability.h>
+#include <kernel/interrupts.h>
+#include <kernel/boot.h>
+
+/* ============================================================================
+ * Internal State
+ * ============================================================================ */
+
+typedef struct {
+    service_info_t info;
+    service_definition_t def;
+    uint64_t last_heartbeat;   /* timer ticks */
+    uint8_t registered;
+    uint8_t monitored;
+    uint8_t starting;          /* dependency-cycle guard */
+} service_slot_t;
+
+static service_slot_t services[MAX_SERVICES];
+static uint8_t manager_initialized = 0;
+static uint32_t monitor_restarts = 0;
+
+/* ============================================================================
+ * String helpers (freestanding)
+ * ============================================================================ */
+
+static int str_eq(const char *a, const char *b) {
+    while (*a && *b) {
+        if (*a != *b) return 0;
+        a++; b++;
+    }
+    return *a == *b;
+}
+
+static void str_copy_n(char *dest, const char *src, size_t max) {
+    size_t i = 0;
+    while (i < max - 1 && src[i]) {
+        dest[i] = src[i];
+        i++;
+    }
+    dest[i] = '\0';
+}
+
+/* ============================================================================
+ * Lookup helpers
+ * ============================================================================ */
+
+static service_slot_t *slot_by_id(uint32_t service_id) {
+    if (service_id == 0 || service_id > MAX_SERVICES) {
+        return NULL;
+    }
+    service_slot_t *slot = &services[service_id - 1];
+    return slot->registered ? slot : NULL;
+}
+
+static service_slot_t *slot_by_name(const char *name) {
+    for (uint32_t i = 0; i < MAX_SERVICES; i++) {
+        if (services[i].registered && str_eq(services[i].info.name, name)) {
+            return &services[i];
+        }
+    }
+    return NULL;
+}
+
+static service_slot_t *slot_by_pid(uint32_t pid) {
+    for (uint32_t i = 0; i < MAX_SERVICES; i++) {
+        if (services[i].registered && services[i].info.pid == pid &&
+            services[i].info.state == SERVICE_STATE_RUNNING) {
+            return &services[i];
+        }
+    }
+    return NULL;
+}
+
+/* ============================================================================
+ * Manager API
+ * ============================================================================ */
+
+svc_result_t service_manager_init(void) {
+    memset(services, 0, sizeof(services));
+    manager_initialized = 1;
+    boot_log("Service manager initialized");
+    return SVC_SUCCESS;
+}
+
+svc_result_t service_register(const service_definition_t *def,
+                              uint32_t *service_id_out) {
+    if (!manager_initialized || !def || !def->name || !def->entry) {
+        return SVC_ERROR_INVALID_ARG;
+    }
+    if (slot_by_name(def->name)) {
+        return SVC_ERROR_ALREADY_RUNNING;
+    }
+
+    for (uint32_t i = 0; i < MAX_SERVICES; i++) {
+        if (!services[i].registered) {
+            service_slot_t *slot = &services[i];
+            memset(slot, 0, sizeof(*slot));
+            slot->registered = 1;
+            slot->def = *def;
+            slot->info.service_id = i + 1;
+            str_copy_n(slot->info.name, def->name, SERVICE_NAME_MAX);
+            slot->info.state = SERVICE_STATE_STOPPED;
+            slot->info.max_restarts = def->max_restarts ?
+                def->max_restarts : SERVICE_DEFAULT_MAX_RESTARTS;
+            slot->info.cpu_limit = def->cpu_limit;
+            slot->info.memory_limit = def->memory_limit;
+            slot->info.quantum_limit = def->quantum_limit;
+            for (uint32_t d = 0; d < SERVICE_MAX_DEPS && def->dependencies[d]; d++) {
+                str_copy_n(slot->info.dependencies[d], def->dependencies[d],
+                           SERVICE_NAME_MAX);
+            }
+            if (service_id_out) {
+                *service_id_out = slot->info.service_id;
+            }
+            return SVC_SUCCESS;
+        }
+    }
+    return SVC_ERROR_NO_SPACE;
+}
+
+static svc_result_t start_slot(service_slot_t *slot) {
+    if (slot->info.state == SERVICE_STATE_RUNNING ||
+        slot->info.state == SERVICE_STATE_STARTING) {
+        return SVC_SUCCESS;
+    }
+    if (slot->starting) {
+        return SVC_ERROR_DEPENDENCY_CYCLE;
+    }
+    slot->starting = 1;
+
+    /* Start dependencies first */
+    for (uint32_t d = 0; d < SERVICE_MAX_DEPS && slot->def.dependencies[d]; d++) {
+        service_slot_t *dep = slot_by_name(slot->def.dependencies[d]);
+        if (!dep) {
+            slot->starting = 0;
+            return SVC_ERROR_DEPENDENCY;
+        }
+        svc_result_t r = start_slot(dep);
+        if (r != SVC_SUCCESS) {
+            slot->starting = 0;
+            return r;
+        }
+    }
+
+    slot->info.state = SERVICE_STATE_STARTING;
+
+    uint32_t pid = 0;
+    if (kernel_thread_create(slot->info.name, slot->def.entry,
+                             PRIORITY_NORMAL, &pid) != STATUS_SUCCESS) {
+        slot->info.state = SERVICE_STATE_CRASHED;
+        slot->starting = 0;
+        return SVC_ERROR_SPAWN_FAILED;
+    }
+
+    /* Mark the process as a service and grant its service capability */
+    process_t *proc = process_get_by_pid(pid);
+    if (proc) {
+        proc->type = PROCESS_TYPE_SERVICE;
+    }
+    uint32_t svc_cap = CAP_ID_INVALID;
+    if (cap_create(pid, CAP_RESOURCE_SERVICE, slot->info.service_id,
+                   CAP_READ | CAP_WRITE, 0, &svc_cap) == CAP_SUCCESS) {
+        slot->info.capabilities = svc_cap;
+    }
+
+    slot->info.pid = pid;
+    slot->info.start_time = timer_get_ticks();
+    slot->last_heartbeat = timer_get_ticks();
+    slot->info.state = SERVICE_STATE_RUNNING;
+    slot->starting = 0;
+
+    boot_log("service started:");
+    boot_log(slot->info.name);
+    return SVC_SUCCESS;
+}
+
+svc_result_t service_start(const char *name, const char *args) {
+    (void)args; /* kernel-thread services take no argv yet */
+    if (!manager_initialized || !name) {
+        return SVC_ERROR_INVALID_ARG;
+    }
+    service_slot_t *slot = slot_by_name(name);
+    if (!slot) {
+        return SVC_ERROR_NOT_FOUND;
+    }
+    return start_slot(slot);
+}
+
+svc_result_t service_stop(uint32_t service_id) {
+    service_slot_t *slot = slot_by_id(service_id);
+    if (!slot) {
+        return SVC_ERROR_NOT_FOUND;
+    }
+    if (slot->info.state != SERVICE_STATE_RUNNING &&
+        slot->info.state != SERVICE_STATE_CRASHED) {
+        return SVC_SUCCESS;
+    }
+
+    slot->info.state = SERVICE_STATE_STOPPING;
+
+    /* Retire the service process: block it out of the scheduler's
+     * rotation, then tear it down (revokes its capabilities too) */
+    if (slot->info.pid != 0) {
+        process_set_state(slot->info.pid, PROCESS_STATE_BLOCKED);
+        process_destroy(slot->info.pid);
+        slot->info.pid = 0;
+    }
+
+    slot->info.capabilities = CAP_ID_INVALID;
+    slot->info.state = SERVICE_STATE_STOPPED;
+    return SVC_SUCCESS;
+}
+
+svc_result_t service_restart(uint32_t service_id) {
+    service_slot_t *slot = slot_by_id(service_id);
+    if (!slot) {
+        return SVC_ERROR_NOT_FOUND;
+    }
+    if (slot->info.restart_count >= slot->info.max_restarts) {
+        return SVC_ERROR_RESTART_LIMIT;
+    }
+
+    service_stop(service_id);
+    slot->info.restart_count++;
+    return start_slot(slot);
+}
+
+svc_result_t service_status(uint32_t service_id, service_info_t *info) {
+    service_slot_t *slot = slot_by_id(service_id);
+    if (!slot || !info) {
+        return SVC_ERROR_NOT_FOUND;
+    }
+    *info = slot->info;
+    return SVC_SUCCESS;
+}
+
+svc_result_t service_list(service_info_t *out, size_t max_count, uint32_t *count) {
+    if (!out || !count) {
+        return SVC_ERROR_INVALID_ARG;
+    }
+    uint32_t n = 0;
+    for (uint32_t i = 0; i < MAX_SERVICES && n < max_count; i++) {
+        if (services[i].registered) {
+            out[n++] = services[i].info;
+        }
+    }
+    *count = n;
+    return SVC_SUCCESS;
+}
+
+svc_result_t service_monitor(uint32_t service_id, bool enable) {
+    service_slot_t *slot = slot_by_id(service_id);
+    if (!slot) {
+        return SVC_ERROR_NOT_FOUND;
+    }
+    slot->monitored = enable ? 1 : 0;
+    return SVC_SUCCESS;
+}
+
+void service_heartbeat(void) {
+    process_t *self = process_get_current();
+    if (!self) {
+        return;
+    }
+    service_slot_t *slot = slot_by_pid(self->pid);
+    if (slot) {
+        slot->last_heartbeat = timer_get_ticks();
+    }
+}
+
+svc_result_t service_find(const char *name, uint32_t *service_id_out) {
+    service_slot_t *slot = name ? slot_by_name(name) : NULL;
+    if (!slot || !service_id_out) {
+        return SVC_ERROR_NOT_FOUND;
+    }
+    *service_id_out = slot->info.service_id;
+    return SVC_SUCCESS;
+}
+
+/* ============================================================================
+ * Health monitor (runs as its own kernel thread)
+ * ============================================================================ */
+
+static void health_monitor_scan(void) {
+    uint64_t now = timer_get_ticks();
+
+    for (uint32_t i = 0; i < MAX_SERVICES; i++) {
+        service_slot_t *slot = &services[i];
+        if (!slot->registered || !slot->monitored ||
+            slot->info.state != SERVICE_STATE_RUNNING) {
+            continue;
+        }
+        if (now - slot->last_heartbeat > SERVICE_HEARTBEAT_TIMEOUT) {
+            slot->info.state = SERVICE_STATE_CRASHED;
+            boot_log("health monitor: service unresponsive:");
+            boot_log(slot->info.name);
+
+            if (service_restart(slot->info.service_id) == SVC_SUCCESS) {
+                monitor_restarts++;
+                boot_log("health monitor: service restarted:");
+                boot_log(slot->info.name);
+            } else {
+                boot_log("health monitor: restart limit reached:");
+                boot_log(slot->info.name);
+            }
+        }
+    }
+}
+
+static void health_monitor_thread(void) {
+    boot_log("service health monitor: online");
+    uint64_t last_scan = timer_get_ticks();
+    while (1) {
+        __asm__ volatile("hlt");
+        uint64_t now = timer_get_ticks();
+        if (now - last_scan >= SERVICE_MONITOR_INTERVAL) {
+            last_scan = now;
+            health_monitor_scan();
+        }
+    }
+}
+
+/* ============================================================================
+ * Built-in demo services
+ * ============================================================================ */
+
+static void entropy_manager_service(void) {
+    boot_log("svc entropy-manager: online");
+    while (1) {
+        __asm__ volatile("hlt");
+        service_heartbeat();
+    }
+}
+
+static void quantum_scheduler_service(void) {
+    boot_log("svc quantum-scheduler: online");
+    while (1) {
+        __asm__ volatile("hlt");
+        service_heartbeat();
+    }
+}
+
+static void device_manager_service(void) {
+    boot_log("svc device-manager: online");
+    while (1) {
+        __asm__ volatile("hlt");
+        service_heartbeat();
+    }
+}
+
+/* Deliberately stops heartbeating after ~1.5 s to demonstrate crash
+ * detection and automatic restart */
+static void flaky_demo_service(void) {
+    boot_log("svc flaky-demo: online");
+    uint64_t born = timer_get_ticks();
+    while (1) {
+        __asm__ volatile("hlt");
+        if (timer_get_ticks() - born < 150) {
+            service_heartbeat();
+        }
+        /* after that: alive but silent — the watchdog should trip */
+    }
+}
+
+/* ============================================================================
+ * Boot wiring + self-test
+ * ============================================================================ */
+
+#define SV_ASSERT(cond, msg)                          \
+    do {                                              \
+        if (!(cond)) {                                \
+            boot_log("service-selftest FAIL: " msg);  \
+            return SVC_ERROR_INVALID_ARG;             \
+        }                                             \
+    } while (0)
+
+svc_result_t service_selftest(void) {
+    /* Register built-ins: quantum-scheduler depends on entropy-manager,
+     * exercising dependency-ordered startup */
+    service_definition_t defs[] = {
+        { .name = "entropy-manager", .entry = entropy_manager_service,
+          .dependencies = { NULL }, .max_restarts = 3 },
+        { .name = "quantum-scheduler", .entry = quantum_scheduler_service,
+          .dependencies = { "entropy-manager", NULL }, .max_restarts = 3,
+          .quantum_limit = 8 },
+        { .name = "device-manager", .entry = device_manager_service,
+          .dependencies = { NULL }, .max_restarts = 3 },
+        { .name = "flaky-demo", .entry = flaky_demo_service,
+          .dependencies = { NULL }, .max_restarts = 2 },
+    };
+
+    for (uint32_t i = 0; i < ARRAY_SIZE(defs); i++) {
+        SV_ASSERT(service_register(&defs[i], NULL) == SVC_SUCCESS, "register");
+    }
+
+    /* Unknown service refused */
+    SV_ASSERT(service_start("no-such-service", NULL) == SVC_ERROR_NOT_FOUND,
+              "unknown service refused");
+
+    /* Starting quantum-scheduler must start entropy-manager first */
+    SV_ASSERT(service_start("quantum-scheduler", NULL) == SVC_SUCCESS,
+              "dependency-ordered start");
+    uint32_t dep_id = 0;
+    SV_ASSERT(service_find("entropy-manager", &dep_id) == SVC_SUCCESS, "find dep");
+    service_info_t info;
+    SV_ASSERT(service_status(dep_id, &info) == SVC_SUCCESS, "dep status");
+    SV_ASSERT(info.state == SERVICE_STATE_RUNNING, "dependency auto-started");
+    SV_ASSERT(info.capabilities != CAP_ID_INVALID, "service capability granted");
+
+    SV_ASSERT(service_start("device-manager", NULL) == SVC_SUCCESS, "start standalone");
+    SV_ASSERT(service_start("flaky-demo", NULL) == SVC_SUCCESS, "start flaky demo");
+
+    /* Enable the watchdog for everything running */
+    service_info_t all[MAX_SERVICES];
+    uint32_t count = 0;
+    SV_ASSERT(service_list(all, MAX_SERVICES, &count) == SVC_SUCCESS, "list");
+    SV_ASSERT(count == 4, "list count");
+    for (uint32_t i = 0; i < count; i++) {
+        service_monitor(all[i].service_id, true);
+    }
+
+    /* Spawn the health monitor thread */
+    SV_ASSERT(kernel_thread_create("svc-monitor", health_monitor_thread,
+                                   PRIORITY_HIGH, NULL) == STATUS_SUCCESS,
+              "monitor thread");
+
+    boot_log("service self-test: PASS");
+    return SVC_SUCCESS;
+}

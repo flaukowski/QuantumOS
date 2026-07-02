@@ -7,6 +7,7 @@
 #include <kernel/scheduler.h>
 #include <kernel/capability.h>
 #include <kernel/quantum.h>
+#include <kernel/service.h>
 
 // External symbols from linker script
 extern uint8_t __bss_start;
@@ -172,6 +173,15 @@ static void core_services_init(void) {
 
     // Initialize IPC system
     ipc_subsystem_init();
+
+    // Initialize the service manager and bring up system services
+    // (they run once the scheduler and timer start)
+    if (service_manager_init() != SVC_SUCCESS) {
+        boot_panic("Failed to initialize service manager");
+    }
+    if (service_selftest() != SVC_SUCCESS) {
+        boot_panic("Service framework self-test failed");
+    }
 
     boot_log("Core services initialization complete");
 }
