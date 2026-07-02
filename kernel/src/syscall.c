@@ -14,31 +14,25 @@
 #include <kernel/process.h>
 #include <kernel/scheduler.h>
 #include <kernel/gdt.h>
+#include <kernel/vmspace.h>
+#include <kernel/memory.h>
 #include <kernel/boot.h>
 
 /* Embedded user programs (kernel/src/user_blob.S) */
 extern const uint8_t user_hello_start[], user_hello_end[];
+extern const uint8_t user_canary_start[], user_canary_end[];
 extern const uint8_t user_rogue_start[], user_rogue_end[];
-
-/* Boot page tables (kernel/src/boot.S) */
-extern uint64_t boot_pml4[], boot_pdpt[], boot_pd[];
 
 /* int 0x80 stub (kernel/src/interrupts.S) */
 extern void isr128(void);
-
-/* CR3 helpers (kernel/src/interrupts.S) */
-extern uint64_t get_cr3(void);
-extern void set_cr3(uint64_t cr3);
-
-static uint32_t user_regions_used = 0;
 
 /* ============================================================================
  * Helpers
  * ============================================================================ */
 
-static int in_user_window(uint64_t addr) {
-    return addr >= USER_REGION_BASE &&
-           addr < USER_REGION_BASE + (uint64_t)USER_MAX_PROCESSES * USER_REGION_SIZE;
+/* Is addr inside the calling process's mapped user half (1–2 GB)? */
+static int in_user_range(uint64_t addr) {
+    return addr >= USER_VBASE && addr < 0x80000000UL;
 }
 
 /* Print "[user pid=N] msg" atomically enough for the boot console */
@@ -55,17 +49,17 @@ static void user_console_write(uint32_t pid, const char *msg) {
  * ============================================================================ */
 
 static uint64_t sys_write(uint32_t pid, uint64_t user_ptr) {
-    if (!in_user_window(user_ptr)) {
+    if (!in_user_range(user_ptr)) {
         return SYSCALL_EFAULT;
     }
 
-    /* Copy out of user memory, bounded by buffer and window end */
+    /* Copy out of the caller's user memory (current CR3 is the caller's
+     * address space, so the pointer resolves to its private frame),
+     * bounded by buffer and the user half's end. */
     char buf[128];
-    uint64_t window_end = USER_REGION_BASE +
-        (uint64_t)USER_MAX_PROCESSES * USER_REGION_SIZE;
     size_t i = 0;
     const char *src = (const char *)user_ptr;
-    while (i < sizeof(buf) - 1 && user_ptr + i < window_end && src[i]) {
+    while (i < sizeof(buf) - 1 && in_user_range(user_ptr + i) && src[i]) {
         buf[i] = src[i];
         i++;
     }
@@ -126,32 +120,72 @@ void syscall_init(void) {
  * User process setup
  * ============================================================================ */
 
+/* Allocate a physical frame and map it at uvaddr in `as`. Returns the
+ * frame's kernel-VA (== physical, identity-mapped) for population, or
+ * NULL on failure. */
+static uint8_t *map_fresh_page(address_space_t *as, uint64_t uvaddr,
+                               bool writable) {
+    void *frame = pmm_alloc_frame();
+    if (!frame) {
+        return NULL;
+    }
+    memset(frame, 0, PAGE_SIZE);
+    if (!vmspace_map_page(as, uvaddr, (uint64_t)frame, writable)) {
+        return NULL;
+    }
+    return (uint8_t *)frame;
+}
+
 status_t user_process_spawn(const char *name, const void *blob_start,
                             const void *blob_end, uint32_t *pid_out) {
-    if (user_regions_used >= USER_MAX_PROCESSES) {
-        return STATUS_NO_MEMORY;
-    }
-
     size_t blob_size = (size_t)((const uint8_t *)blob_end -
                                 (const uint8_t *)blob_start);
-    if (blob_size == 0 || blob_size > USER_REGION_SIZE / 2) {
+    if (blob_size == 0 || blob_size > USER_CODE_PAGES * PAGE_SIZE) {
         return STATUS_INVALID_ARG;
     }
 
-    uint8_t *region = (uint8_t *)(USER_REGION_BASE +
-        (uint64_t)user_regions_used * USER_REGION_SIZE);
-    user_regions_used++;
+    /* Private address space for this process */
+    address_space_t as = vmspace_create();
+    if (!as.pml4) {
+        return STATUS_NO_MEMORY;
+    }
 
-    memcpy(region, blob_start, blob_size);
+    /* Map + populate the code window (executable via absent NX; the
+     * blob is copied through the frame's identity VA) */
+    const uint8_t *src = (const uint8_t *)blob_start;
+    for (uint32_t p = 0; p < USER_CODE_PAGES; p++) {
+        uint64_t uvaddr = USER_VBASE + (uint64_t)p * PAGE_SIZE;
+        uint8_t *page = map_fresh_page(&as, uvaddr, true);
+        if (!page) {
+            return STATUS_NO_MEMORY;
+        }
+        size_t off = (size_t)p * PAGE_SIZE;
+        for (size_t b = 0; b < PAGE_SIZE && off + b < blob_size; b++) {
+            page[b] = src[off + b];
+        }
+    }
+
+    /* Zeroed writable data page (isolation canary target) */
+    if (!map_fresh_page(&as, USER_DATA_VADDR, true)) {
+        return STATUS_NO_MEMORY;
+    }
+
+    /* User stack, mapped just below USER_STACK_TOP */
+    for (uint32_t p = 1; p <= USER_STACK_PAGES; p++) {
+        uint64_t uvaddr = USER_STACK_TOP - (uint64_t)p * PAGE_SIZE;
+        if (!map_fresh_page(&as, uvaddr, true)) {
+            return STATUS_NO_MEMORY;
+        }
+    }
 
     process_create_params_t params = {
         .name = name,
         .type = PROCESS_TYPE_USER,
         .priority = PRIORITY_NORMAL,
         .parent_pid = KERNEL_PROCESS_ID,
-        .entry_point = region,
-        .stack_address = region,           /* stack_top = region end */
-        .stack_size = USER_REGION_SIZE,
+        .entry_point = (void *)USER_VBASE,
+        .stack_address = (void *)(USER_STACK_TOP - USER_REGION_SIZE),
+        .stack_size = USER_REGION_SIZE,   /* so stack_top == USER_STACK_TOP */
         .is_quantum_aware = false
     };
 
@@ -160,6 +194,11 @@ status_t user_process_spawn(const char *name, const void *blob_start,
     if (result != STATUS_SUCCESS) {
         return result;
     }
+
+    /* Bind the process to its private address space */
+    proc->cr3 = as.cr3;
+    proc->virtual_address_space = as.pml4;
+
     if (pid_out) {
         *pid_out = proc->pid;
     }
@@ -167,28 +206,19 @@ status_t user_process_spawn(const char *name, const void *blob_start,
 }
 
 void user_init(void) {
-    /* Open the user window: the user bit must be set at every paging
-     * level. PML4[0]/PDPT[0] become user-reachable, but individual
-     * kernel 2 MB pages remain supervisor-only — only the PD entries
-     * covering the user window get the user bit. */
-    boot_pml4[0] |= 0x4;
-    boot_pdpt[0] |= 0x4;
-    for (uint32_t i = 0; i < USER_MAX_PROCESSES; i++) {
-        uint64_t addr = USER_REGION_BASE + (uint64_t)i * USER_REGION_SIZE;
-        boot_pd[addr >> 21] |= 0x4;
-    }
-    set_cr3(get_cr3()); /* flush TLB */
-    boot_log("User memory window mapped (ring-3 pages above heap)");
+    boot_log("Per-process address spaces enabled (private CR3 per user proc)");
 
     uint32_t pid = 0;
-    if (user_process_spawn("user-hello-1", user_hello_start, user_hello_end,
+    if (user_process_spawn("user-canary-1", user_canary_start, user_canary_end,
                            &pid) != STATUS_SUCCESS ||
-        user_process_spawn("user-hello-2", user_hello_start, user_hello_end,
+        user_process_spawn("user-canary-2", user_canary_start, user_canary_end,
+                           &pid) != STATUS_SUCCESS ||
+        user_process_spawn("user-hello", user_hello_start, user_hello_end,
                            &pid) != STATUS_SUCCESS ||
         user_process_spawn("user-rogue", user_rogue_start, user_rogue_end,
                            &pid) != STATUS_SUCCESS) {
         boot_log("Warning: failed to spawn user processes");
         return;
     }
-    boot_log("User processes spawned (2x hello, 1x rogue)");
+    boot_log("User processes spawned (2x canary, 1x hello, 1x rogue)");
 }

@@ -13,6 +13,7 @@
 #include <kernel/scheduler.h>
 #include <kernel/process.h>
 #include <kernel/memory.h>
+#include <kernel/vmspace.h>
 #include <kernel/boot.h>
 
 static uint64_t switch_count = 0;
@@ -82,7 +83,11 @@ void scheduler_reschedule(cpu_state_t *state) {
     process_set_state(next->pid, PROCESS_STATE_RUNNING);
 
     /* Restore the next context onto the interrupt frame; the iretq at
-     * the end of irq_common resumes it */
+     * the end of irq_common resumes it. Switch to the next process's
+     * address space first — safe because the kernel half (this code,
+     * the interrupt stack, the frame) is mapped identically in every
+     * space. */
+    vmspace_switch(next->cr3 ? next->cr3 : vmspace_kernel_cr3());
     *state = next->context;
 
     switch_count++;
@@ -102,6 +107,7 @@ void scheduler_kill_current(cpu_state_t *state) {
     /* Do not save the dead process's context */
     process_switch_to(next);
     process_set_state(next->pid, PROCESS_STATE_RUNNING);
+    vmspace_switch(next->cr3 ? next->cr3 : vmspace_kernel_cr3());
     *state = next->context;
     switch_count++;
 }

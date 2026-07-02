@@ -1,10 +1,12 @@
 # QuantumOS embedded user-mode programs
 #
-# Position-independent ring-3 blobs. The kernel memcpys the bytes
-# between the start/end symbols into a user-accessible region and
-# starts a PROCESS_TYPE_USER process at the region base. There is no
-# ELF loader yet, so everything (code + strings) must be inside the
-# copied range and addressed rip-relative.
+# Position-independent ring-3 blobs. The kernel copies the bytes
+# between each start/end symbol into freshly allocated physical frames
+# and maps them at USER_VBASE (0x40000000) in the spawning process's
+# own address space; code addresses strings rip-relative. A fixed
+# writable data page lives at 0x40080000 and the stack top at
+# 0x40100000 — the SAME virtual addresses in every process, backed by
+# different physical frames (per-process CR3).
 #
 # Syscall ABI (int 0x80): rax = number, rdi/rsi = args, result in rax.
 #   1 = write(const char *msg)   2 = getpid()   3 = yield()
@@ -44,9 +46,63 @@ user_hello_start:
 user_hello_end:
 
 # ----------------------------------------------------------------------------
-# rogue: announce, then read kernel memory. The kernel text lives on
-# supervisor pages, so this must page-fault; the kernel should contain
-# the fault by killing this process — not by panicking.
+# canary: prove per-process isolation. Write a pid-derived marker to a
+# FIXED user VA (0x40080000), yield so the sibling instance writes ITS
+# marker to the same VA, then read back. With per-process page tables
+# each instance has its own frame there, so the marker survives; if the
+# space were shared, the sibling's write would clobber it.
+# ----------------------------------------------------------------------------
+.global user_canary_start
+.global user_canary_end
+.align 16
+user_canary_start:
+    mov $2, %rax           # SYS_GETPID
+    int $0x80
+    add $0x1000, %rax      # marker = 0x1000 + pid
+    mov %rax, %rbx         # keep our marker
+
+    mov $0x40080000, %rdx  # fixed user data VA
+    mov %rbx, (%rdx)       # store marker
+
+    lea 1f(%rip), %rdi
+    mov $1, %rax
+    int $0x80
+
+    mov $4, %rcx           # yield 4x — let the sibling store its marker
+2:
+    mov $3, %rax
+    int $0x80
+    dec %rcx
+    jnz 2b
+
+    mov $0x40080000, %rdx
+    mov (%rdx), %rax       # read back
+    cmp %rbx, %rax
+    jne 9f                 # clobbered -> isolation broken
+
+    lea 3f(%rip), %rdi     # marker intact
+    mov $1, %rax
+    int $0x80
+    jmp 8f
+9:
+    lea 4f(%rip), %rdi     # marker clobbered
+    mov $1, %rax
+    int $0x80
+8:
+    xor %rdi, %rdi
+    mov $4, %rax           # SYS_EXIT(0)
+    int $0x80
+7:  jmp 7b
+
+1:  .asciz "canary: marker written to shared VA 0x40080000"
+3:  .asciz "canary: marker intact after sibling ran — ISOLATION VERIFIED"
+4:  .asciz "canary: marker CLOBBERED — isolation broken"
+user_canary_end:
+
+# ----------------------------------------------------------------------------
+# rogue: announce, then read kernel memory. The kernel half is mapped
+# in every process but supervisor-only, so a ring-3 read must page-fault
+# and be contained (process killed, kernel survives).
 # ----------------------------------------------------------------------------
 .global user_rogue_start
 .global user_rogue_end
@@ -56,7 +112,8 @@ user_rogue_start:
     mov $1, %rax           # SYS_WRITE
     int $0x80
 
-    mov 0x100000, %rax     # kernel text @ 1MB — supervisor page -> #PF
+    mov $0x100000, %rdx    # kernel text @ 1MB (supervisor page)
+    mov (%rdx), %rax       # ring-3 read -> #PF
 
     lea 2f(%rip), %rdi     # must never be reached
     mov $1, %rax
