@@ -74,10 +74,16 @@ typedef struct {
     char dependencies[SERVICE_MAX_DEPS][SERVICE_NAME_MAX];
 } service_info_t;
 
-/* Static registration record */
+/* Static registration record.
+ *
+ * A service is either a kernel thread (set `entry`) or an isolated
+ * ring-3 user process loaded from an embedded ELF image (set
+ * `user_elf_start`/`user_elf_end`, leave `entry` NULL). */
 typedef struct {
     const char *name;
-    void (*entry)(void);            /* service main loop; must not return */
+    void (*entry)(void);            /* kernel-thread main loop; must not return */
+    const void *user_elf_start;     /* user-process service: embedded ELF image */
+    const void *user_elf_end;
     const char *dependencies[SERVICE_MAX_DEPS]; /* NULL-terminated list */
     uint32_t max_restarts;
     uint32_t cpu_limit;

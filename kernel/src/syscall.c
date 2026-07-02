@@ -17,6 +17,9 @@
 #include <kernel/vmspace.h>
 #include <kernel/memory.h>
 #include <kernel/elf.h>
+#include <kernel/capability.h>
+#include <kernel/ipc.h>
+#include <kernel/service.h>
 #include <kernel/boot.h>
 
 /* Embedded user programs (kernel/src/user_blob.S) */
@@ -24,12 +27,14 @@ extern const uint8_t user_hello_start[], user_hello_end[];
 extern const uint8_t user_canary_start[], user_canary_end[];
 extern const uint8_t user_rogue_start[], user_rogue_end[];
 
-/* Embedded ELF user program (build/x86_64/user/init.elf via objcopy) */
-extern const uint8_t _binary_init_elf_start[];
-extern const uint8_t _binary_init_elf_end[];
+/* Embedded ELF user programs (build/x86_64/user ELFs via objcopy) */
+extern const uint8_t _binary_init_elf_start[], _binary_init_elf_end[];
+extern const uint8_t _binary_echo_elf_start[], _binary_echo_elf_end[];
+extern const uint8_t _binary_client_elf_start[], _binary_client_elf_end[];
 
 static status_t finalize_user_process(address_space_t *as, const char *name,
                                       uint64_t entry, uint32_t *pid_out);
+void user_ipc_demo_init(void);
 
 /* int 0x80 stub (kernel/src/interrupts.S) */
 extern void isr128(void);
@@ -84,6 +89,65 @@ static void sys_exit(uint32_t pid, uint64_t code, cpu_state_t *state) {
     scheduler_kill_current(state);
 }
 
+/* Capability-routed send: the caller may only transmit to whatever
+ * destination it holds an IPC send-capability for (capability-as-
+ * address). No such capability -> EPERM. */
+static uint64_t sys_send(uint32_t pid, uint64_t user_ptr, uint64_t len) {
+    if (!in_user_range(user_ptr)) {
+        return SYSCALL_EFAULT;
+    }
+    if (len == 0 || len > IPC_MAX_MESSAGE_SIZE) {
+        return SYSCALL_EINVAL;
+    }
+
+    uint32_t dest = 0;
+    if (cap_find(pid, CAP_RESOURCE_IPC, CAP_WRITE, &dest) != CAP_SUCCESS) {
+        return SYSCALL_EPERM;
+    }
+
+    ipc_message_t msg;
+    memset(&msg, 0, sizeof(msg));
+    const uint8_t *src = (const uint8_t *)user_ptr;
+    uint32_t n = 0;
+    while (n < len && n < IPC_MAX_MESSAGE_SIZE && in_user_range(user_ptr + n)) {
+        msg.data[n] = src[n];
+        n++;
+    }
+    msg.length = n;
+
+    if (ipc_send(dest, &msg, 0) != IPC_SUCCESS) {
+        return SYSCALL_EIO;
+    }
+    return 0;
+}
+
+/* Receive from the caller's own queue (no capability needed to drain
+ * your own mailbox). Returns the sender pid, or 0 if empty. */
+static uint64_t sys_recv(uint32_t pid, uint64_t user_ptr, uint64_t len) {
+    (void)pid;
+    if (!in_user_range(user_ptr)) {
+        return SYSCALL_EFAULT;
+    }
+
+    ipc_message_t msg;
+    uint32_t sender = IPC_PID_ANY;
+    if (ipc_receive(&sender, &msg, 0) != IPC_SUCCESS) {
+        return 0; /* nothing queued */
+    }
+
+    uint8_t *dst = (uint8_t *)user_ptr;
+    uint32_t n = 0;
+    while (n < len && n < msg.length && in_user_range(user_ptr + n)) {
+        dst[n] = msg.data[n];
+        n++;
+    }
+    /* NUL-terminate if room (messages in the demo are strings) */
+    if (n < len && in_user_range(user_ptr + n)) {
+        dst[n] = 0;
+    }
+    return msg.sender_id;
+}
+
 /* ============================================================================
  * Dispatch
  * ============================================================================ */
@@ -108,6 +172,12 @@ static void syscall_dispatch(cpu_state_t *state) {
         break;
     case SYS_TICKS:
         state->rax = timer_get_ticks();
+        break;
+    case SYS_SEND:
+        state->rax = sys_send(pid, state->rdi, state->rsi);
+        break;
+    case SYS_RECV:
+        state->rax = sys_recv(pid, state->rdi, state->rsi);
         break;
     default:
         state->rax = SYSCALL_ENOSYS;
@@ -264,4 +334,51 @@ void user_init(void) {
         return;
     }
     boot_log("User processes spawned (init ELF, 2x canary, 1x rogue)");
+
+    user_ipc_demo_init();
+}
+
+/* Bring up a user-space service (echo) via the service framework and a
+ * client that talks to it over capability-checked IPC. Demonstrates the
+ * microkernel model: a system service running as an isolated ring-3
+ * process, reachable only by a process holding the right capability. */
+void user_ipc_demo_init(void) {
+    service_definition_t echo_def = {
+        .name = "echo",
+        .entry = NULL,                        /* user-process service */
+        .user_elf_start = _binary_echo_elf_start,
+        .user_elf_end = _binary_echo_elf_end,
+        .dependencies = { NULL },
+        .max_restarts = 1,
+    };
+
+    uint32_t sid = 0;
+    uint32_t echo_pid = 0, client_pid = 0;
+
+    if (service_register(&echo_def, &sid) == SVC_SUCCESS &&
+        service_start("echo", NULL) == SVC_SUCCESS) {
+        service_info_t info;
+        if (service_status(sid, &info) == SVC_SUCCESS) {
+            echo_pid = info.pid;
+        }
+    }
+    if (echo_pid == 0) {
+        boot_log("Warning: echo user-service failed to start");
+        return;
+    }
+
+    if (user_process_spawn_elf("ipc-client", _binary_client_elf_start,
+                               _binary_client_elf_end, &client_pid) != STATUS_SUCCESS) {
+        boot_log("Warning: ipc-client failed to spawn");
+        return;
+    }
+
+    /* Capability-as-address: grant each side a single IPC send-cap to
+     * the other. These are the only IPC capabilities either holds, so
+     * they can talk to each other and nothing else. */
+    uint32_t cap = CAP_ID_INVALID;
+    cap_create(client_pid, CAP_RESOURCE_IPC, echo_pid, CAP_READ | CAP_WRITE, 0, &cap);
+    cap_create(echo_pid, CAP_RESOURCE_IPC, client_pid, CAP_READ | CAP_WRITE, 0, &cap);
+
+    boot_log("IPC demo: echo service (ring 3) + client wired via capabilities");
 }

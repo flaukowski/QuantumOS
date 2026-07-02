@@ -274,6 +274,30 @@ cap_result_t cap_get(uint32_t cap_id, capability_t *out) {
     return CAP_SUCCESS;
 }
 
+cap_result_t cap_find(uint32_t pid, cap_resource_type_t resource_type,
+                      uint32_t required_perms, uint32_t *resource_id_out) {
+    for (uint32_t i = 0; i < MAX_CAPABILITIES; i++) {
+        if (!cap_table[i].in_use) {
+            continue;
+        }
+        capability_t *c = &cap_table[i].cap;
+        if (c->owner_id != pid || c->resource_type != resource_type) {
+            continue;
+        }
+        if ((c->permissions & required_perms) != required_perms) {
+            continue;
+        }
+        if (is_expired(c)) {
+            continue;
+        }
+        if (resource_id_out) {
+            *resource_id_out = c->resource_id;
+        }
+        return CAP_SUCCESS;
+    }
+    return CAP_ERROR_DENIED;
+}
+
 void cap_revoke_all_for_process(uint32_t pid) {
     for (uint32_t i = 0; i < MAX_CAPABILITIES; i++) {
         if (cap_table[i].in_use && cap_table[i].cap.owner_id == pid) {

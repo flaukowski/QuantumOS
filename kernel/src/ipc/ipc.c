@@ -12,6 +12,7 @@
 #include <kernel/types.h>
 #include <kernel/boot.h>
 #include <kernel/memory.h>
+#include <kernel/process.h>
 
 /* ============================================================================
  * Internal Constants
@@ -79,12 +80,13 @@ static ipc_channel_t *find_channel(uint32_t channel_id);
  * ============================================================================ */
 
 /**
- * Get current process ID
- * TODO: Integrate with process management system
+ * Get current process ID from the scheduler. During a syscall this is
+ * the calling process, so ipc_send() stamps the right sender and
+ * ipc_receive() drains the caller's own queue.
  */
 static uint32_t get_current_pid(void) {
-    /* Placeholder - return kernel PID for now */
-    return IPC_PID_KERNEL;
+    process_t *p = process_get_current();
+    return p ? p->pid : IPC_PID_KERNEL;
 }
 
 /**
