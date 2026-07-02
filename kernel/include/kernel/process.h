@@ -215,6 +215,9 @@ void process_idle_task(void);
 status_t process_init_kernel_process(void);
 status_t process_init_idle_process(void);
 
+/* Reap terminated processes and reclaim their address-space frames */
+void process_reap(void);
+
 /* ============================================================================
  * Constants and Macros
  * ============================================================================ */

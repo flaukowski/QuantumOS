@@ -16,6 +16,7 @@
 #include <kernel/capability.h>
 #include <kernel/quantum.h>
 #include <kernel/gdt.h>
+#include <kernel/vmspace.h>
 
 /* Local strncpy implementation (no libc in freestanding kernel) */
 static char *strncpy_local(char *dest, const char *src, size_t n) {
@@ -435,6 +436,34 @@ status_t process_destroy(uint32_t pid) {
     
     boot_log("Process destroyed");
     return STATUS_SUCCESS;
+}
+
+/**
+ * Reap terminated processes: free each dead process's private address
+ * space (page tables + user frames) back to the physical allocator and
+ * release its PCB slot. Runs from the kernel idle loop, so it never
+ * touches the address space currently loaded in CR3.
+ */
+void process_reap(void) {
+    for (uint32_t pid = 0; pid < MAX_PROCESSES; pid++) {
+        process_t *p = &process_table[pid];
+        if (p->state != PROCESS_STATE_TERMINATED || p == current_process) {
+            continue;
+        }
+
+        /* User processes own a private address space; free it before
+         * the PCB slot is reused */
+        if (p->virtual_address_space) {
+            vmspace_destroy((uint64_t *)p->virtual_address_space);
+            p->virtual_address_space = NULL;
+            p->cr3 = 0;
+        }
+
+        boot_log("reaped process; free frames: ");
+        early_console_write_hex(pmm_get_free_frames());
+
+        process_destroy(pid);
+    }
 }
 
 /**

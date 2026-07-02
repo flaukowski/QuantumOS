@@ -43,6 +43,12 @@ bool vmspace_map_page(address_space_t *as, uint64_t uvaddr,
 /* Load an address space into CR3 (no-op if already active) */
 void vmspace_switch(uint64_t cr3);
 
+/* Free every frame in a process's private user half — its page tables
+ * and the pages they map — back to the pmm. The shared kernel half
+ * (PDPT[0] -> boot page directory) is left untouched. Must NOT be
+ * called on the address space currently loaded in CR3. */
+void vmspace_destroy(uint64_t *pml4);
+
 /* CR3 for the plain kernel address space (boot page tables) */
 uint64_t vmspace_kernel_cr3(void);
 
