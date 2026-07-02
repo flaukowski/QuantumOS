@@ -15,6 +15,7 @@
 #include <kernel/types.h>
 #include <kernel/capability.h>
 #include <kernel/quantum.h>
+#include <kernel/gdt.h>
 
 /* Local strncpy implementation (no libc in freestanding kernel) */
 static char *strncpy_local(char *dest, const char *src, size_t n) {
@@ -303,20 +304,24 @@ status_t process_create(const process_create_params_t *params, process_t **proce
     process_table[pid].stack_bottom = stack_memory;
     process_table[pid].stack_top = (uint8_t*)stack_memory + params->stack_size;
 
-    /* Build a runnable register state for kernel threads so the
-     * scheduler can iretq into them. The kernel process (PID 0) is the
-     * boot flow itself — its context is captured at first preemption. */
+    /* Build a runnable register state so the scheduler can iretq into
+     * the process: kernel threads run ring 0, user processes ring 3
+     * (iretq drops privilege automatically from the frame selectors).
+     * The kernel process (PID 0) is the boot flow itself — its
+     * context is captured at first preemption. */
     if (params->entry_point && pid != KERNEL_PROCESS_ID &&
-        params->type == PROCESS_TYPE_KERNEL) {
+        (params->type == PROCESS_TYPE_KERNEL ||
+         params->type == PROCESS_TYPE_USER)) {
+        bool is_user = (params->type == PROCESS_TYPE_USER);
         cpu_state_t *ctx = &process_table[pid].context;
         memset(ctx, 0, sizeof(*ctx));
         ctx->rip = (uint64_t)params->entry_point;
-        ctx->cs = 0x08;
-        ctx->eflags = 0x202; /* IF set — threads run preemptible */
+        ctx->cs = is_user ? USER_CS : GDT_KERNEL_CS;
+        ctx->ss = is_user ? USER_DS : GDT_KERNEL_DS;
+        ctx->eflags = 0x202; /* IF set — processes run preemptible */
         /* 16-align, then bias by 8 to mimic the post-call alignment the
          * SysV ABI guarantees at function entry */
         ctx->rsp = (((uint64_t)process_table[pid].stack_top) & ~0xFULL) - 8;
-        ctx->ss = 0x10;
         process_table[pid].rsp = ctx->rsp;
         process_table[pid].context_valid = true;
     }

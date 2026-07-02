@@ -8,6 +8,8 @@
 #include <kernel/capability.h>
 #include <kernel/quantum.h>
 #include <kernel/service.h>
+#include <kernel/gdt.h>
+#include <kernel/syscall.h>
 
 // External symbols from linker script
 extern uint8_t __bss_start;
@@ -81,12 +83,20 @@ static void kernel_init(void) {
 
     // Initialize interrupt system
     interrupts_subsystem_init();
-    
+
+    // Install the full GDT + TSS (user-mode descriptors, ring-3 entry
+    // stack) and the syscall gate
+    gdt_init();
+    syscall_init();
+
     // Initialize core services
     core_services_init();
 
     // Spawn demo kernel threads and attach the scheduler
     scheduler_subsystem_init();
+
+    // Map the user memory window and spawn the user-mode processes
+    user_init();
 
     // Start the periodic timer and enable interrupts
     pit_init(TIMER_DEFAULT_HZ);
