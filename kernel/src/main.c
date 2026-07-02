@@ -10,6 +10,7 @@
 #include <kernel/service.h>
 #include <kernel/gdt.h>
 #include <kernel/syscall.h>
+#include <kernel/vga.h>
 
 // External symbols from linker script
 extern uint8_t __bss_start;
@@ -74,37 +75,50 @@ static void early_init(void) {
 // Main kernel initialization
 static void kernel_init(void) {
     boot_log("Starting kernel initialization...");
-    
+
+    // Draw the boot splash; each subsystem advances the progress bar
+    // and travels the interference wave one step further
+    vga_boot_splash();
+    vga_boot_stage("hardware abstraction layer", 5);
+
     // Initialize HAL
     hal_init();
-    
+
     // Initialize memory management
+    vga_boot_stage("memory management", 20);
     memory_subsystem_init();
 
     // Initialize interrupt system
+    vga_boot_stage("interrupt controller", 35);
     interrupts_subsystem_init();
 
     // Install the full GDT + TSS (user-mode descriptors, ring-3 entry
     // stack) and the syscall gate
+    vga_boot_stage("descriptor tables + syscalls", 45);
     gdt_init();
     syscall_init();
 
     // Initialize core services
+    vga_boot_stage("capabilities + quantum resources", 60);
     core_services_init();
 
     // Spawn demo kernel threads and attach the scheduler
+    vga_boot_stage("scheduler + services", 75);
     scheduler_subsystem_init();
 
     // Map the user memory window and spawn the user-mode processes
+    vga_boot_stage("user-space processes", 90);
     user_init();
 
     // Start the periodic timer and enable interrupts
+    vga_boot_stage("timer + interrupts", 98);
     pit_init(TIMER_DEFAULT_HZ);
     interrupt_enable(IRQ_BASE + IRQ_TIMER);
     interrupt_enable_all();
     boot_log("Timer started, interrupts enabled");
 
     boot_log("Kernel initialization complete");
+    vga_boot_ready();
     boot_log("QuantumOS ready");
 
     // Idle loop for the kernel process — the scheduler preempts this
