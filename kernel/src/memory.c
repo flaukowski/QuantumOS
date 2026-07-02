@@ -2,10 +2,12 @@
 #include <kernel/memory.h>
 #include <kernel/boot.h>
 
-// External symbols
+// External symbols. The heap bounds are declared as unbounded arrays so
+// the block header can be placed at __heap_start without the optimiser's
+// -Warray-bounds treating the symbol as a 1-byte object.
 extern uint8_t __end;
-extern uint8_t __heap_start;
-extern uint8_t __heap_end;
+extern uint8_t __heap_start[];
+extern uint8_t __heap_end[];
 
 // Global memory managers
 static physical_memory_t pmm;
@@ -243,57 +245,166 @@ mem_result_t memory_unmap_page(void *virt_addr) {
     return MEM_SUCCESS;
 }
 
-// Kernel heap implementation
+// ============================================================================
+// Kernel heap — first-fit free-list allocator over the .heap region.
+//
+// Every block carries a header and blocks form an address-ordered doubly
+// linked list. kmalloc splits a large free block; kfree marks a block
+// free and coalesces with its immediate neighbours, so repeated
+// alloc/free (e.g. kernel-thread stacks across service restarts) does
+// not fragment the heap away.
+// ============================================================================
+
+#define KBLOCK_MAGIC 0x4B424C4Bu  /* "KBLK" */
+
+typedef struct kblock {
+    size_t size;             /* payload size in bytes */
+    struct kblock *next;     /* next block in address order */
+    struct kblock *prev;
+    uint32_t magic;
+    uint8_t free;
+} kblock_t;
+
+#define KHDR ALIGN_UP(sizeof(kblock_t), 16)
+
+static kblock_t *heap_head = NULL;
+
+/* Save RFLAGS + disable interrupts (nestable), and restore. The heap is
+ * touched from concurrent kernel contexts (idle-loop reaper, health
+ * monitor spawning threads), so allocations are made atomic. */
+static inline uint64_t irq_save(void) {
+    uint64_t f;
+    __asm__ volatile("pushfq; pop %0; cli" : "=r"(f) :: "memory");
+    return f;
+}
+static inline void irq_restore(uint64_t f) {
+    __asm__ volatile("push %0; popfq" :: "r"(f) : "memory", "cc");
+}
+
 mem_result_t kheap_init(void) {
     boot_log("Initializing kernel heap...");
 
     // Use the .heap region from link.ld — identity-mapped by the boot
     // page tables. (KERNEL_HEAP_START is higher-half virtual space that
     // is not mapped yet; using it would fault on first kmalloc.)
-    size_t heap_size = (size_t)(&__heap_end - &__heap_start);
-    kernel_heap.start = (void*)&__heap_start;
-    kernel_heap.end = (void*)&__heap_end;
+    size_t heap_size = (size_t)(__heap_end - __heap_start);
+
+    kernel_heap.start = (void*)__heap_start;
+    kernel_heap.end = (void*)__heap_end;
     kernel_heap.current = kernel_heap.start;
     kernel_heap.total_size = heap_size;
     kernel_heap.used_size = 0;
     kernel_heap.free_size = heap_size;
+
+    heap_head = (kblock_t*)__heap_start;
+    heap_head->size = heap_size - KHDR;
+    heap_head->next = NULL;
+    heap_head->prev = NULL;
+    heap_head->magic = KBLOCK_MAGIC;
+    heap_head->free = 1;
 
     boot_log("Kernel heap initialized");
     return MEM_SUCCESS;
 }
 
 void* kmalloc(size_t size) {
-    // Align size to 8 bytes
-    size = ALIGN_UP(size, 8);
-    
-    // Check if we have enough space
-    if (kernel_heap.used_size + size > kernel_heap.total_size) {
+    if (size == 0) {
         return NULL;
     }
-    
-    // Allocate memory
-    void *ptr = kernel_heap.current;
-    kernel_heap.current += size;
-    kernel_heap.used_size += size;
-    kernel_heap.free_size -= size;
-    
-    return ptr;
+    size = ALIGN_UP(size, 16);
+
+    uint64_t flags = irq_save();
+    for (kblock_t *b = heap_head; b; b = b->next) {
+        if (!b->free || b->size < size) {
+            continue;
+        }
+        /* Split if the leftover can hold a header plus a usable payload */
+        if (b->size >= size + KHDR + 16) {
+            kblock_t *nb = (kblock_t*)((uint8_t*)b + KHDR + size);
+            nb->size = b->size - size - KHDR;
+            nb->free = 1;
+            nb->magic = KBLOCK_MAGIC;
+            nb->prev = b;
+            nb->next = b->next;
+            if (b->next) {
+                b->next->prev = nb;
+            }
+            b->next = nb;
+            b->size = size;
+        }
+        b->free = 0;
+        irq_restore(flags);
+        return (uint8_t*)b + KHDR;
+    }
+    irq_restore(flags);
+    return NULL; /* out of heap */
 }
 
 void kfree(void *ptr) {
-    // Simple heap - no free for now
-    // TODO: Implement proper heap with free
-    (void)ptr;
+    if (!ptr) {
+        return;
+    }
+    kblock_t *b = (kblock_t*)((uint8_t*)ptr - KHDR);
+    if (b->magic != KBLOCK_MAGIC || b->free) {
+        return; /* not ours / double free */
+    }
+
+    uint64_t flags = irq_save();
+    b->free = 1;
+
+    /* Coalesce with the following block if it is free (adjacent by
+     * construction in address order) */
+    if (b->next && b->next->free) {
+        b->size += KHDR + b->next->size;
+        b->next = b->next->next;
+        if (b->next) {
+            b->next->prev = b;
+        }
+    }
+    /* Coalesce with the preceding block if it is free */
+    if (b->prev && b->prev->free) {
+        b->prev->size += KHDR + b->size;
+        b->prev->next = b->next;
+        if (b->next) {
+            b->next->prev = b->prev;
+        }
+    }
+    irq_restore(flags);
 }
 
 void* krealloc(void *ptr, size_t new_size) {
-    // Simple implementation - allocate new and copy
-    void *new_ptr = kmalloc(new_size);
-    if (new_ptr && ptr) {
-        // TODO: Copy old data (need size tracking)
-        // For now, just allocate new
+    if (!ptr) {
+        return kmalloc(new_size);
     }
-    return new_ptr;
+    if (new_size == 0) {
+        kfree(ptr);
+        return NULL;
+    }
+    kblock_t *b = (kblock_t*)((uint8_t*)ptr - KHDR);
+    if (b->magic != KBLOCK_MAGIC) {
+        return NULL;
+    }
+    if (b->size >= new_size) {
+        return ptr; /* already big enough */
+    }
+    void *np = kmalloc(new_size);
+    if (np) {
+        memcpy(np, ptr, b->size);
+        kfree(ptr);
+    }
+    return np;
+}
+
+size_t kheap_free_bytes(void) {
+    size_t total = 0;
+    uint64_t flags = irq_save();
+    for (kblock_t *b = heap_head; b; b = b->next) {
+        if (b->free) {
+            total += b->size;
+        }
+    }
+    irq_restore(flags);
+    return total;
 }
 
 // Memory utilities

@@ -105,6 +105,7 @@ mem_result_t kheap_init(void);
 void* kmalloc(size_t size);
 void kfree(void *ptr);
 void* krealloc(void *ptr, size_t new_size);
+size_t kheap_free_bytes(void);   // total free heap bytes (diagnostics)
 
 // Memory utilities
 bool is_aligned(void *ptr, size_t alignment);
