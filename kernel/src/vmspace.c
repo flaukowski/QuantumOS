@@ -108,3 +108,36 @@ void vmspace_switch(uint64_t cr3) {
         set_cr3(cr3);
     }
 }
+
+void vmspace_destroy(uint64_t *pml4) {
+    if (!pml4) {
+        return;
+    }
+
+    uint64_t *pdpt = (uint64_t *)(pml4[0] & PG_ADDR);
+    if (pdpt) {
+        /* Walk the user half only. PDPT[0] points at the SHARED boot
+         * page directory (the kernel half) — never free it. */
+        for (int pi = 1; pi < 512; pi++) {
+            if (!(pdpt[pi] & PG_PRESENT)) {
+                continue;
+            }
+            uint64_t *pd = (uint64_t *)(pdpt[pi] & PG_ADDR);
+            for (int di = 0; di < 512; di++) {
+                if (!(pd[di] & PG_PRESENT)) {
+                    continue;
+                }
+                uint64_t *pt = (uint64_t *)(pd[di] & PG_ADDR);
+                for (int ti = 0; ti < 512; ti++) {
+                    if (pt[ti] & PG_PRESENT) {
+                        pmm_free_frame((void *)(pt[ti] & PG_ADDR)); /* user page */
+                    }
+                }
+                pmm_free_frame(pt);   /* page table */
+            }
+            pmm_free_frame(pd);       /* page directory */
+        }
+        pmm_free_frame(pdpt);         /* PDPT */
+    }
+    pmm_free_frame(pml4);             /* PML4 */
+}

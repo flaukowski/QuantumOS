@@ -149,9 +149,14 @@ static void kernel_init(void) {
     splash_ready();
     boot_log("QuantumOS ready");
 
-    // Idle loop for the kernel process — the scheduler preempts this
-    // and rotates through the kernel threads
+    // Idle loop for the kernel process. Reaps terminated processes
+    // (reclaiming their address-space frames) with interrupts disabled
+    // so the pmm free path can't race a preemption, then sleeps until
+    // the next tick.
     while (1) {
+        interrupt_disable_all();
+        process_reap();
+        interrupt_enable_all();
         __asm__ volatile("hlt");
     }
 }
