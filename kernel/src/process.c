@@ -283,12 +283,14 @@ status_t process_create(const process_create_params_t *params, process_t **proce
     
     /* Allocate memory for process stack */
     void *stack_memory = params->stack_address;
+    bool heap_stack = false;
     if (!stack_memory) {
         if (params->type == PROCESS_TYPE_KERNEL) {
             stack_memory = kmalloc(params->stack_size);
             if (!stack_memory) {
                 return PROCESS_ERROR_NO_MEMORY;
             }
+            heap_stack = true;   /* kfree'd in process_destroy */
         } else {
             /* TODO: Allocate from user memory pool */
             stack_memory = (void*)((uintptr_t)0x400000 + (pid * PROCESS_STACK_SIZE));
@@ -304,6 +306,7 @@ status_t process_create(const process_create_params_t *params, process_t **proce
     /* Stack bookkeeping */
     process_table[pid].stack_bottom = stack_memory;
     process_table[pid].stack_top = (uint8_t*)stack_memory + params->stack_size;
+    process_table[pid].owns_kernel_stack = heap_stack;
 
     /* Build a runnable register state so the scheduler can iretq into
      * the process: kernel threads run ring 0, user processes ring 3
@@ -422,6 +425,17 @@ status_t process_destroy(uint32_t pid) {
         vmspace_destroy((uint64_t *)process->virtual_address_space);
         process->virtual_address_space = NULL;
         process->cr3 = 0;
+    }
+
+    /* Return a heap-allocated kernel-thread stack to the heap (kfree is
+     * now a real free), so kernel-thread service restarts don't leak */
+    if (process->owns_kernel_stack && process->stack_bottom) {
+        kfree(process->stack_bottom);
+        process->owns_kernel_stack = false;
+        process->stack_bottom = NULL;
+        process->stack_top = NULL;
+        boot_log("freed kernel-thread stack; heap free bytes: ");
+        early_console_write_hex(kheap_free_bytes());
     }
     
     /* Remove from parent's children list */

@@ -92,6 +92,7 @@ typedef struct process {
     size_t memory_size;            /* Total memory allocated */
     void *stack_top;               /* Top of kernel stack */
     void *stack_bottom;            /* Bottom of kernel stack */
+    bool owns_kernel_stack;        /* stack_bottom was kmalloc'd (kfree on destroy) */
     
     /* Process timing */
     uint64_t creation_time;        /* When process was created */
