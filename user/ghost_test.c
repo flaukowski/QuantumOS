@@ -44,6 +44,20 @@ static int request(const ghost_req_t *req, ghost_rep_t *rep) {
 void _start(void) {
     write_str("ghost-test: online — imprinting 3 patterns, then noisy recall");
 
+    /* Proof-by-attack (same tradition as the rogue process): ghost-test
+     * holds only an IPC send-cap to ghostd and NO quantum-pool capability,
+     * so its SYS_QRAND draw must be denied with EPERM (-4) before any byte
+     * is produced. The capability gate — not a convention — is what stops it. */
+    {
+        uint8_t qbuf[8];
+        long qr = qrand_fill(qbuf, (long)sizeof(qbuf));
+        if (qr == -4) {
+            write_str("QRAND: capless caller denied (EPERM)");
+        } else {
+            write_str("QRAND: WARNING — capless caller was NOT denied");
+        }
+    }
+
     const uint32_t seeds[3] = { GHOST_SEED_0, GHOST_SEED_1, GHOST_SEED_2 };
     uint32_t pats[3][GHOST_PW];
 

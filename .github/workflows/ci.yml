@@ -543,6 +543,42 @@ jobs:
           INTEGRATION_FAILURES=$((INTEGRATION_FAILURES + 1))
         fi
 
+        # Test 1c: ghostOS phase-2 honesty gate (issue #49) — this seedless
+        # boot must name the noise source as a plain PRNG and NEVER claim
+        # quantum provenance, and the capless SYS_QRAND caller must be denied.
+        echo "" >> integration_results.txt
+        echo "Test 1c: ghostd noise-source honesty + QRAND capability gate..." >> integration_results.txt
+        if grep -q "GHOSTD: noise source = prng (no qseed)" boot_output.txt 2>/dev/null \
+           && ! grep -q "GHOSTD: noise source = qseed-derived" boot_output.txt 2>/dev/null; then
+          echo "  [PASS] ghostd reported 'prng (no qseed)' with no false quantum claim" >> integration_results.txt
+        else
+          echo "  [FAIL] ghostd noise-source honesty gate failed on a seedless boot" >> integration_results.txt
+          INTEGRATION_FAILURES=$((INTEGRATION_FAILURES + 1))
+        fi
+        if grep -q "QRAND: capless caller denied (EPERM)" boot_output.txt 2>/dev/null; then
+          echo "  [PASS] capless SYS_QRAND denied (QRAND: capless caller denied)" >> integration_results.txt
+        else
+          echo "  [FAIL] capless SYS_QRAND was not denied" >> integration_results.txt
+          INTEGRATION_FAILURES=$((INTEGRATION_FAILURES + 1))
+        fi
+
+        # Test 1d: ghostOS phase-2 qseed handoff (issue #49) — boot WITH a
+        # quantum-entropy seed on the kernel command line; the kernel must
+        # echo it accepted the handoff AND ghostd must trace its noise to it.
+        echo "" >> integration_results.txt
+        echo "Test 1d: qseed handoff -> ghostd quantum noise provenance..." >> integration_results.txt
+        timeout 15s qemu-system-x86_64 -kernel "$KERNEL_ELF" \
+          -append "qseed=DEADBEEFCAFEBABE" \
+          -serial stdio -m 128M -display none -no-reboot 2>&1 | tee boot_output_qseed.txt || true
+        if grep -q "Boot entropy accepted from cmdline (qseed=)" boot_output_qseed.txt 2>/dev/null \
+           && grep -q "GHOSTD: noise source = qseed-derived" boot_output_qseed.txt 2>/dev/null \
+           && grep -q "GHOSTD: 3/3 RECALL OK" boot_output_qseed.txt 2>/dev/null; then
+          echo "  [PASS] qseed accepted + ghostd noise = qseed-derived + 3/3 recall" >> integration_results.txt
+        else
+          echo "  [FAIL] qseed handoff did not reach ghostd as quantum provenance" >> integration_results.txt
+          INTEGRATION_FAILURES=$((INTEGRATION_FAILURES + 1))
+        fi
+
         # Test 2: Check for kernel panic or errors
         echo "" >> integration_results.txt
         echo "Test 2: Checking for kernel panics..." >> integration_results.txt
