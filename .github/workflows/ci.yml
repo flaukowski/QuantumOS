@@ -477,6 +477,25 @@ jobs:
         path: quantum_test_results.txt
         retention-days: 7
 
+  resonant-experiment:
+    name: Resonant Scheduler Experiment (SCHED_RESONANT, honest measurement)
+    runs-on: ubuntu-latest
+    needs: [build]
+    # The dormant ghostOS resonant scheduler (issue #21) wired behind
+    # SCHED_RESONANT=1. Default builds never link it; this job keeps the
+    # experiment reproducible and publishes its honest verdict (it loses to
+    # round-robin) on every run. Not a required check — a negative result.
+    continue-on-error: true
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+    - name: Install dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y build-essential qemu-system-x86 nasm
+    - name: Build + boot with the resonant scheduler and print the comparison
+      run: make ci-smoke-resonant
+
   integration:
     name: Integration Tests
     runs-on: ubuntu-latest
