@@ -21,6 +21,7 @@
 #define SYS_SEND_TO   11
 #define SYS_COM2      12
 #define SYS_QSEED     13
+#define SYS_FIELD_SNAPSHOT 14
 
 /* SYS_COM2 operations (arg 1) */
 #define SYS_COM2_READ   0
@@ -104,6 +105,14 @@ static inline long com2_write_bytes(const void *buf, long len) {
  * or -4 EPERM without a COM2 device read-capability. */
 static inline long com2_read_bytes(void *buf, long len) {
     return usys3(SYS_COM2, SYS_COM2_READ, (long)buf, len);
+}
+
+/* Publish a downsampled memory-field snapshot (up to FIELD_SNAP_BYTES signed
+ * bytes) to the kernel's framebuffer visualization sink. Uncapped: it grants
+ * no authority and is a no-op in effect unless a GRUB/ISO framebuffer is
+ * present. Returns bytes stored. */
+static inline long field_snapshot(const void *buf, long len) {
+    return usys2(SYS_FIELD_SNAPSHOT, (long)buf, len);
 }
 
 /* Tiny string helpers (no libc) */

@@ -50,9 +50,25 @@ ifdef SCHED_LOTTERY
     CFLAGS += -DSCHED_LOTTERY
 endif
 
+# Optional: resonant scheduler (ghostd phase 5). Off by default — the default
+# build is byte-identical round-robin. Enable with `make SCHED_RESONANT=1`,
+# which routes pick_next through the integer-only fixed-point resonant field
+# (Kuramoto order parameter + per-process resonant priority) and prints an
+# honest rr-vs-resonant fairness comparison at boot. No FPU is used in the ISR
+# (the dormant double-precision port stays unwired). See kernel/src/resonant_fixed.c.
+ifdef SCHED_RESONANT
+    CFLAGS += -DSCHED_RESONANT
+endif
+
 # Source files
 # KERNEL_SOURCES captures all .c files in kernel/src/ (including process*.c)
 KERNEL_SOURCES = $(wildcard $(KERNEL_DIR)/src/*.c)
+# The fixed-point resonant scheduler is only compiled/linked when opted in, so
+# the default build does not carry its object at all (default stays round-robin
+# and byte-for-byte free of resonant code).
+ifndef SCHED_RESONANT
+KERNEL_SOURCES := $(filter-out $(KERNEL_DIR)/src/resonant_fixed.c,$(KERNEL_SOURCES))
+endif
 IPC_SOURCES = $(wildcard $(KERNEL_DIR)/src/ipc/*.c)
 RESONANCE_SOURCES = $(wildcard $(KERNEL_DIR)/src/resonance/*.c)
 ASSEMBLY_SOURCES = $(wildcard $(KERNEL_DIR)/src/*.S)
@@ -71,7 +87,7 @@ OBJECTS = $(KERNEL_SOURCES:$(KERNEL_DIR)/src/%.c=$(BUILD_DIR)/%.o) \
           $(USER_ELF_OBJS)
 
 # Targets
-.PHONY: all clean kernel run debug dump test test-list test-coverage ci-smoke ci-smoke-qseed ci-smoke-swarm swarm-pingpong
+.PHONY: all clean kernel run debug dump test test-list test-coverage ci-smoke ci-smoke-resonant ci-smoke-qseed ci-smoke-swarm swarm-pingpong
 
 all: kernel
 
@@ -373,6 +389,51 @@ ci-smoke: kernel
 	@echo ""
 	@echo "=== Smoke Test PASSED ==="
 
+# CI Smoke Test (resonant scheduler): rebuild WITH SCHED_RESONANT=1 and prove
+# the alternate policy still boots to ready, still passes the ghostd merge gate
+# (the field service works under resonant scheduling), and prints the honest
+# rr-vs-resonant fairness comparison. This is the ghostd phase-5 scheduler gate.
+ci-smoke-resonant:
+	@echo "=== QuantumOS CI Smoke Test (resonant scheduler) ==="
+	@echo ""
+	@echo "[1/3] Rebuilding kernel with SCHED_RESONANT=1..."
+	@$(MAKE) -s clean
+	@$(MAKE) -s SCHED_RESONANT=1 kernel
+	@echo "[2/3] Running QEMU boot test (10 second timeout)..."
+	@timeout 10s qemu-system-x86_64 -kernel $(BUILD_DIR)/kernel.elf32 \
+		-serial stdio -m 128M -display none -no-reboot 2>&1 | tee /tmp/qemu-boot-resonant.log || true
+	@echo ""
+	@echo "[3/3] Validating boot output..."
+	@if ! grep -q "QuantumOS ready" /tmp/qemu-boot-resonant.log 2>/dev/null; then \
+		echo "ERROR: resonant build did not reach 'QuantumOS ready'"; \
+		cat /tmp/qemu-boot-resonant.log 2>/dev/null || true; \
+		echo ""; echo "=== Smoke Test FAILED ==="; exit 1; \
+	fi
+	@echo "SUCCESS: resonant build booted to idle loop (QuantumOS ready)"
+	@# The field service must still work under the alternate scheduler.
+	@if ! grep -q "GHOSTD: 3/3 RECALL OK" /tmp/qemu-boot-resonant.log 2>/dev/null; then \
+		echo "ERROR: ghostd merge gate missing under resonant scheduling (GHOSTD: 3/3 RECALL OK)"; \
+		cat /tmp/qemu-boot-resonant.log 2>/dev/null || true; \
+		echo ""; echo "=== Smoke Test FAILED ==="; exit 1; \
+	fi
+	@echo "SUCCESS: ghostd gate passed under resonant scheduling (GHOSTD: 3/3 RECALL OK)"
+	@# The honest comparison must be printed: round-robin baseline...
+	@if ! grep -q "SCHED: policy=rr fairness=" /tmp/qemu-boot-resonant.log 2>/dev/null; then \
+		echo "ERROR: round-robin fairness baseline not printed (SCHED: policy=rr fairness=)"; \
+		cat /tmp/qemu-boot-resonant.log 2>/dev/null || true; \
+		echo ""; echo "=== Smoke Test FAILED ==="; exit 1; \
+	fi
+	@# ...and the resonant order parameter + fairness alongside it.
+	@if ! grep -q "SCHED: policy=resonant r=" /tmp/qemu-boot-resonant.log 2>/dev/null; then \
+		echo "ERROR: resonant order parameter/fairness not printed (SCHED: policy=resonant r=)"; \
+		cat /tmp/qemu-boot-resonant.log 2>/dev/null || true; \
+		echo ""; echo "=== Smoke Test FAILED ==="; exit 1; \
+	fi
+	@echo "SUCCESS: honest rr-vs-resonant comparison printed:"
+	@grep "SCHED: " /tmp/qemu-boot-resonant.log 2>/dev/null || true
+	@echo ""
+	@echo "=== Smoke Test (resonant) PASSED ==="
+
 # CI Smoke Test (qseed mode): boot WITH a quantum-entropy handoff on the
 # kernel command line and prove ghostd traces its noise to that qseed.
 ci-smoke-qseed: kernel
@@ -543,7 +604,7 @@ info:
 	@echo "  Objects: $(OBJECTS)"
 
 # Phony targets
-.PHONY: all clean kernel run run-iso debug dump test test-list test-coverage ci-smoke ci-smoke-qseed validate info install-deps help
+.PHONY: all clean kernel run run-iso debug dump test test-list test-coverage ci-smoke ci-smoke-resonant ci-smoke-qseed validate info install-deps help
 
 # Default target
 .DEFAULT_GOAL := all
