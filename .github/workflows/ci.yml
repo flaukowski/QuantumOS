@@ -579,6 +579,31 @@ jobs:
           INTEGRATION_FAILURES=$((INTEGRATION_FAILURES + 1))
         fi
 
+        # Test 1e: ghostOS phase-3 gate (issue #50) — paradoxd must resolve the
+        # canned contradiction (deterministic RESOLVED line), deny an
+        # unauthorised targeted send, and demonstrate the ghostd field coupling
+        # by transitioning its CONVERGENT<->DIVERGENT phase machine gated on R.
+        echo "" >> integration_results.txt
+        echo "Test 1e: paradoxd resolution + capability + ghostd coupling..." >> integration_results.txt
+        if grep -q "PARADOXD: RESOLVED" boot_output.txt 2>/dev/null; then
+          echo "  [PASS] paradoxd resolved the contradiction (PARADOXD: RESOLVED)" >> integration_results.txt
+        else
+          echo "  [FAIL] paradoxd resolution gate missing (PARADOXD: RESOLVED)" >> integration_results.txt
+          INTEGRATION_FAILURES=$((INTEGRATION_FAILURES + 1))
+        fi
+        if grep -q "PARADOXD: capless send denied (EPERM)" boot_output.txt 2>/dev/null; then
+          echo "  [PASS] unauthorised send denied (PARADOXD: capless send denied)" >> integration_results.txt
+        else
+          echo "  [FAIL] unauthorised send was not denied" >> integration_results.txt
+          INTEGRATION_FAILURES=$((INTEGRATION_FAILURES + 1))
+        fi
+        if grep -q "PARADOXD: phase ->" boot_output.txt 2>/dev/null; then
+          echo "  [PASS] paradoxd/ghostd field coupling drove a phase transition" >> integration_results.txt
+        else
+          echo "  [FAIL] no phase transition (paradoxd/ghostd coupling)" >> integration_results.txt
+          INTEGRATION_FAILURES=$((INTEGRATION_FAILURES + 1))
+        fi
+
         # Test 2: Check for kernel panic or errors
         echo "" >> integration_results.txt
         echo "Test 2: Checking for kernel panics..." >> integration_results.txt

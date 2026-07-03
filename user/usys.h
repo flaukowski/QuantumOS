@@ -18,6 +18,7 @@
 #define SYS_HEARTBEAT 8
 #define SYS_SVC_RESTARTS 9
 #define SYS_QRAND     10
+#define SYS_SEND_TO   11
 
 static inline long usys0(long n) {
     long r;
@@ -33,6 +34,12 @@ static inline long usys2(long n, long a1, long a2) {
     long r;
     __asm__ volatile("int $0x80"
                      : "=a"(r) : "a"(n), "D"(a1), "S"(a2) : "memory");
+    return r;
+}
+static inline long usys3(long n, long a1, long a2, long a3) {
+    long r;
+    __asm__ volatile("int $0x80"
+                     : "=a"(r) : "a"(n), "D"(a1), "S"(a2), "d"(a3) : "memory");
     return r;
 }
 
@@ -55,6 +62,14 @@ static inline long send_msg(const char *msg, long len) {
 /* Receive into buf (up to len); returns sender pid, or 0 if empty. */
 static inline long recv_msg(char *buf, long len) {
     return usys2(SYS_RECV, (long)buf, len);
+}
+
+/* Targeted send: transmit to a specific destination pid the caller holds an
+ * IPC send-capability for. Returns 0 on success, negative on error (-4 EPERM
+ * when no capability authorises sending to `dest`). Generalises send_msg
+ * (first-match) so a service can reply to the sender recv_msg handed it. */
+static inline long send_to(long dest, const char *msg, long len) {
+    return usys3(SYS_SEND_TO, dest, (long)msg, len);
 }
 
 /* Fill buf with up to `len` bytes from the kernel quantum subsystem's

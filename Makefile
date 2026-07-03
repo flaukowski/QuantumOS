@@ -61,7 +61,7 @@ ASSEMBLY_SOURCES = $(wildcard $(KERNEL_DIR)/src/*.S)
 # objects (symbols _binary_<name>_elf_start/_end)
 USER_DIR = user
 USER_BUILD = $(BUILD_DIR)/user
-USER_PROGS = init echo client hbsvc ghostd ghost_test
+USER_PROGS = init echo client hbsvc ghostd ghost_test paradoxd paradox_test
 USER_ELF_OBJS = $(USER_PROGS:%=$(USER_BUILD)/%_elf.o)
 
 OBJECTS = $(KERNEL_SOURCES:$(KERNEL_DIR)/src/%.c=$(BUILD_DIR)/%.o) \
@@ -98,7 +98,7 @@ USER_CFLAGS = -Wall -Wextra -Werror -nostdlib -ffreestanding -fno-pic -fno-pie \
               -no-pie -static -mno-red-zone -mno-mmx -mno-sse -mno-sse2 \
               -fno-stack-protector -fno-asynchronous-unwind-tables -O2
 
-$(USER_BUILD)/%.elf: $(USER_DIR)/%.c $(USER_DIR)/user.ld $(USER_DIR)/usys.h $(USER_DIR)/ghost.h
+$(USER_BUILD)/%.elf: $(USER_DIR)/%.c $(USER_DIR)/user.ld $(USER_DIR)/usys.h $(USER_DIR)/ghost.h $(USER_DIR)/paradox.h
 	@mkdir -p $(USER_BUILD)
 	@echo "Building user program: $<..."
 	$(CC) $(USER_CFLAGS) -T $(USER_DIR)/user.ld -o $@ $<
@@ -338,6 +338,30 @@ ci-smoke: kernel
 		echo ""; echo "=== Smoke Test FAILED ==="; exit 1; \
 	fi
 	@echo "SUCCESS: SYS_QRAND capability gate proven (capless caller denied EPERM)"
+	@# ghostOS phase-3 merge gate (issue #50): paradoxd must resolve the canned
+	@# contradiction and print its deterministic RESOLVED line.
+	@if ! grep -q "PARADOXD: RESOLVED" /tmp/qemu-boot.log 2>/dev/null; then \
+		echo "ERROR: paradoxd resolution gate missing (PARADOXD: RESOLVED)"; \
+		echo "Boot log:"; cat /tmp/qemu-boot.log 2>/dev/null || true; \
+		echo ""; echo "=== Smoke Test FAILED ==="; exit 1; \
+	fi
+	@echo "SUCCESS: paradoxd resolution gate passed (PARADOXD: RESOLVED)"
+	@# phase-3 capability gate: an unauthorised targeted send is denied EPERM.
+	@if ! grep -q "PARADOXD: capless send denied (EPERM)" /tmp/qemu-boot.log 2>/dev/null; then \
+		echo "ERROR: unauthorised send was not denied (PARADOXD: capless send denied)"; \
+		echo "Boot log:"; cat /tmp/qemu-boot.log 2>/dev/null || true; \
+		echo ""; echo "=== Smoke Test FAILED ==="; exit 1; \
+	fi
+	@echo "SUCCESS: paradoxd capability gate proven (unauthorised send denied EPERM)"
+	@# phase-3 coupling gate: paradoxd's phase machine, gated on ghostd's field
+	@# order parameter R over IPC, must actually transition (the two services
+	@# are coupled through the field).
+	@if ! grep -q "PARADOXD: phase ->" /tmp/qemu-boot.log 2>/dev/null; then \
+		echo "ERROR: paradoxd/ghostd coupling produced no phase transition (PARADOXD: phase ->)"; \
+		echo "Boot log:"; cat /tmp/qemu-boot.log 2>/dev/null || true; \
+		echo ""; echo "=== Smoke Test FAILED ==="; exit 1; \
+	fi
+	@echo "SUCCESS: paradoxd/ghostd field coupling proven (phase transition gated on ghost R)"
 	@echo ""
 	@echo "=== Smoke Test PASSED ==="
 
@@ -381,6 +405,13 @@ ci-smoke-qseed: kernel
 		echo ""; echo "=== Smoke Test FAILED ==="; exit 1; \
 	fi
 	@echo "SUCCESS: qseed handoff traced end-to-end (kernel echo + GHOSTD qseed-derived noise)"
+	@# phase-3 gate still holds under a qseed boot: paradoxd resolves + couples.
+	@if ! grep -q "PARADOXD: RESOLVED" /tmp/qemu-boot-qseed.log 2>/dev/null; then \
+		echo "ERROR: paradoxd resolution gate missing under qseed (PARADOXD: RESOLVED)"; \
+		cat /tmp/qemu-boot-qseed.log 2>/dev/null || true; \
+		echo ""; echo "=== Smoke Test FAILED ==="; exit 1; \
+	fi
+	@echo "SUCCESS: paradoxd resolution gate passed under qseed (PARADOXD: RESOLVED)"
 	@echo ""
 	@echo "=== Smoke Test (qseed) PASSED ==="
 
