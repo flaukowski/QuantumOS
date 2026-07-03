@@ -224,6 +224,53 @@ running total of quantum-derived bits (`quantum_bits_consumed()`) is
 reported periodically. It is **off by default** — the default build is
 byte-identical round-robin.
 
+### Resonant scheduler, measured honestly + live-field framebuffer (ghostd phase 5, #52)
+
+Phase 5 finally **wires and executes** the resonant scheduler that PR #21 left
+dormant in `kernel/src/resonance/` (a complete but never-run `double`-precision
+Kuramoto port). Behind a build flag (`make SCHED_RESONANT=1`), `pick_next`
+routes through `kernel/src/resonant_fixed.c` — a **Q16.16 / phase-in-turns
+reimplementation** of just the selection hot path (Kuramoto order parameter +
+per-process resonant priority) so it is **integer-only and safe in the timer
+ISR**. The kernel runs ring-0 with no `fxsave`/`fxrstor`, so doing `double`
+math in interrupt context would corrupt a ring-3 process's FPU state; the
+fixed-point path never touches the FPU, and the dormant `double` file stays
+compiled but **unwired**. Off by default — the default build is byte-identical
+round-robin.
+
+**The point is honest measurement, not a win.** At boot the resonant build runs
+one identical canned workload under three policies and prints the result,
+unedited:
+
+```
+SCHED: canned workload procs=8 steps=1024
+SCHED: policy=rr fairness=1.00 maxgap=8
+SCHED: policy=resonant-raw r=0.126 aging=off fairness=36.38 maxgap=594
+SCHED: policy=resonant r=0.126 aging=on fairness=1.01 maxgap=9
+SCHED: verdict raw resonant STARVES; aged resonant fairness WORSE than rr ...
+```
+
+The literal #21 hypothesis (pure argmax over resonant priority) **starves** —
+one process waits 594 of 1024 decisions and the live `ghostd` merge gate never
+completes. The shipped live policy adds a bounded anti-starvation aging term so
+the isolated services still make progress, and even then it is **no better than
+round-robin on fairness**. The `#21` hypothesis is thus refuted by execution — a
+negative result, reported plainly. A periodic `SCHED[resonant]: live r=… …`
+line reports the real workload's order parameter and run-count spread as it runs.
+The CI gate `make ci-smoke-resonant` proves the alternate policy still boots to
+`QuantumOS ready`, still passes `GHOSTD: 3/3 RECALL OK`, and prints the
+comparison.
+
+Under a **GRUB/ISO framebuffer boot** the display also stops showing the canned
+splash once the system is up and renders `ghostd`'s **live memory field**:
+`ghostd` publishes a downsampled snapshot of its 256 oscillators (one signed
+`cos θ` byte each) through a new uncapped `SYS_FIELD_SNAPSHOT` (#14) into a
+kernel visualization buffer, and the idle loop redraws it as a colour grid that
+**ripples with REMEMBER/RECALL activity**. The syscall grants no authority and
+produces no console output, so it is a no-op in effect on the `-kernel`/VGA
+path — CI and the qBraid watch window stay in **VGA text**, unchanged (display
+contract preserved).
+
 ## 🏛️ Architecture
 
 ```

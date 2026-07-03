@@ -13,6 +13,9 @@
 #include <kernel/com2_uart.h>
 #include <kernel/vga.h>
 #include <kernel/fb.h>
+#ifdef SCHED_RESONANT
+#include <kernel/resonant_fixed.h>
+#endif
 
 // Boot splash dispatch: framebuffer when available, else VGA text
 static void splash_begin(void) {
@@ -158,10 +161,25 @@ static void kernel_init(void) {
     // (reclaiming their address-space frames) with interrupts disabled
     // so the pmm free path can't race a preemption, then sleeps until
     // the next tick.
+    //
+    // Under a GRUB/ISO framebuffer boot it also drains ghostd's latest
+    // published field snapshot and redraws the live memory-field view, so the
+    // picture ripples with REMEMBER/RECALL activity. The snapshot is copied out
+    // under the same interrupts-disabled window (a bounded 256-byte copy) so a
+    // concurrent SYS_FIELD_SNAPSHOT cannot tear it; the draw runs with
+    // interrupts back on. On the -kernel/VGA path fb_available() is false and
+    // this is skipped entirely, so the text boot is untouched.
+    static int8_t field_buf[FIELD_SNAP_BYTES];
     while (1) {
         interrupt_disable_all();
         process_reap();
+        int field_n = 0;
+        bool have_field = fb_available() &&
+                          field_snapshot_take(field_buf, &field_n);
         interrupt_enable_all();
+        if (have_field) {
+            fb_render_field(field_buf, field_n);
+        }
         __asm__ volatile("hlt");
     }
 }
@@ -313,6 +331,15 @@ static void scheduler_subsystem_init(void) {
     }
 
     scheduler_init();
+
+#ifdef SCHED_RESONANT
+    /* Honest, deterministic measurement of the #21 hypothesis: run one
+     * identical canned workload under round-robin and under the resonant
+     * policy and print both fairness numbers + the order parameter r, before
+     * the live system starts. A loss ships in the log, unedited. */
+    boot_log("Resonant scheduler ACTIVE (SCHED_RESONANT) — measuring vs round-robin");
+    resonant_fixed_boot_report();
+#endif
 }
 
 // ============================================================================

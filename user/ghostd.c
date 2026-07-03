@@ -258,6 +258,20 @@ static void readout(uint32_t *out) {
         ghost_setbit(out, i, ghost_cos_q15(theta[i]) < 0 ? 1 : 0);
 }
 
+/* Publish the live field to the kernel's framebuffer view: one signed byte per
+ * oscillator = cos θ_i scaled to [-128, 127]. Cheap and uncapped; a no-op in
+ * effect unless a GRUB/ISO framebuffer is present, in which case the screen
+ * ripples with REMEMBER/RECALL activity. Never prints, so the serial boot log
+ * (and every merge gate) is unchanged. */
+static void field_publish(void) {
+    int8_t snap[GHOST_N];
+    for (int i = 0; i < GHOST_N; i++) {
+        int v = ghost_cos_q15(theta[i]) >> 8;   /* -32767..32767 -> -127..127 */
+        snap[i] = (int8_t)v;
+    }
+    field_snapshot(snap, GHOST_N);
+}
+
 static int hamming(const uint32_t *a, const uint32_t *b) {
     int h = 0;
     for (int w = 0; w < GHOST_PW; w++) {
@@ -346,6 +360,7 @@ static void reap_expired(uint64_t now) {
 static void free_tick(void) {
     uint64_t now = ticks();
     reap_expired(now);
+    field_publish();               /* breathe the live view even at idle */
     if (live_count == 0) return;
 
     uint32_t r = field_order_param();
@@ -416,6 +431,10 @@ static void handle(const ghost_req_t *req, long sender) {
     }
 
     send_to(sender, (const char *)&rep, (long)sizeof(rep));
+
+    /* A request just moved the field (RECALL relaxed it, REMEMBER changed the
+     * stored basins); refresh the live framebuffer view. */
+    field_publish();
 }
 
 void _start(void) {

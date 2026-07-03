@@ -40,4 +40,11 @@ void fb_boot_splash(void);
 void fb_boot_stage(const char *label, int percent);
 void fb_boot_ready(void);
 
+/* Render a live memory-field snapshot: `snap` is `n` signed bytes (one
+ * cos-projection per field oscillator, as published by ghostd over
+ * SYS_FIELD_SNAPSHOT). Draws the field as a colour grid so the picture
+ * ripples with REMEMBER/RECALL activity. Framebuffer path only — a no-op
+ * when the VGA text fallback is active. */
+void fb_render_field(const int8_t *snap, int n);
+
 #endif /* FB_H */

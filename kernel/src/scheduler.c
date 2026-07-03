@@ -18,6 +18,9 @@
 #ifdef SCHED_LOTTERY
 #include <kernel/quantum.h>
 #endif
+#ifdef SCHED_RESONANT
+#include <kernel/resonant_fixed.h>
+#endif
 
 static uint64_t switch_count = 0;
 static uint32_t quantum_counter = 0;
@@ -31,7 +34,14 @@ static uint32_t quantum_counter = 0;
  * chosen when nothing else is ready.
  */
 static process_t *pick_next(uint32_t from_pid) {
-#ifdef SCHED_LOTTERY
+#if defined(SCHED_RESONANT)
+    /* Resonant pick (opt-in, SCHED_RESONANT): the next process emerges from
+     * the fixed-point coupled-oscillator field (Kuramoto order parameter +
+     * per-process resonant priority) rather than table order. Integer-only,
+     * so it is safe in this interrupt context — the dormant double-precision
+     * scheduler is NOT called here (see resonant_fixed.h). */
+    return resonant_fixed_pick(from_pid);
+#elif defined(SCHED_LOTTERY)
     /* Lottery pick (opt-in, SCHED_LOTTERY): gather every ready, runnable,
      * non-idle process and draw one uniformly using the kernel's qseed-mixed
      * generator (integer only). The idle process remains the fallback when
@@ -132,6 +142,14 @@ void scheduler_reschedule(cpu_state_t *state) {
         early_console_write("scheduler[lottery]: quantum bits consumed = ");
         early_console_write_hex(quantum_bits_consumed());
         early_console_write("\r\n");
+    }
+#endif
+#ifdef SCHED_RESONANT
+    /* Periodic live honesty report: the running order parameter r and the
+     * per-process run-count spread (fairness) for the REAL workload — printed
+     * whether resonant scheduling is winning or losing. */
+    if ((switch_count & 0xFFu) == 0) {
+        resonant_fixed_live_report(switch_count);
     }
 #endif
 }

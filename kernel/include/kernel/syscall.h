@@ -47,6 +47,16 @@
                          * capability as SYS_QRAND (EPERM without) — lets an
                          * attestation service name the entropy the system booted
                          * with, so a host can bind the boot to that qseed. */
+#define SYS_FIELD_SNAPSHOT 14 /* rdi = buf, rsi = len; publish up to
+                         * FIELD_SNAP_BYTES signed bytes of a downsampled
+                         * memory-field snapshot into a kernel visualization
+                         * buffer. No capability: it grants no authority — it is
+                         * a pure display sink the framebuffer renders under a
+                         * GRUB/ISO boot. A no-op in effect under the -kernel/VGA
+                         * path (nothing samples it). Returns bytes stored. */
+
+/* Bytes SYS_FIELD_SNAPSHOT stores at most (bounds the kernel viz buffer). */
+#define FIELD_SNAP_BYTES 256
 
 /* SYS_COM2 operations (rdi) */
 #define SYS_COM2_READ    0
@@ -75,6 +85,12 @@
 
 /* Install the int 0x80 gate and dispatch handler */
 void syscall_init(void);
+
+/* Take the latest published field snapshot for rendering. Copies up to
+ * FIELD_SNAP_BYTES into `dst`, writes the count to `*out_n`, and returns true
+ * iff a new snapshot has arrived since the last take (clears the dirty flag).
+ * Consumed by the framebuffer live-field renderer in the idle loop. */
+bool field_snapshot_take(int8_t *dst, int *out_n);
 
 /* Map the user regions (sets the user bit on the covering page-table
  * entries), copy the embedded user programs, and spawn them */

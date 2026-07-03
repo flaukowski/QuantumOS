@@ -301,6 +301,51 @@ static uint64_t sys_qseed(uint32_t pid) {
     return quantum_boot_seed();
 }
 
+/* Live memory-field visualization buffer. A ring-3 producer (ghostd) publishes
+ * a downsampled snapshot of its field here via SYS_FIELD_SNAPSHOT; the
+ * framebuffer renderer drains it in the idle loop. This is a display sink only
+ * — it carries no capability and confers no authority, so it needs no cap
+ * check (the worst a rogue writer can do is draw noise on a screen that only
+ * exists under a GRUB/ISO boot). */
+static int8_t  g_field_snap[FIELD_SNAP_BYTES];
+static int     g_field_n = 0;
+static volatile bool g_field_dirty = false;
+
+static uint64_t sys_field_snapshot(uint32_t pid, uint64_t user_ptr, uint64_t len) {
+    (void)pid;
+    if (len == 0) {
+        return 0;
+    }
+    if (!in_user_range(user_ptr)) {
+        return SYSCALL_EFAULT;
+    }
+    if (len > FIELD_SNAP_BYTES) {
+        len = FIELD_SNAP_BYTES;
+    }
+    const int8_t *src = (const int8_t *)user_ptr;
+    uint32_t n = 0;
+    while (n < len && in_user_range(user_ptr + n)) {
+        g_field_snap[n] = src[n];
+        n++;
+    }
+    g_field_n = (int)n;
+    g_field_dirty = true;
+    return n;
+}
+
+bool field_snapshot_take(int8_t *dst, int *out_n) {
+    if (!g_field_dirty) {
+        return false;
+    }
+    int n = g_field_n;
+    for (int i = 0; i < n; i++) {
+        dst[i] = g_field_snap[i];
+    }
+    *out_n = n;
+    g_field_dirty = false;
+    return true;
+}
+
 /* ============================================================================
  * Dispatch
  * ============================================================================ */
@@ -350,6 +395,9 @@ static void syscall_dispatch(cpu_state_t *state) {
         break;
     case SYS_QSEED:
         state->rax = sys_qseed(pid);
+        break;
+    case SYS_FIELD_SNAPSHOT:
+        state->rax = sys_field_snapshot(pid, state->rdi, state->rsi);
         break;
     default:
         state->rax = SYSCALL_ENOSYS;

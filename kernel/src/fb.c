@@ -269,3 +269,44 @@ void fb_boot_ready(void) {
     }
     fb_banner(fb_h / 6 + 44, "READY", fb_rgb(230, 230, 120));
 }
+
+/* --- live memory-field view (post-boot) ---------------------------------- *
+ * Replaces the canned splash once the system is up: the `n` signed snapshot
+ * bytes are one cos-projection per field oscillator (published by ghostd over
+ * SYS_FIELD_SNAPSHOT), laid out as the nearest square grid and drawn as filled
+ * blocks. Deep blue = phase trough (−), bright cyan/white = crest (+); the
+ * picture ripples as REMEMBER/RECALL relax the field. Integer-only, and only
+ * reached when a real framebuffer is present. */
+void fb_render_field(const int8_t *snap, int n) {
+    if (!fb_ready || n <= 0) {
+        return;
+    }
+    /* square-ish grid side = ceil(sqrt(n)); for ghostd's N=256 this is 16 */
+    int side = isqrt(n);
+    while (side * side < n) side++;
+    if (side <= 0) return;
+
+    /* Field occupies a centred square, leaving room for the banners. */
+    int margin = fb_h / 8;
+    int area = fb_h - 2 * margin;
+    if (area > fb_w) area = fb_w;
+    int cell = area / side;
+    if (cell < 1) cell = 1;
+    int grid = cell * side;
+    int ox = (fb_w - grid) / 2;
+    int oy = (fb_h - grid) / 2;
+
+    for (int idx = 0; idx < side * side; idx++) {
+        int v = (idx < n) ? snap[idx] : 0;   /* −128..127 */
+        int mag = v < 0 ? -v : v;             /* 0..128 */
+        uint8_t bl = (uint8_t)(30 + mag);                 /* trough floor -> bright */
+        uint8_t gr = (uint8_t)(v > 0 ? mag : mag / 3);    /* crests greener */
+        uint8_t rd = (uint8_t)(mag > 96 ? (mag - 96) * 4 : 0);
+        int gx = idx % side, gy = idx / side;
+        fb_fill_rect(ox + gx * cell, oy + gy * cell, cell - 1, cell - 1,
+                     fb_rgb(rd, gr, bl));
+    }
+
+    fb_banner(margin / 2, "QUANTUM OS", fb_rgb(120, 230, 255));
+    fb_banner(fb_h - margin, "GHOST FIELD LIVE", fb_rgb(230, 230, 120));
+}
