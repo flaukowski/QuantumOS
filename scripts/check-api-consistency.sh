@@ -104,7 +104,7 @@ for source in $(find "$KERNEL_DIR/src" -name "*.c" 2>/dev/null); do
     line_num=0
 
     while IFS= read -r line; do
-        ((line_num++))
+        line_num=$((line_num+1))
 
         # Skip comments
         [[ "$line" =~ ^[[:space:]]*/\* ]] && continue
