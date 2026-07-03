@@ -15,6 +15,9 @@
 #include <kernel/memory.h>
 #include <kernel/vmspace.h>
 #include <kernel/boot.h>
+#ifdef SCHED_LOTTERY
+#include <kernel/quantum.h>
+#endif
 
 static uint64_t switch_count = 0;
 static uint32_t quantum_counter = 0;
@@ -28,6 +31,33 @@ static uint32_t quantum_counter = 0;
  * chosen when nothing else is ready.
  */
 static process_t *pick_next(uint32_t from_pid) {
+#ifdef SCHED_LOTTERY
+    /* Lottery pick (opt-in, SCHED_LOTTERY): gather every ready, runnable,
+     * non-idle process and draw one uniformly using the kernel's qseed-mixed
+     * generator (integer only). The idle process remains the fallback when
+     * nothing else is ready, exactly as in round-robin. */
+    process_t *cand[MAX_PROCESSES];
+    uint32_t n = 0;
+    process_t *idle = NULL;
+
+    for (uint32_t pid = 0; pid < MAX_PROCESSES; pid++) {
+        process_t *p = process_get_by_pid(pid);
+        if (!p || p->state != PROCESS_STATE_READY || !p->context_valid) {
+            continue;
+        }
+        if (pid == IDLE_PROCESS_ID) {
+            idle = p;
+            continue;
+        }
+        cand[n++] = p;
+    }
+
+    (void)from_pid;
+    if (n == 0) {
+        return idle;
+    }
+    return cand[quantum_kernel_rand() % n];
+#else
     process_t *idle = NULL;
 
     for (uint32_t off = 1; off <= MAX_PROCESSES; off++) {
@@ -47,6 +77,7 @@ static process_t *pick_next(uint32_t from_pid) {
     }
 
     return idle;
+#endif
 }
 
 void scheduler_tick(cpu_state_t *state) {
@@ -94,6 +125,15 @@ void scheduler_reschedule(cpu_state_t *state) {
     if (switch_count == 1) {
         boot_log("scheduler: first context switch");
     }
+#ifdef SCHED_LOTTERY
+    /* Periodically report the running total of quantum-derived bits the
+     * lottery has consumed (the "reap/idle report"). */
+    if ((switch_count & 0xFFu) == 0) {
+        early_console_write("scheduler[lottery]: quantum bits consumed = ");
+        early_console_write_hex(quantum_bits_consumed());
+        early_console_write("\r\n");
+    }
+#endif
 }
 
 void scheduler_kill_current(cpu_state_t *state) {

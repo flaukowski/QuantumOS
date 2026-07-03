@@ -26,6 +26,15 @@
 #define SYS_RECV    7   /* rdi = buf ptr, rsi = len; returns sender pid (0 = empty) */
 #define SYS_HEARTBEAT 8 /* report liveness to the service watchdog */
 #define SYS_SVC_RESTARTS 9 /* restart count of the caller's service slot, or -1 */
+#define SYS_QRAND   10  /* rdi = buf, rsi = len; fill up to QRAND_MAX_BYTES bytes
+                         * from the qseed-mixed quantum generator. Gated on a
+                         * CAP_RESOURCE_QUANTUM read capability (EPERM without).
+                         * len == 0 is a provenance query: returns 1 if the
+                         * kernel booted with a qseed, else 0. */
+
+/* Bytes SYS_QRAND will draw per call at most (a capless caller is denied
+ * before any draw). */
+#define QRAND_MAX_BYTES  64
 
 /* Error returns (in rax) */
 #define SYSCALL_EINVAL   ((uint64_t)-1)

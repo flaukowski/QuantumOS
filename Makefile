@@ -43,6 +43,13 @@ else
     CFLAGS += $(DEBUG_CFLAGS)
 endif
 
+# Optional: quantum-lottery scheduler. Off by default — the default build is
+# byte-identical round-robin. Enable with `make SCHED_LOTTERY=1`, which turns
+# each ready-process pick into a lottery draw from the qseed-mixed generator.
+ifdef SCHED_LOTTERY
+    CFLAGS += -DSCHED_LOTTERY
+endif
+
 # Source files
 # KERNEL_SOURCES captures all .c files in kernel/src/ (including process*.c)
 KERNEL_SOURCES = $(wildcard $(KERNEL_DIR)/src/*.c)
@@ -64,7 +71,7 @@ OBJECTS = $(KERNEL_SOURCES:$(KERNEL_DIR)/src/%.c=$(BUILD_DIR)/%.o) \
           $(USER_ELF_OBJS)
 
 # Targets
-.PHONY: all clean kernel run debug dump test test-list test-coverage
+.PHONY: all clean kernel run debug dump test test-list test-coverage ci-smoke ci-smoke-qseed
 
 all: kernel
 
@@ -312,8 +319,70 @@ ci-smoke: kernel
 		exit 1; \
 	fi
 	@echo "SUCCESS: ghostd associative-memory gate passed (GHOSTD: 3/3 RECALL OK)"
+	@# ghostOS phase-2 honesty gate: booted WITHOUT a qseed, ghostd must name
+	@# its noise source as a plain PRNG and NEVER claim quantum provenance.
+	@if ! grep -q "GHOSTD: noise source = prng (no qseed)" /tmp/qemu-boot.log 2>/dev/null; then \
+		echo "ERROR: ghostd did not report 'prng (no qseed)' on a seedless boot"; \
+		echo "Boot log:"; cat /tmp/qemu-boot.log 2>/dev/null || true; \
+		echo ""; echo "=== Smoke Test FAILED ==="; exit 1; \
+	fi
+	@if grep -q "GHOSTD: noise source = qseed-derived" /tmp/qemu-boot.log 2>/dev/null; then \
+		echo "ERROR: ghostd falsely claimed qseed provenance without a qseed"; \
+		echo ""; echo "=== Smoke Test FAILED ==="; exit 1; \
+	fi
+	@echo "SUCCESS: ghostd noise-source honesty gate passed (prng, no false quantum claim)"
+	@# phase-2 capability gate: the capless ghost-test must be denied SYS_QRAND.
+	@if ! grep -q "QRAND: capless caller denied (EPERM)" /tmp/qemu-boot.log 2>/dev/null; then \
+		echo "ERROR: capless SYS_QRAND was not denied (QRAND: capless caller denied)"; \
+		echo "Boot log:"; cat /tmp/qemu-boot.log 2>/dev/null || true; \
+		echo ""; echo "=== Smoke Test FAILED ==="; exit 1; \
+	fi
+	@echo "SUCCESS: SYS_QRAND capability gate proven (capless caller denied EPERM)"
 	@echo ""
 	@echo "=== Smoke Test PASSED ==="
+
+# CI Smoke Test (qseed mode): boot WITH a quantum-entropy handoff on the
+# kernel command line and prove ghostd traces its noise to that qseed.
+ci-smoke-qseed: kernel
+	@echo "=== QuantumOS CI Smoke Test (qseed handoff) ==="
+	@echo ""
+	@echo "[1/3] Build verified: $(BUILD_DIR)/kernel.elf exists"
+	@test -f $(BUILD_DIR)/kernel.elf || (echo "ERROR: Kernel not built" && exit 1)
+	@echo "[2/3] Running QEMU boot test WITH -append qseed=DEADBEEFCAFEBABE (10s)..."
+	@timeout 10s qemu-system-x86_64 -kernel $(BUILD_DIR)/kernel.elf32 \
+		-append "qseed=DEADBEEFCAFEBABE" \
+		-serial stdio -m 128M -display none -no-reboot 2>&1 | tee /tmp/qemu-boot-qseed.log || true
+	@echo ""
+	@echo "[3/3] Validating boot output..."
+	@if ! grep -q "QuantumOS ready" /tmp/qemu-boot-qseed.log 2>/dev/null; then \
+		echo "ERROR: Kernel did not reach 'QuantumOS ready'"; \
+		cat /tmp/qemu-boot-qseed.log 2>/dev/null || true; \
+		echo ""; echo "=== Smoke Test FAILED ==="; exit 1; \
+	fi
+	@if ! grep -q "GHOSTD: 3/3 RECALL OK" /tmp/qemu-boot-qseed.log 2>/dev/null; then \
+		echo "ERROR: ghostd self-test gate missing (GHOSTD: 3/3 RECALL OK)"; \
+		cat /tmp/qemu-boot-qseed.log 2>/dev/null || true; \
+		echo ""; echo "=== Smoke Test FAILED ==="; exit 1; \
+	fi
+	@# The kernel must still echo it accepted the qseed handoff...
+	@if ! grep -q "Boot entropy accepted from cmdline (qseed=)" /tmp/qemu-boot-qseed.log 2>/dev/null; then \
+		echo "ERROR: kernel did not echo the qseed handoff"; \
+		cat /tmp/qemu-boot-qseed.log 2>/dev/null || true; \
+		echo ""; echo "=== Smoke Test FAILED ==="; exit 1; \
+	fi
+	@# ...and ghostd must trace its noise to that qseed (and NOT to a seedless PRNG).
+	@if ! grep -q "GHOSTD: noise source = qseed-derived" /tmp/qemu-boot-qseed.log 2>/dev/null; then \
+		echo "ERROR: ghostd did not report qseed-derived noise on a seeded boot"; \
+		cat /tmp/qemu-boot-qseed.log 2>/dev/null || true; \
+		echo ""; echo "=== Smoke Test FAILED ==="; exit 1; \
+	fi
+	@if grep -q "GHOSTD: noise source = prng (no qseed)" /tmp/qemu-boot-qseed.log 2>/dev/null; then \
+		echo "ERROR: ghostd reported 'no qseed' despite a qseed handoff"; \
+		echo ""; echo "=== Smoke Test FAILED ==="; exit 1; \
+	fi
+	@echo "SUCCESS: qseed handoff traced end-to-end (kernel echo + GHOSTD qseed-derived noise)"
+	@echo ""
+	@echo "=== Smoke Test (qseed) PASSED ==="
 
 # Quick validation for contributors
 validate: kernel
@@ -390,7 +459,7 @@ info:
 	@echo "  Objects: $(OBJECTS)"
 
 # Phony targets
-.PHONY: all clean kernel run run-iso debug dump test test-list test-coverage ci-smoke validate info install-deps help
+.PHONY: all clean kernel run run-iso debug dump test test-list test-coverage ci-smoke ci-smoke-qseed validate info install-deps help
 
 # Default target
 .DEFAULT_GOAL := all

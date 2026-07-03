@@ -17,6 +17,7 @@
 #define SYS_RECV      7
 #define SYS_HEARTBEAT 8
 #define SYS_SVC_RESTARTS 9
+#define SYS_QRAND     10
 
 static inline long usys0(long n) {
     long r;
@@ -54,6 +55,18 @@ static inline long send_msg(const char *msg, long len) {
 /* Receive into buf (up to len); returns sender pid, or 0 if empty. */
 static inline long recv_msg(char *buf, long len) {
     return usys2(SYS_RECV, (long)buf, len);
+}
+
+/* Fill buf with up to `len` bytes from the kernel quantum subsystem's
+ * qseed-mixed generator. Returns the byte count on success, or a negative
+ * errno (-4 EPERM when the caller holds no quantum-pool read capability). */
+static inline long qrand_fill(void *buf, long len) {
+    return usys2(SYS_QRAND, (long)buf, len);
+}
+/* Provenance query: 1 if the kernel booted with a qseed handoff, 0 if not,
+ * negative if the caller lacks the quantum-pool capability. */
+static inline long qrand_seed_present(void) {
+    return usys2(SYS_QRAND, 0, 0);
 }
 
 /* Tiny string helpers (no libc) */

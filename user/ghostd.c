@@ -51,6 +51,12 @@
 #define GHOST_LAMBDA_STEP 512u
 #define GHOST_LOG_INTERVAL 128          /* min ticks between lambda logs */
 
+/* ---- phase-2: load-normalised relaxation + quantum perturbation noise ---- */
+#define GHOST_DREF        3             /* live-pattern load DSHIFT was tuned at (PR #53) */
+#define GHOST_QBUF        32            /* quantum bytes fetched per SYS_QRAND refill */
+#define GHOST_DITHER_SHIFT 20           /* noise byte -> per-oscillator phase dither */
+#define GHOST_SHED_BIAS  (GHOST_TILT >> 3) /* uniform drift accompanying the dither */
+
 /* Q15 sine over a full turn, indexed by the top 8 phase bits. Generated
  * offline (no runtime float math is permitted in the field). */
 static const int16_t ghost_sin_q15[256] = {
@@ -106,8 +112,79 @@ static uint32_t lambda_q16 = 0;
 static uint64_t last_lambda_log = 0;
 static int      live_count = 0;
 
+/* ---- perturbation-noise provenance (decided once at startup) ---- */
+enum {
+    NOISE_QSEED = 0,       /* qseed present + draw works: real quantum-pool bytes */
+    NOISE_PRNG_NOSEED,     /* no qseed: honest internal PRNG, labelled as such */
+    NOISE_PRNG_FALLBACK    /* draw unavailable (no cap): internal PRNG, said plainly */
+};
+static int      noise_mode = NOISE_PRNG_FALLBACK;
+static uint32_t prng_state32 = 0x9E3779B9u;  /* internal fallback PRNG state */
+static uint8_t  qbuf[GHOST_QBUF];            /* quantum byte reservoir (QSEED mode) */
+static int      qbuf_pos = GHOST_QBUF;       /* next unread byte (== size => empty) */
+
 /* ---- small serial helpers ---- */
 static void logline(const char *s) { write_str(s); }
+
+/* Internal xorshift32 — the fallback noise when the quantum pool is not the
+ * source (or a draw fails mid-run). Never labelled as quantum provenance. */
+static uint32_t prng32(void) {
+    uint32_t x = prng_state32;
+    x ^= x << 13; x ^= x >> 17; x ^= x << 5;
+    prng_state32 = x ? x : 0x1u;
+    return prng_state32;
+}
+
+/* One perturbation-noise byte. In QSEED mode it comes from the kernel's
+ * qseed-mixed quantum generator (SYS_QRAND), refilled a reservoir at a time;
+ * if that ever fails we degrade honestly to the internal PRNG and say so.
+ * In the two PRNG modes the byte is internal from the start. */
+static uint8_t noise_byte(void) {
+    if (noise_mode == NOISE_QSEED) {
+        if (qbuf_pos >= GHOST_QBUF) {
+            long got = qrand_fill(qbuf, GHOST_QBUF);
+            if (got <= 0) {
+                noise_mode = NOISE_PRNG_FALLBACK;
+                logline("GHOSTD: quantum draw failed mid-run — falling back to prng");
+                return (uint8_t)(prng32() & 0xFFu);
+            }
+            qbuf_pos = 0;
+        }
+        return qbuf[qbuf_pos++];
+    }
+    return (uint8_t)(prng32() & 0xFFu);
+}
+
+/* Decide, once, where perturbation noise comes from and print the honest
+ * provenance line. Quantum provenance is claimed ONLY when the kernel booted
+ * with a qseed AND the capability-gated draw actually works. */
+static void detect_noise_source(void) {
+    /* Seed the fallback PRNG deterministically but nonzero. */
+    prng_state32 = (uint32_t)ticks() ^ 0x9E3779B9u;
+    if (prng_state32 == 0) prng_state32 = 1u;
+
+    long seedp = qrand_seed_present();      /* 1/0 if we hold the quantum cap, <0 if not */
+    uint8_t probe[8];
+    long got = qrand_fill(probe, (long)sizeof(probe));
+
+    if (got > 0 && seedp == 1) {
+        noise_mode = NOISE_QSEED;
+        qbuf_pos = GHOST_QBUF;              /* force a fresh reservoir refill on first use */
+        logline("GHOSTD: noise source = qseed-derived quantum pool");
+    } else if (seedp == 0) {
+        noise_mode = NOISE_PRNG_NOSEED;
+        /* Stir any bytes we did get into the fallback seed — still a PRNG. */
+        for (long i = 0; i < got && i < (long)sizeof(probe); i++)
+            prng_state32 = prng_state32 * 31u + probe[i];
+        if (prng_state32 == 0) prng_state32 = 1u;
+        logline("GHOSTD: noise source = prng (no qseed)");
+    } else {
+        /* No quantum capability (or a seed exists but the draw failed): we
+         * cannot honestly claim quantum provenance, so say exactly that. */
+        noise_mode = NOISE_PRNG_FALLBACK;
+        logline("GHOSTD: noise source = prng (SYS_QRAND unavailable)");
+    }
+}
 
 /* Current Q16 fidelity of a slot, decayed by its age in ticks. */
 static uint32_t slot_fidelity(int p, uint64_t now) {
@@ -160,6 +237,13 @@ static void relax_step(void) {
             if (!slot_live[p]) continue;
             g += ghost_bit(slot_bits[p], i) ? -m[p] : m[p];
         }
+        /* Phase-2: normalise the summed local field to a reference load so a
+         * fuller field takes the same-size step as a sparse one. DSHIFT was
+         * tuned at GHOST_DREF live patterns (PR #53); at that load this is an
+         * identity (g unchanged) so the merge gate's dynamics are untouched,
+         * while heavier fields are damped and lighter ones lifted. */
+        if (live_count > 0)
+            g = (int)(((int64_t)g * GHOST_DREF) / (int64_t)live_count);
         int si = ghost_sinq(theta[i]);
         int64_t f = (int64_t)si * (int64_t)g;       /* Q30 torque */
         int32_t dth = (int32_t)(f >> GHOST_DSHIFT);
@@ -269,8 +353,15 @@ static void free_tick(void) {
     if (r > GHOST_R_HI) {
         lambda_q16 += GHOST_LAMBDA_STEP;
         if (lambda_q16 > 65536u) lambda_q16 = 65536u;
-        /* over-coherent: shed a little coherence with a uniform nudge */
-        for (int i = 0; i < GHOST_N; i++) theta[i] += (GHOST_TILT >> 2);
+        /* over-coherent: shed a little coherence with a small uniform drift
+         * plus a per-oscillator dither drawn from the perturbation-noise
+         * source (qseed-derived quantum bytes when available). This only ever
+         * runs on idle ticks; RECALL re-initialises the field from its probe,
+         * so the noise never perturbs a recall or the merge gate. */
+        for (int i = 0; i < GHOST_N; i++) {
+            int32_t nb = (int32_t)(int8_t)noise_byte();
+            theta[i] += GHOST_SHED_BIAS + (uint32_t)(nb << GHOST_DITHER_SHIFT);
+        }
         intervened = 1;
     } else if (r < GHOST_R_LO) {
         if (lambda_q16 >= GHOST_LAMBDA_STEP) lambda_q16 -= GHOST_LAMBDA_STEP;
@@ -331,6 +422,9 @@ void _start(void) {
     } else {
         logline("GHOSTD: field born — 256 oscillators, 16 pattern slots");
     }
+
+    /* Decide the perturbation-noise provenance and announce it honestly. */
+    detect_noise_source();
 
     char buf[sizeof(ghost_req_t) + 8];
 

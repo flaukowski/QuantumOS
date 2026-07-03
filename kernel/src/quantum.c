@@ -42,6 +42,7 @@ static uint64_t prng_state = 0x9E3779B97F4A7C15ULL;
 static uint64_t boot_entropy = 0;
 static uint8_t boot_entropy_present = 0;
 static uint8_t quantum_initialized = 0;
+static uint64_t qrand_bits_served = 0;   /* total bits drawn via QRAND/lottery */
 
 /* ============================================================================
  * Helpers
@@ -377,6 +378,56 @@ void quantum_get_pool_stats(qubit_pool_t *stats) {
 }
 
 /* ============================================================================
+ * Capability-gated randomness (SYS_QRAND + lottery scheduler)
+ * ============================================================================ */
+
+quantum_result_t quantum_user_random(uint32_t pid, uint8_t *out, uint32_t count,
+                                     uint8_t *seed_present_out) {
+    if (!quantum_initialized) {
+        return QUANTUM_ERROR_HARDWARE_FAULT;
+    }
+    /* Pool guard: the caller must own a live CAP_RESOURCE_QUANTUM capability
+     * carrying CAP_READ over the shared pool. cap_find enforces the read
+     * right; we additionally pin the resource to the pool. No capability ->
+     * denied (the syscall layer turns this into EPERM). This is the same
+     * no-ambient-authority rule the alloc/execute paths use — a caller
+     * without the cap gets nothing. */
+    uint32_t rid = 0;
+    if (cap_find(pid, CAP_RESOURCE_QUANTUM, CAP_READ, &rid) != CAP_SUCCESS ||
+        rid != QUANTUM_POOL_RESOURCE_ID) {
+        return QUANTUM_ERROR_HARDWARE_FAULT;
+    }
+
+    if (seed_present_out) {
+        *seed_present_out = boot_entropy_present;
+    }
+
+    /* Draw `count` bytes, refreshing a 64-bit word every 8 bytes. */
+    uint64_t word = 0;
+    for (uint32_t i = 0; i < count; i++) {
+        if ((i & 7u) == 0) {
+            word = xorshift64();
+        }
+        if (out) {
+            out[i] = (uint8_t)(word & 0xFFu);
+        }
+        word >>= 8;
+    }
+    qrand_bits_served += (uint64_t)count * 8u;
+    return QUANTUM_SUCCESS;
+}
+
+uint32_t quantum_kernel_rand(void) {
+    uint32_t r = (uint32_t)(xorshift64() & 0xFFFFFFFFu);
+    qrand_bits_served += 32u;
+    return r;
+}
+
+uint64_t quantum_bits_consumed(void) {
+    return qrand_bits_served;
+}
+
+/* ============================================================================
  * Boot self-test
  * ============================================================================ */
 
@@ -444,6 +495,19 @@ quantum_result_t quantum_selftest(void) {
     qubit_pool_t stats;
     quantum_get_pool_stats(&stats);
     QT_ASSERT(stats.allocated_qubits == 0, "pool drained back");
+
+    /* QRAND capability gate: a read cap draws bytes; a caller with no
+     * quantum cap — or a cap lacking CAP_READ (pid 2 holds CAP_QUANTUM
+     * only) — is denied. Same no-ambient-authority rule as allocation. */
+    uint8_t seedp = 0xFF;
+    uint8_t rbytes[8];
+    QT_ASSERT(quantum_user_random(1, rbytes, sizeof(rbytes), &seedp) == QUANTUM_SUCCESS,
+              "qrand with read cap");
+    QT_ASSERT(seedp <= 1, "qrand reports seed flag");
+    QT_ASSERT(quantum_user_random(99, rbytes, sizeof(rbytes), 0) != QUANTUM_SUCCESS,
+              "qrand denied without cap");
+    QT_ASSERT(quantum_user_random(2, rbytes, sizeof(rbytes), 0) != QUANTUM_SUCCESS,
+              "qrand denied without READ right");
 
     cap_revoke(cap, 1);
     cap_revoke(bad_cap, 2);

@@ -94,6 +94,24 @@ quantum_result_t quantum_execute_circuit(uint32_t pid, uint32_t cap_id,
                                          uint32_t max_results,
                                          uint32_t *num_results_out);
 
+/* Capability-gated random draw for user space (backs SYS_QRAND). The
+ * caller must hold a CAP_RESOURCE_QUANTUM capability with CAP_READ on the
+ * shared pool (capability-as-address — no cap_id handle is threaded through
+ * the syscall, exactly like the IPC send path). On success draws `count`
+ * bytes from the qseed-mixed generator into `out` and, if seed_present_out
+ * is non-NULL, reports whether a boot qseed was mixed into that generator.
+ * Returns QUANTUM_ERROR_HARDWARE_FAULT (denied) when the capability is
+ * absent, so the syscall layer can map it to EPERM. `count` may be 0 (a
+ * provenance-only query); `out` is then unused and may be NULL. */
+quantum_result_t quantum_user_random(uint32_t pid, uint8_t *out, uint32_t count,
+                                     uint8_t *seed_present_out);
+
+/* Kernel-internal draw from the same qseed-mixed generator (integer only),
+ * plus the running total of quantum-derived bits it has served. Used by the
+ * optional lottery scheduler (SCHED_LOTTERY); harmless if never called. */
+uint32_t quantum_kernel_rand(void);
+uint64_t quantum_bits_consumed(void);
+
 /* Pool statistics */
 void quantum_get_pool_stats(qubit_pool_t *stats);
 

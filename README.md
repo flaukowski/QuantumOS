@@ -111,10 +111,41 @@ Once the timer starts, the ring-3 services run and self-test. The
 patterns and recalls each from a ~15%-corrupted probe:
 ```
 [user pid=...] GHOSTD: field born — 256 oscillators, 16 pattern slots
+[user pid=...] GHOSTD: noise source = prng (no qseed)
+[user pid=...] QRAND: capless caller denied (EPERM)
 [user pid=...] GHOSTD: imprinted slot 0 (fidelity 1.00, coherence deadline set)
 [user pid=...] GHOSTD: 3/3 RECALL OK R=0.99
 ```
-`make ci-smoke` gates on both `QuantumOS ready` and `GHOSTD: 3/3 RECALL OK`.
+`make ci-smoke` gates on `QuantumOS ready`, `GHOSTD: 3/3 RECALL OK`, the
+noise-source honesty line, and the capless-QRAND denial.
+
+### Quantum randomness for user space (ghostOS phase 2, #49)
+
+Phase 2 adds `SYS_QRAND` (#10): a capability-gated syscall that fills a
+user buffer from the kernel's qseed-mixed quantum generator. It is backed
+by `quantum_user_random()` in `kernel/src/quantum.c`, which enforces that
+the caller holds a `CAP_RESOURCE_QUANTUM` read capability on the shared
+pool — no ambient authority. `ghostd` is granted that capability at spawn
+and draws its over-coherence perturbation noise from it; `ghost-test`
+holds no such capability, so its `SYS_QRAND` attempt is denied with EPERM
+(the same proof-by-attack tradition as the rogue process).
+
+`ghostd` prints an **honest provenance** line at startup and never claims
+quantum provenance without a real seed:
+
+- booted with `-append qseed=<hex>` → `GHOSTD: noise source = qseed-derived quantum pool`
+- booted without a qseed → `GHOSTD: noise source = prng (no qseed)`
+
+`make ci-smoke` covers the seedless boot; `make ci-smoke-qseed` boots with
+`qseed=DEADBEEFCAFEBABE` and gates on the kernel's qseed echo plus the
+qseed-derived provenance line.
+
+An optional quantum-lottery scheduler is available behind a build flag
+(`make SCHED_LOTTERY=1`): ready-process selection becomes a lottery draw
+from the same qseed-mixed generator (`quantum_kernel_rand()`), and the
+running total of quantum-derived bits (`quantum_bits_consumed()`) is
+reported periodically. It is **off by default** — the default build is
+byte-identical round-robin.
 
 ## 🏛️ Architecture
 

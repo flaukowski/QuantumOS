@@ -18,6 +18,7 @@
 #include <kernel/memory.h>
 #include <kernel/elf.h>
 #include <kernel/capability.h>
+#include <kernel/quantum.h>
 #include <kernel/ipc.h>
 #include <kernel/service.h>
 #include <kernel/boot.h>
@@ -152,6 +153,46 @@ static uint64_t sys_recv(uint32_t pid, uint64_t user_ptr, uint64_t len) {
     return msg.sender_id;
 }
 
+/* Capability-gated quantum randomness. Draws up to QRAND_MAX_BYTES bytes
+ * from the kernel's qseed-mixed generator into the caller's buffer; the
+ * caller must hold a CAP_RESOURCE_QUANTUM read capability or the draw is
+ * denied (EPERM) before any byte is produced. len == 0 is a provenance
+ * query returning whether a boot qseed was mixed in (still cap-gated). */
+static uint64_t sys_qrand(uint32_t pid, uint64_t user_ptr, uint64_t len) {
+    uint8_t seed_present = 0;
+
+    if (len == 0) {
+        /* Provenance query: no buffer touched. Still requires the cap so a
+         * capless caller cannot even learn the entropy provenance. */
+        if (quantum_user_random(pid, NULL, 0, &seed_present) != QUANTUM_SUCCESS) {
+            return SYSCALL_EPERM;
+        }
+        return seed_present ? 1 : 0;
+    }
+
+    if (!in_user_range(user_ptr)) {
+        return SYSCALL_EFAULT;
+    }
+    if (len > QRAND_MAX_BYTES) {
+        len = QRAND_MAX_BYTES;
+    }
+
+    /* Draw into a kernel buffer under the capability check, then copy out
+     * only as far as the caller's mapped user half extends. */
+    uint8_t tmp[QRAND_MAX_BYTES];
+    if (quantum_user_random(pid, tmp, (uint32_t)len, &seed_present) != QUANTUM_SUCCESS) {
+        return SYSCALL_EPERM;
+    }
+
+    uint8_t *dst = (uint8_t *)user_ptr;
+    uint32_t n = 0;
+    while (n < len && in_user_range(user_ptr + n)) {
+        dst[n] = tmp[n];
+        n++;
+    }
+    return n;
+}
+
 /* ============================================================================
  * Dispatch
  * ============================================================================ */
@@ -189,6 +230,9 @@ static void syscall_dispatch(cpu_state_t *state) {
         break;
     case SYS_SVC_RESTARTS:
         state->rax = (uint64_t)(int64_t)service_current_restart_count();
+        break;
+    case SYS_QRAND:
+        state->rax = sys_qrand(pid, state->rdi, state->rsi);
         break;
     default:
         state->rax = SYSCALL_ENOSYS;
@@ -453,6 +497,15 @@ void user_ghost_demo_init(void) {
     uint32_t cap = CAP_ID_INVALID;
     cap_create(test_pid, CAP_RESOURCE_IPC, ghostd_pid, CAP_READ | CAP_WRITE, 0, &cap);
     cap_create(ghostd_pid, CAP_RESOURCE_IPC, test_pid, CAP_READ | CAP_WRITE, 0, &cap);
+
+    /* Grant ghostd (and only ghostd) a read capability on the quantum pool
+     * so its SYS_QRAND perturbation draws are authorised. ghost-test is
+     * deliberately left without one: its capless SYS_QRAND attempt is the
+     * proof-by-attack that the gate denies (EPERM). */
+    uint32_t qcap = CAP_ID_INVALID;
+    if (quantum_grant(ghostd_pid, CAP_QUANTUM | CAP_READ, &qcap) != QUANTUM_SUCCESS) {
+        boot_log("Warning: ghostd quantum-pool capability grant failed");
+    }
 
     /* Let the watchdog keep ghostd alive; it heartbeats via SYS_HEARTBEAT
      * and reprints "GHOSTD: FIELD REBORN" if it is ever restarted. */
