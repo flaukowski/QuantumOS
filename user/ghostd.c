@@ -380,8 +380,13 @@ static void free_tick(void) {
     }
 }
 
-/* Handle one request and reply to the (single, capability-bound) client. */
-static void handle(const ghost_req_t *req) {
+/* Handle one request and reply to the client that sent it. The reply is
+ * routed to `sender` (the pid recv_msg returned), authorised by the IPC
+ * send-capability ghostd holds for that peer. This is what lets a single
+ * ghostd serve more than one client — ghost-test during the boot gate and
+ * paradoxd's STATUS coupling (ghostOS phase 3) — instead of only ever
+ * answering one first-match capability. */
+static void handle(const ghost_req_t *req, long sender) {
     ghost_rep_t rep;
     for (unsigned i = 0; i < sizeof(rep); i++) ((uint8_t *)&rep)[i] = 0;
     rep.op = req->op;
@@ -410,7 +415,7 @@ static void handle(const ghost_req_t *req) {
         break;
     }
 
-    send_msg((const char *)&rep, (long)sizeof(rep));
+    send_to(sender, (const char *)&rep, (long)sizeof(rep));
 }
 
 void _start(void) {
@@ -436,7 +441,7 @@ void _start(void) {
             yield();
             continue;
         }
-        handle((const ghost_req_t *)buf);
+        handle((const ghost_req_t *)buf, sender);
         heartbeat();
     }
 }

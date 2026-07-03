@@ -35,11 +35,14 @@ extern const uint8_t _binary_client_elf_start[], _binary_client_elf_end[];
 extern const uint8_t _binary_hbsvc_elf_start[], _binary_hbsvc_elf_end[];
 extern const uint8_t _binary_ghostd_elf_start[], _binary_ghostd_elf_end[];
 extern const uint8_t _binary_ghost_test_elf_start[], _binary_ghost_test_elf_end[];
+extern const uint8_t _binary_paradoxd_elf_start[], _binary_paradoxd_elf_end[];
+extern const uint8_t _binary_paradox_test_elf_start[], _binary_paradox_test_elf_end[];
 
 static status_t finalize_user_process(address_space_t *as, const char *name,
                                       uint64_t entry, uint32_t *pid_out);
 void user_ipc_demo_init(void);
 void user_ghost_demo_init(void);
+void user_paradox_demo_init(uint32_t ghostd_pid);
 
 /* int 0x80 stub (kernel/src/interrupts.S) */
 extern void isr128(void);
@@ -121,6 +124,42 @@ static uint64_t sys_send(uint32_t pid, uint64_t user_ptr, uint64_t len) {
     msg.length = n;
 
     if (ipc_send(dest, &msg, 0) != IPC_SUCCESS) {
+        return SYSCALL_EIO;
+    }
+    return 0;
+}
+
+/* Targeted capability-routed send: like sys_send, but the destination is
+ * named explicitly (dest pid) instead of taken first-match. The caller must
+ * hold an IPC send-capability whose resource_id is exactly `dest` — the same
+ * capability-as-address rule, just choosing which held address to use. This
+ * lets a service reply to whichever client sent it a request (the sender pid
+ * recv returns) while still only being able to reach peers it was granted. */
+static uint64_t sys_send_to(uint32_t pid, uint64_t dest, uint64_t user_ptr,
+                            uint64_t len) {
+    if (!in_user_range(user_ptr)) {
+        return SYSCALL_EFAULT;
+    }
+    if (len == 0 || len > IPC_MAX_MESSAGE_SIZE) {
+        return SYSCALL_EINVAL;
+    }
+
+    if (cap_find_resource(pid, CAP_RESOURCE_IPC, CAP_WRITE,
+                          (uint32_t)dest) != CAP_SUCCESS) {
+        return SYSCALL_EPERM;
+    }
+
+    ipc_message_t msg;
+    memset(&msg, 0, sizeof(msg));
+    const uint8_t *src = (const uint8_t *)user_ptr;
+    uint32_t n = 0;
+    while (n < len && n < IPC_MAX_MESSAGE_SIZE && in_user_range(user_ptr + n)) {
+        msg.data[n] = src[n];
+        n++;
+    }
+    msg.length = n;
+
+    if (ipc_send((uint32_t)dest, &msg, 0) != IPC_SUCCESS) {
         return SYSCALL_EIO;
     }
     return 0;
@@ -233,6 +272,9 @@ static void syscall_dispatch(cpu_state_t *state) {
         break;
     case SYS_QRAND:
         state->rax = sys_qrand(pid, state->rdi, state->rsi);
+        break;
+    case SYS_SEND_TO:
+        state->rax = sys_send_to(pid, state->rdi, state->rsi, state->rdx);
         break;
     default:
         state->rax = SYSCALL_ENOSYS;
@@ -471,6 +513,11 @@ void user_ghost_demo_init(void) {
         .user_elf_end = _binary_ghostd_elf_end,
         .dependencies = { NULL },
         .max_restarts = 2,
+        /* ghostd's perturbation noise reads the quantum pool; declaring the
+         * cap here means the service framework re-mints it on every start,
+         * so a watchdog-reborn ghostd regains qseed-derived noise instead of
+         * degrading permanently to a PRNG. */
+        .grant_quantum_pool = 1,
     };
 
     uint32_t sid = 0;
@@ -498,18 +545,77 @@ void user_ghost_demo_init(void) {
     cap_create(test_pid, CAP_RESOURCE_IPC, ghostd_pid, CAP_READ | CAP_WRITE, 0, &cap);
     cap_create(ghostd_pid, CAP_RESOURCE_IPC, test_pid, CAP_READ | CAP_WRITE, 0, &cap);
 
-    /* Grant ghostd (and only ghostd) a read capability on the quantum pool
-     * so its SYS_QRAND perturbation draws are authorised. ghost-test is
-     * deliberately left without one: its capless SYS_QRAND attempt is the
-     * proof-by-attack that the gate denies (EPERM). */
-    uint32_t qcap = CAP_ID_INVALID;
-    if (quantum_grant(ghostd_pid, CAP_QUANTUM | CAP_READ, &qcap) != QUANTUM_SUCCESS) {
-        boot_log("Warning: ghostd quantum-pool capability grant failed");
-    }
+    /* ghostd's quantum-pool read cap is (re-)minted by the service framework
+     * from ghostd_def.grant_quantum_pool on every start, so it survives a
+     * watchdog restart. ghost-test is deliberately left without one: its
+     * capless SYS_QRAND attempt is the proof-by-attack the gate denies
+     * (EPERM). */
 
     /* Let the watchdog keep ghostd alive; it heartbeats via SYS_HEARTBEAT
      * and reprints "GHOSTD: FIELD REBORN" if it is ever restarted. */
     service_monitor(sid, true);
 
     boot_log("ghostOS: ghostd (ring 3) + ghost-test wired via capabilities");
+
+    /* ghostOS phase 3: bring up paradoxd, coupled to ghostd's field. */
+    user_paradox_demo_init(ghostd_pid);
+}
+
+/* Bring up paradoxd — a fixed-point paradox-resolution service (ghostOS
+ * phase 3, #50) — as a monitored ring-3 user-process service coupled to
+ * ghostd's field, plus a paradox-test client that hands it a canned
+ * contradiction over capability-checked IPC.
+ *
+ * Wiring (all capability-as-address):
+ *   - paradox-test -> paradoxd  : one IPC send-cap, to hand over the gate's
+ *                                 canned contradiction.
+ *   - paradoxd     -> ghostd    : one IPC send-cap, to poll ghostd STATUS.
+ *   - ghostd       -> paradoxd  : one IPC send-cap, so ghostd can reply to
+ *                                 paradoxd's STATUS query (ghostd replies to
+ *                                 the sender via SYS_SEND_TO).
+ * paradoxd is given NO cap back to paradox-test: the merge gate is paradoxd's
+ * own printed RESOLVED line, so it never needs to answer the client. */
+void user_paradox_demo_init(uint32_t ghostd_pid) {
+    service_definition_t paradoxd_def = {
+        .name = "paradoxd",
+        .entry = NULL,                        /* user-process service */
+        .user_elf_start = _binary_paradoxd_elf_start,
+        .user_elf_end = _binary_paradoxd_elf_end,
+        .dependencies = { NULL },
+        .max_restarts = 2,
+    };
+
+    uint32_t sid = 0;
+    uint32_t paradoxd_pid = 0, test_pid = 0;
+
+    if (service_register(&paradoxd_def, &sid) == SVC_SUCCESS &&
+        service_start("paradoxd", NULL) == SVC_SUCCESS) {
+        service_info_t info;
+        if (service_status(sid, &info) == SVC_SUCCESS) {
+            paradoxd_pid = info.pid;
+        }
+    }
+    if (paradoxd_pid == 0) {
+        boot_log("Warning: paradoxd service failed to start");
+        return;
+    }
+
+    if (user_process_spawn_elf("paradox-test", _binary_paradox_test_elf_start,
+                               _binary_paradox_test_elf_end, &test_pid) != STATUS_SUCCESS) {
+        boot_log("Warning: paradox-test failed to spawn");
+        return;
+    }
+
+    uint32_t cap = CAP_ID_INVALID;
+    /* client -> paradoxd (hand over the contradiction) */
+    cap_create(test_pid, CAP_RESOURCE_IPC, paradoxd_pid, CAP_READ | CAP_WRITE, 0, &cap);
+    /* paradoxd -> ghostd (poll STATUS), and ghostd -> paradoxd (reply). The
+     * two services are now coupled through ghostd's field over cap-checked
+     * IPC — the point of phase 3. */
+    cap_create(paradoxd_pid, CAP_RESOURCE_IPC, ghostd_pid, CAP_READ | CAP_WRITE, 0, &cap);
+    cap_create(ghostd_pid, CAP_RESOURCE_IPC, paradoxd_pid, CAP_READ | CAP_WRITE, 0, &cap);
+
+    service_monitor(sid, true);
+
+    boot_log("ghostOS: paradoxd (ring 3) coupled to ghostd via capabilities");
 }

@@ -31,6 +31,11 @@
                          * CAP_RESOURCE_QUANTUM read capability (EPERM without).
                          * len == 0 is a provenance query: returns 1 if the
                          * kernel booted with a qseed, else 0. */
+#define SYS_SEND_TO 11  /* rdi = dest pid, rsi = msg ptr, rdx = len; like
+                         * SYS_SEND but to a chosen destination the caller holds
+                         * an IPC send-capability for (EPERM if it holds none for
+                         * that dest). Lets a service reply to the sender pid
+                         * recv handed it rather than a first-match peer. */
 
 /* Bytes SYS_QRAND will draw per call at most (a capless caller is denied
  * before any draw). */

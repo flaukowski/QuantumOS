@@ -134,6 +134,15 @@ cap_result_t cap_get(uint32_t cap_id, capability_t *out);
 cap_result_t cap_find(uint32_t pid, cap_resource_type_t resource_type,
                       uint32_t required_perms, uint32_t *resource_id_out);
 
+/* Like cap_find, but for a *specific* target: does `pid` own a live
+ * capability of the given resource type that guards exactly
+ * `resource_id` and carries all `required_perms`? Used for targeted
+ * capability-as-address routing (e.g. a service replying to the sender
+ * pid recv handed it), where the destination is chosen rather than
+ * taken first-match. */
+cap_result_t cap_find_resource(uint32_t pid, cap_resource_type_t resource_type,
+                               uint32_t required_perms, uint32_t resource_id);
+
 /* Revoke everything owned by a process (called on process destroy) */
 void cap_revoke_all_for_process(uint32_t pid);
 

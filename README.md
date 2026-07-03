@@ -140,6 +140,40 @@ quantum provenance without a real seed:
 `qseed=DEADBEEFCAFEBABE` and gates on the kernel's qseed echo plus the
 qseed-derived provenance line.
 
+### Paradox resolution coupled to the field (ghostOS phase 3, #50)
+
+Phase 3 adds `paradoxd` (`user/paradoxd.c`), a third ring-3 service: a
+fixed-point paradox resolver that iterates a contraction rule on a Q16.16
+state until a successive-delta convergence test passes (no floats — the
+reciprocal is a rounded integer divide). Two rules ship: the classic
+`x = 1/x` reciprocal-average `x ← (x + ONE·ONE/x)/2` (attractor ±1, the rule
+the gate resolves) and a doubly-stochastic vector consensus smoothing
+`v_i ← (v_{i-1} + 2·v_i + v_{i+1})/4` (attractor: the uniform vector = the
+mean). It runs a `CONVERGENT ↔ DIVERGENT` phase machine whose transitions
+are **gated on `ghostd`'s field**: `paradoxd` holds an IPC cap for `ghostd`,
+polls its `STATUS` order parameter R, and may re-lock (→ CONVERGENT) only
+when R ≥ 0.95 and explore (→ DIVERGENT) only when R < 0.99. Post-gate the
+field measures a steady R = 0.9754, so both are permitted and the two
+services cycle — coupled through the field over capability-checked IPC.
+
+```
+[user pid=...] PARADOXD: RESOLVED n=7 phase=C
+[user pid=...] PARADOXD: capless send denied (EPERM)
+[user pid=...] PARADOXD: phase -> DIVERGENT (ghost R=0.97)
+[user pid=...] PARADOXD: phase -> CONVERGENT (ghost R=0.97)
+```
+
+To reply to whichever client sent it a request, a service uses `SYS_SEND_TO`
+(#11): a targeted capability-as-address send — the caller may transmit only
+to a destination it holds an IPC send-cap for. This lets one `ghostd` serve
+both `ghost-test` (the phase-1 gate) and `paradoxd` (the coupling) by
+replying to the sender pid `recv` returns, rather than a single first-match
+peer. `paradox-test`'s send to an address it holds no cap for is denied with
+EPERM — the same capability discipline that keeps a process lacking
+`paradoxd`'s cap from reaching it. `make ci-smoke` gates on
+`PARADOXD: RESOLVED`, the capless-send denial, and a `PARADOXD: phase ->`
+transition; all phase-1/2 gates stay green.
+
 An optional quantum-lottery scheduler is available behind a build flag
 (`make SCHED_LOTTERY=1`): ready-process selection becomes a lottery draw
 from the same qseed-mixed generator (`quantum_kernel_rand()`), and the

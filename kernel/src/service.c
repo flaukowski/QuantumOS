@@ -13,6 +13,7 @@
 #include <kernel/process.h>
 #include <kernel/scheduler.h>
 #include <kernel/capability.h>
+#include <kernel/quantum.h>
 #include <kernel/syscall.h>
 #include <kernel/interrupts.h>
 #include <kernel/boot.h>
@@ -189,6 +190,19 @@ static svc_result_t start_slot(service_slot_t *slot) {
     if (cap_create(pid, CAP_RESOURCE_SERVICE, slot->info.service_id,
                    CAP_READ | CAP_WRITE, 0, &svc_cap) == CAP_SUCCESS) {
         slot->info.capabilities = svc_cap;
+    }
+
+    /* Re-mint declared resource caps on every start (first spawn and every
+     * watchdog restart alike). The caps are owned by the fresh pid, so a
+     * reborn service regains the same authority instead of losing it — e.g.
+     * ghostd honestly recovers its qseed-derived noise source rather than
+     * degrading to a plain PRNG forever after a restart. */
+    if (slot->def.grant_quantum_pool) {
+        uint32_t qcap = CAP_ID_INVALID;
+        if (quantum_grant(pid, CAP_QUANTUM | CAP_READ, &qcap) != QUANTUM_SUCCESS) {
+            boot_log("service: quantum-pool cap grant failed");
+            boot_log(slot->info.name);
+        }
     }
 
     slot->info.pid = pid;

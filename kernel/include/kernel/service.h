@@ -89,6 +89,11 @@ typedef struct {
     uint32_t cpu_limit;
     size_t memory_limit;
     uint32_t quantum_limit;
+    /* Resource caps to (re-)mint on every start, so a watchdog restart
+     * restores the same authority the service had at first spawn instead of
+     * silently degrading. Currently: a CAP_RESOURCE_QUANTUM read cap on the
+     * shared pool (e.g. ghostd's perturbation-noise source). */
+    uint8_t grant_quantum_pool;
 } service_definition_t;
 
 /* ============================================================================
