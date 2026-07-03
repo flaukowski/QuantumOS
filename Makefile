@@ -61,7 +61,7 @@ ASSEMBLY_SOURCES = $(wildcard $(KERNEL_DIR)/src/*.S)
 # objects (symbols _binary_<name>_elf_start/_end)
 USER_DIR = user
 USER_BUILD = $(BUILD_DIR)/user
-USER_PROGS = init echo client hbsvc ghostd ghost_test paradoxd paradox_test
+USER_PROGS = init echo client hbsvc ghostd ghost_test paradoxd paradox_test swarm_svc
 USER_ELF_OBJS = $(USER_PROGS:%=$(USER_BUILD)/%_elf.o)
 
 OBJECTS = $(KERNEL_SOURCES:$(KERNEL_DIR)/src/%.c=$(BUILD_DIR)/%.o) \
@@ -71,7 +71,7 @@ OBJECTS = $(KERNEL_SOURCES:$(KERNEL_DIR)/src/%.c=$(BUILD_DIR)/%.o) \
           $(USER_ELF_OBJS)
 
 # Targets
-.PHONY: all clean kernel run debug dump test test-list test-coverage ci-smoke ci-smoke-qseed
+.PHONY: all clean kernel run debug dump test test-list test-coverage ci-smoke ci-smoke-qseed ci-smoke-swarm swarm-pingpong
 
 all: kernel
 
@@ -98,7 +98,7 @@ USER_CFLAGS = -Wall -Wextra -Werror -nostdlib -ffreestanding -fno-pic -fno-pie \
               -no-pie -static -mno-red-zone -mno-mmx -mno-sse -mno-sse2 \
               -fno-stack-protector -fno-asynchronous-unwind-tables -O2
 
-$(USER_BUILD)/%.elf: $(USER_DIR)/%.c $(USER_DIR)/user.ld $(USER_DIR)/usys.h $(USER_DIR)/ghost.h $(USER_DIR)/paradox.h
+$(USER_BUILD)/%.elf: $(USER_DIR)/%.c $(USER_DIR)/user.ld $(USER_DIR)/usys.h $(USER_DIR)/ghost.h $(USER_DIR)/paradox.h $(USER_DIR)/sha256.h $(USER_DIR)/swarm.h
 	@mkdir -p $(USER_BUILD)
 	@echo "Building user program: $<..."
 	$(CC) $(USER_CFLAGS) -T $(USER_DIR)/user.ld -o $@ $<
@@ -338,6 +338,14 @@ ci-smoke: kernel
 		echo ""; echo "=== Smoke Test FAILED ==="; exit 1; \
 	fi
 	@echo "SUCCESS: SYS_QRAND capability gate proven (capless caller denied EPERM)"
+	@# ghostd phase-4 device gate (issue #51): the capless ghost-test must be
+	@# denied SYS_COM2 — only swarm_svc holds the COM2 device capability.
+	@if ! grep -q "COM2: capless caller denied (EPERM)" /tmp/qemu-boot.log 2>/dev/null; then \
+		echo "ERROR: capless SYS_COM2 was not denied (COM2: capless caller denied)"; \
+		echo "Boot log:"; cat /tmp/qemu-boot.log 2>/dev/null || true; \
+		echo ""; echo "=== Smoke Test FAILED ==="; exit 1; \
+	fi
+	@echo "SUCCESS: SYS_COM2 device gate proven (capless caller denied EPERM)"
 	@# ghostOS phase-3 merge gate (issue #50): paradoxd must resolve the canned
 	@# contradiction and print its deterministic RESOLVED line.
 	@if ! grep -q "PARADOXD: RESOLVED" /tmp/qemu-boot.log 2>/dev/null; then \
@@ -414,6 +422,51 @@ ci-smoke-qseed: kernel
 	@echo "SUCCESS: paradoxd resolution gate passed under qseed (PARADOXD: RESOLVED)"
 	@echo ""
 	@echo "=== Smoke Test (qseed) PASSED ==="
+
+# CI Smoke Test (swarm bridge): boot with COM2 routed to a file and prove the
+# ring-3 swarm_svc's Lamport-signed boot attestation verifies end-to-end — both
+# seedless (qseed=none) and with a qseed handoff (attested qseed == cmdline).
+# This is the one-way CI gate; the two-way PING/PONG path is proven locally via
+# `make swarm-pingpong` (headless two-way serial into QEMU needs a TCP client).
+ci-smoke-swarm: kernel
+	@echo "=== QuantumOS CI Smoke Test (swarm bridge attestation) ==="
+	@echo ""
+	@echo "[seedless] boot: COM1 -> stdio, COM2 -> file..."
+	@rm -f /tmp/qemu-swarm-com2.bin
+	@timeout 10s qemu-system-x86_64 -kernel $(BUILD_DIR)/kernel.elf32 \
+		-serial stdio -serial file:/tmp/qemu-swarm-com2.bin \
+		-m 128M -display none -no-reboot 2>&1 | tee /tmp/qemu-swarm.log || true
+	@if ! grep -q "SWARM: boot attestation emitted" /tmp/qemu-swarm.log 2>/dev/null; then \
+		echo "ERROR: swarm console gate missing (SWARM: boot attestation emitted)"; \
+		cat /tmp/qemu-swarm.log 2>/dev/null || true; \
+		echo "=== Smoke Test FAILED ==="; exit 1; \
+	fi
+	@echo "SUCCESS: swarm console gate present (SWARM: boot attestation emitted)"
+	@python3 scripts/verify_attestation.py /tmp/qemu-swarm-com2.bin --qseed none || \
+		(echo "=== Smoke Test FAILED (seedless attestation) ==="; exit 1)
+	@echo "SUCCESS: seedless boot attestation verified (qseed=none)"
+	@echo ""
+	@echo "[qseed] boot WITH -append qseed=DEADBEEFCAFEBABE, COM2 -> file..."
+	@rm -f /tmp/qemu-swarm-com2q.bin
+	@timeout 10s qemu-system-x86_64 -kernel $(BUILD_DIR)/kernel.elf32 \
+		-append "qseed=DEADBEEFCAFEBABE" \
+		-serial stdio -serial file:/tmp/qemu-swarm-com2q.bin \
+		-m 128M -display none -no-reboot 2>&1 | tee /tmp/qemu-swarmq.log || true
+	@python3 scripts/verify_attestation.py /tmp/qemu-swarm-com2q.bin --qseed DEADBEEFCAFEBABE || \
+		(echo "=== Smoke Test FAILED (qseed attestation) ==="; exit 1)
+	@echo "SUCCESS: qseed boot attestation verified (attested qseed == cmdline)"
+	@echo ""
+	@echo "=== Smoke Test (swarm bridge) PASSED ==="
+
+# Local two-way exercise: COM2 as a TCP server; drive PING/PONG + a DATA request
+# routed to ghostd over capability-checked IPC. Not part of CI (needs a client).
+swarm-pingpong: kernel
+	@echo "=== QuantumOS swarm bridge two-way (PING/PONG + DATA->ghostd) ==="
+	@(timeout 18s qemu-system-x86_64 -kernel $(BUILD_DIR)/kernel.elf32 \
+		-serial file:/tmp/qemu-swarm-com1.log \
+		-serial tcp:127.0.0.1:5566,server -m 128M -display none -no-reboot \
+		>/dev/null 2>&1 &) ; sleep 1
+	@python3 scripts/swarm_pingpong.py --host 127.0.0.1 --port 5566 --timeout 16
 
 # Quick validation for contributors
 validate: kernel

@@ -14,6 +14,7 @@
 #include <kernel/scheduler.h>
 #include <kernel/capability.h>
 #include <kernel/quantum.h>
+#include <kernel/com2_uart.h>
 #include <kernel/syscall.h>
 #include <kernel/interrupts.h>
 #include <kernel/boot.h>
@@ -201,6 +202,14 @@ static svc_result_t start_slot(service_slot_t *slot) {
         uint32_t qcap = CAP_ID_INVALID;
         if (quantum_grant(pid, CAP_QUANTUM | CAP_READ, &qcap) != QUANTUM_SUCCESS) {
             boot_log("service: quantum-pool cap grant failed");
+            boot_log(slot->info.name);
+        }
+    }
+    if (slot->def.grant_com2) {
+        uint32_t dcap = CAP_ID_INVALID;
+        if (cap_create(pid, CAP_RESOURCE_DEVICE, DEVICE_ID_COM2,
+                       CAP_DEVICE | CAP_READ | CAP_WRITE, 0, &dcap) != CAP_SUCCESS) {
+            boot_log("service: COM2 device cap grant failed");
             boot_log(slot->info.name);
         }
     }

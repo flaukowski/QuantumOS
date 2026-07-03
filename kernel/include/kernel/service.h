@@ -94,6 +94,11 @@ typedef struct {
      * silently degrading. Currently: a CAP_RESOURCE_QUANTUM read cap on the
      * shared pool (e.g. ghostd's perturbation-noise source). */
     uint8_t grant_quantum_pool;
+    /* Grant a CAP_RESOURCE_DEVICE read/write cap over the COM2 swarm-bridge
+     * UART (DEVICE_ID_COM2), re-minted on every start like grant_quantum_pool.
+     * Held only by swarm_svc, so it is the sole ring-3 process that can drive
+     * the serial bridge (ghostd phase 4). */
+    uint8_t grant_com2;
 } service_definition_t;
 
 /* ============================================================================
