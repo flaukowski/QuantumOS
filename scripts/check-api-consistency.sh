@@ -118,6 +118,13 @@ for source in $(find "$KERNEL_DIR/src" -name "*.c" 2>/dev/null); do
         [[ "$line" =~ ^[[:space:]]*\* ]] && continue
         [[ "$line" =~ ^[[:space:]]*// ]] && continue
 
+        # Strip string literals so text like boot_log("Phi (x1000): ")
+        # is not parsed as a call to a function named Phi.
+        line="${line//\\\"/}"
+        while [[ "$line" =~ \"[^\"]*\" ]]; do
+            line="${line/"${BASH_REMATCH[0]}"/}"
+        done
+
         # Find function calls: identifier followed by (
         # This is a simplified check - production would use proper parsing
         while [[ "$line" =~ ([a-zA-Z_][a-zA-Z0-9_]*)[[:space:]]*\( ]]; do
