@@ -68,6 +68,13 @@ for header in $(find "$KERNEL_DIR/include" -name "*.h" 2>/dev/null); do
         [[ "$line" =~ ^[[:space:]]*# ]] && continue
         [[ "$line" =~ ^[[:space:]]*// ]] && continue
 
+        # Strip string literals so text like boot_log("Phi (x1000): ")
+        # is not parsed as a call to a function named Phi.
+        line="${line//\\\"/}"
+        while [[ "$line" =~ \"[^\"]*\" ]]; do
+            line="${line/"${BASH_REMATCH[0]}"/}"
+        done
+
         # Match function declarations
         if [[ "$line" =~ ^[a-zA-Z_][a-zA-Z0-9_*[:space:]]+[[:space:]]+([a-zA-Z_][a-zA-Z0-9_]*)[[:space:]]*\( ]]; then
             func_name="${BASH_REMATCH[1]}"
