@@ -68,8 +68,15 @@ for header in $(find "$KERNEL_DIR/include" -name "*.h" 2>/dev/null); do
         [[ "$line" =~ ^[[:space:]]*# ]] && continue
         [[ "$line" =~ ^[[:space:]]*// ]] && continue
 
+        # Strip string literals so text like boot_log("Phi (x1000): ")
+        # is not parsed as a call to a function named Phi.
+        line="${line//\\\"/}"
+        while [[ "$line" =~ \"[^\"]*\" ]]; do
+            line="${line/"${BASH_REMATCH[0]}"/}"
+        done
+
         # Match function declarations
-        if [[ "$line" =~ ^[a-zA-Z_][a-zA-Z0-9_*[:space:]]+[[:space:]]+([a-zA-Z_][a-zA-Z0-9_]*)[[:space:]]*\( ]]; then
+        if [[ "$line" =~ ^[a-zA-Z_][a-zA-Z0-9_*[:space:]]+[[:space:]*]+([a-zA-Z_][a-zA-Z0-9_]*)[[:space:]]*\( ]]; then
             func_name="${BASH_REMATCH[1]}"
             # Skip common non-functions
             [[ "$func_name" == "if" ]] && continue
@@ -102,14 +109,57 @@ declare -A CALL_LOCATIONS
 for source in $(find "$KERNEL_DIR/src" -name "*.c" 2>/dev/null); do
     source_name=$(basename "$source")
     line_num=0
+    in_block_comment=0
 
     while IFS= read -r line; do
-        ((line_num++))
+        line_num=$((line_num+1))
 
-        # Skip comments
-        [[ "$line" =~ ^[[:space:]]*/\* ]] && continue
+        # Track multi-line /* ... */ blocks (continuation lines may not
+        # start with a comment marker).
+        if [ "$in_block_comment" -eq 1 ]; then
+            if [[ "$line" == *'*/'* ]]; then
+                in_block_comment=0
+                line="${line#*\*/}"
+            else
+                continue
+            fi
+        fi
+
+        # Skip comments (an opener without a closer starts a block)
+        if [[ "$line" =~ ^[[:space:]]*/\* ]]; then
+            [[ "$line" != *'*/'* ]] && in_block_comment=1
+            continue
+        fi
         [[ "$line" =~ ^[[:space:]]*\* ]] && continue
         [[ "$line" =~ ^[[:space:]]*// ]] && continue
+
+        # Skip preprocessor lines (#define/#include/#pragma ...)
+        [[ "$line" =~ ^[[:space:]]*# ]] && continue
+
+        # Strip string literals so text like boot_log("Phi (x1000): ")
+        # is not parsed as a call to a function named Phi.
+        line="${line//\\\"/}"
+        while [[ "$line" =~ \"[^\"]*\" ]]; do
+            line="${line/"${BASH_REMATCH[0]}"/}"
+        done
+
+        # Strip __attribute__((...)) clauses — consuming their inner parens
+        # otherwise leaves the preceding identifier adjacent to '(' and it
+        # gets miscounted as a call (e.g. next_pid __attribute__((unused))).
+        while [[ "$line" =~ __attribute__[[:space:]]*\(\([^\)]*\)\) ]]; do
+            line="${line/"${BASH_REMATCH[0]}"/}"
+        done
+
+        # Strip inline /* ... */ blocks and trailing // comments so
+        # commented-out calls on code lines are not counted.
+        while [[ "$line" == *'/*'*'*/'* ]]; do
+            line="${line%%/\**}${line##*\*/}"
+        done
+        line="${line%%//*}"
+        if [[ "$line" == *'/*'* ]]; then
+            line="${line%%/\**}"
+            in_block_comment=1
+        fi
 
         # Find function calls: identifier followed by (
         # This is a simplified check - production would use proper parsing
@@ -159,22 +209,33 @@ for func in "${!CALLED_FUNCTIONS[@]}"; do
     location="${CALL_LOCATIONS[$func]}"
     source_file="${location%%:*}"
 
-    # Check if function is defined in the same source file
+    # Check if function is defined in the same source file (the file may
+    # live in any subdirectory of src/ — locations record the basename).
     if [ -n "$source_file" ]; then
-        full_path="$KERNEL_DIR/src/$source_file"
-        if [ -f "$full_path" ]; then
-            # Look for function definition
-            if grep -q "^[a-zA-Z_][a-zA-Z0-9_* ]*${func}[[:space:]]*(" "$full_path" 2>/dev/null; then
-                continue
+        found_def=0
+        while IFS= read -r full_path; do
+            if grep -q "^[a-zA-Z_][a-zA-Z0-9_* ]*${func}[[:space:]]*(" "$full_path" 2>/dev/null ||                grep -qE "^[a-zA-Z_][a-zA-Z0-9_* ]*[* ]${func}[[:space:]]*(=|;)" "$full_path" 2>/dev/null; then
+                found_def=1
+                break
             fi
-        fi
-        # Also check ipc subdirectory
-        full_path="$KERNEL_DIR/src/ipc/$source_file"
-        if [ -f "$full_path" ]; then
-            if grep -q "^[a-zA-Z_][a-zA-Z0-9_* ]*${func}[[:space:]]*(" "$full_path" 2>/dev/null; then
-                continue
+        done < <(find "$KERNEL_DIR/src" -name "$source_file" -type f 2>/dev/null)
+        [ "$found_def" -eq 1 ] && continue
+    fi
+
+    # Function-like macros count as definitions: #define NAME( — in the
+    # calling file or any header.
+    if [ -n "$source_file" ]; then
+        macro_def=0
+        while IFS= read -r full_path; do
+            if grep -q "^#[[:space:]]*define[[:space:]]\+${func}(" "$full_path" 2>/dev/null; then
+                macro_def=1
+                break
             fi
-        fi
+        done < <(find "$KERNEL_DIR/src" -name "$source_file" -type f 2>/dev/null)
+        [ "$macro_def" -eq 1 ] && continue
+    fi
+    if grep -rq "^#[[:space:]]*define[[:space:]]\+${func}(" "$KERNEL_DIR/include" 2>/dev/null; then
+        continue
     fi
 
     # This is a potential phantom API call
@@ -193,7 +254,7 @@ for func in "${!CALLED_FUNCTIONS[@]}"; do
         done
     fi
 
-    ((ERRORS_FOUND++))
+    ERRORS_FOUND=$((ERRORS_FOUND+1))
     echo ""
 done
 
@@ -215,7 +276,7 @@ for pattern in $OLD_IPC_PATTERNS; do
             echo -e "  $match"
         done
         echo -e "  ${YELLOW}Use ipc_process_init() / ipc_process_cleanup() instead${NC}"
-        ((ERRORS_FOUND++))
+        ERRORS_FOUND=$((ERRORS_FOUND+1))
         echo ""
     fi
 done
@@ -227,7 +288,7 @@ for doc in $DOC_FILES; do
         if grep -q "$pattern" "$doc" 2>/dev/null; then
             echo -e "${YELLOW}WARNING: Documentation contains outdated API: $pattern${NC}"
             echo -e "  File: $doc"
-            ((WARNINGS_FOUND++))
+            WARNINGS_FOUND=$((WARNINGS_FOUND+1))
         fi
     done
 done
