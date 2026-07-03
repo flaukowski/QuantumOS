@@ -174,6 +174,49 @@ EPERM — the same capability discipline that keeps a process lacking
 `PARADOXD: RESOLVED`, the capless-send denial, and a `PARADOXD: phase ->`
 transition; all phase-1/2 gates stay green.
 
+### COM2 serial swarm bridge + Lamport-attested boot (ghostd phase 4, #51)
+
+Phase 4 adds `swarm_svc` (`user/swarm_svc.c`), a fourth ring-3 service that
+drives a **second serial port (COM2, 0x2F8)** — completely separate from the
+COM1 boot console. The kernel exposes COM2 as a capability-guarded device
+resource (`CAP_RESOURCE_DEVICE` over `DEVICE_ID_COM2`) behind `SYS_COM2` (#12);
+`swarm_svc` is the *only* ring-3 process granted the device cap (declaratively,
+via `.grant_com2 = 1`, re-minted on every start like `.grant_quantum_pool`).
+A capless `SYS_COM2` is denied EPERM — `ghost-test` proves it (`COM2: capless
+caller denied (EPERM)`).
+
+On COM2 it speaks a small **length-prefixed, CRC8-framed** protocol
+(`magic 0xA5 | type | len:u16 | payload | crc8`; CRC-8/CCITT poly 0x07) with
+`HANDSHAKE/DATA/PING/PONG/DISCONNECT` frames. A `PING` is answered with `PONG`;
+a `DATA` frame is a remote request routed to `ghostd` over capability-checked
+IPC (`SYS_SEND_TO`) and answered with a `DATA` frame — e.g. a remote
+`RECALL`/`STATUS` on the associative field.
+
+At boot `swarm_svc` emits a **Lamport hash-based one-time signature** over the
+attestation string `QOS-BOOT|qseed=<hex|none>|ticks=<n>`. All hashing is an
+integer-only SHA-256 (`user/sha256.h`), so a host verifies with a standard
+library. The 256-pair key is expanded in SHA-256 counter mode from a single
+32-byte master seed drawn from the qseed-mixed quantum pool (`SYS_QRAND`) — so
+only 256 bits of true entropy are consumed, not 16 KB, and security reduces to
+SHA-256 plus that seed. It emits a public-key-digest commitment, the
+attestation, and the signature (revealed preimage + complementary pk hash per
+message bit). `SYS_QSEED` (#13), gated on the same quantum cap, lets the
+service bind the record to the exact qseed the kernel booted with.
+
+```
+[user pid=...] SWARM: boot attestation emitted (lamport-signed, qseed=DEADBEEFCAFEBABE)
+```
+
+The host verifier `scripts/verify_attestation.py` (stdlib only) parses the COM2
+stream, checks every CRC8, verifies the Lamport signature against the committed
+public-key digest, and confirms the attested qseed matches the cmdline. CI is
+the **one-way** gate: boot with `-serial file:` on COM2 and run the verifier in
+both modes — seedless (`qseed=none`) and with a qseed handoff (attested qseed ==
+cmdline) — plus the greppable console gate `SWARM: boot attestation emitted`.
+The **two-way** PING/PONG + DATA→`ghostd` path (headless two-way serial into
+QEMU needs a TCP client) is proven locally with `make swarm-pingpong`. All
+phase-1/2/3 gates stay green.
+
 An optional quantum-lottery scheduler is available behind a build flag
 (`make SCHED_LOTTERY=1`): ready-process selection becomes a lottery draw
 from the same qseed-mixed generator (`quantum_kernel_rand()`), and the

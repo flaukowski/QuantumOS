@@ -58,6 +58,19 @@ void _start(void) {
         }
     }
 
+    /* Same proof-by-attack for the COM2 swarm-bridge device (ghostd phase 4):
+     * ghost-test holds no CAP_RESOURCE_DEVICE cap over COM2, so its write must
+     * be denied EPERM (-4). Only swarm_svc is granted the device capability. */
+    {
+        uint8_t one = 0x2A;
+        long cr = com2_write_bytes(&one, 1);
+        if (cr == -4) {
+            write_str("COM2: capless caller denied (EPERM)");
+        } else {
+            write_str("COM2: WARNING — capless caller was NOT denied");
+        }
+    }
+
     const uint32_t seeds[3] = { GHOST_SEED_0, GHOST_SEED_1, GHOST_SEED_2 };
     uint32_t pats[3][GHOST_PW];
 

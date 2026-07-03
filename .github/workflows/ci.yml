@@ -604,6 +604,52 @@ jobs:
           INTEGRATION_FAILURES=$((INTEGRATION_FAILURES + 1))
         fi
 
+        # Test 1f: ghostd phase-4 device gate (issue #51) — the capless
+        # ghost-test must be denied SYS_COM2 (only swarm_svc holds the COM2
+        # device capability).
+        echo "" >> integration_results.txt
+        echo "Test 1f: COM2 device capability gate..." >> integration_results.txt
+        if grep -q "COM2: capless caller denied (EPERM)" boot_output.txt 2>/dev/null; then
+          echo "  [PASS] capless SYS_COM2 denied (COM2: capless caller denied)" >> integration_results.txt
+        else
+          echo "  [FAIL] capless SYS_COM2 was not denied" >> integration_results.txt
+          INTEGRATION_FAILURES=$((INTEGRATION_FAILURES + 1))
+        fi
+
+        # Test 1g: ghostd phase-4 swarm bridge (issue #51) — boot with COM2
+        # routed to a file and verify the ring-3 swarm_svc's Lamport-signed boot
+        # attestation with the host-side verifier, in BOTH modes: seedless
+        # (qseed=none) and with a qseed handoff (attested qseed == cmdline).
+        echo "" >> integration_results.txt
+        echo "Test 1g: swarm bridge Lamport-signed boot attestation..." >> integration_results.txt
+
+        timeout 15s qemu-system-x86_64 -kernel "$KERNEL_ELF" \
+          -serial stdio -serial file:com2_seedless.bin \
+          -m 128M -display none -no-reboot 2>&1 | tee boot_output_swarm.txt || true
+        if grep -q "SWARM: boot attestation emitted" boot_output_swarm.txt 2>/dev/null; then
+          echo "  [PASS] swarm console gate present (SWARM: boot attestation emitted)" >> integration_results.txt
+        else
+          echo "  [FAIL] swarm console gate missing" >> integration_results.txt
+          INTEGRATION_FAILURES=$((INTEGRATION_FAILURES + 1))
+        fi
+        if python3 scripts/verify_attestation.py com2_seedless.bin --qseed none >> integration_results.txt 2>&1; then
+          echo "  [PASS] seedless boot attestation verified (qseed=none)" >> integration_results.txt
+        else
+          echo "  [FAIL] seedless boot attestation did not verify" >> integration_results.txt
+          INTEGRATION_FAILURES=$((INTEGRATION_FAILURES + 1))
+        fi
+
+        timeout 15s qemu-system-x86_64 -kernel "$KERNEL_ELF" \
+          -append "qseed=DEADBEEFCAFEBABE" \
+          -serial stdio -serial file:com2_qseed.bin \
+          -m 128M -display none -no-reboot 2>&1 | tee boot_output_swarm_qseed.txt || true
+        if python3 scripts/verify_attestation.py com2_qseed.bin --qseed DEADBEEFCAFEBABE >> integration_results.txt 2>&1; then
+          echo "  [PASS] qseed boot attestation verified (attested qseed == cmdline)" >> integration_results.txt
+        else
+          echo "  [FAIL] qseed boot attestation did not verify" >> integration_results.txt
+          INTEGRATION_FAILURES=$((INTEGRATION_FAILURES + 1))
+        fi
+
         # Test 2: Check for kernel panic or errors
         echo "" >> integration_results.txt
         echo "Test 2: Checking for kernel panics..." >> integration_results.txt

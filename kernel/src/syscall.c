@@ -21,6 +21,7 @@
 #include <kernel/quantum.h>
 #include <kernel/ipc.h>
 #include <kernel/service.h>
+#include <kernel/com2_uart.h>
 #include <kernel/boot.h>
 
 /* Embedded user programs (kernel/src/user_blob.S) */
@@ -37,12 +38,14 @@ extern const uint8_t _binary_ghostd_elf_start[], _binary_ghostd_elf_end[];
 extern const uint8_t _binary_ghost_test_elf_start[], _binary_ghost_test_elf_end[];
 extern const uint8_t _binary_paradoxd_elf_start[], _binary_paradoxd_elf_end[];
 extern const uint8_t _binary_paradox_test_elf_start[], _binary_paradox_test_elf_end[];
+extern const uint8_t _binary_swarm_svc_elf_start[], _binary_swarm_svc_elf_end[];
 
 static status_t finalize_user_process(address_space_t *as, const char *name,
                                       uint64_t entry, uint32_t *pid_out);
 void user_ipc_demo_init(void);
 void user_ghost_demo_init(void);
 void user_paradox_demo_init(uint32_t ghostd_pid);
+void user_swarm_demo_init(uint32_t ghostd_pid);
 
 /* int 0x80 stub (kernel/src/interrupts.S) */
 extern void isr128(void);
@@ -232,6 +235,72 @@ static uint64_t sys_qrand(uint32_t pid, uint64_t user_ptr, uint64_t len) {
     return n;
 }
 
+/* Capability-gated COM2 serial pipe (backs SYS_COM2). The COM2 swarm-bridge
+ * UART is a guarded device resource: the caller must hold a CAP_RESOURCE_DEVICE
+ * capability over DEVICE_ID_COM2 carrying CAP_WRITE (to transmit) or CAP_READ
+ * (to receive). Bytes are bounced through a bounded kernel buffer so the driver
+ * never touches user pointers directly, and the copy is clamped to the caller's
+ * mapped user half exactly like the other syscalls. Read is non-blocking: it
+ * returns however many bytes the UART had waiting (0 if none). */
+static uint64_t sys_com2(uint32_t pid, uint64_t op, uint64_t user_ptr,
+                         uint64_t len) {
+    if (op != SYS_COM2_READ && op != SYS_COM2_WRITE) {
+        return SYSCALL_EINVAL;
+    }
+    if (len == 0) {
+        return 0;
+    }
+    if (!in_user_range(user_ptr)) {
+        return SYSCALL_EFAULT;
+    }
+    if (len > COM2_MAX_BYTES) {
+        len = COM2_MAX_BYTES;
+    }
+
+    uint8_t tmp[COM2_MAX_BYTES];
+
+    if (op == SYS_COM2_WRITE) {
+        if (cap_find_resource(pid, CAP_RESOURCE_DEVICE, CAP_WRITE,
+                              DEVICE_ID_COM2) != CAP_SUCCESS) {
+            return SYSCALL_EPERM;
+        }
+        const uint8_t *src = (const uint8_t *)user_ptr;
+        uint32_t n = 0;
+        while (n < len && in_user_range(user_ptr + n)) {
+            tmp[n] = src[n];
+            n++;
+        }
+        return com2_write(tmp, n);
+    }
+
+    /* SYS_COM2_READ */
+    if (cap_find_resource(pid, CAP_RESOURCE_DEVICE, CAP_READ,
+                          DEVICE_ID_COM2) != CAP_SUCCESS) {
+        return SYSCALL_EPERM;
+    }
+    uint32_t got = com2_read(tmp, (uint32_t)len);
+    uint8_t *dst = (uint8_t *)user_ptr;
+    uint32_t n = 0;
+    while (n < got && in_user_range(user_ptr + n)) {
+        dst[n] = tmp[n];
+        n++;
+    }
+    return n;
+}
+
+/* Report the boot qseed (SYS_QSEED). Gated on the same quantum-pool read
+ * capability as SYS_QRAND — a capless caller cannot even learn the seed. The
+ * value lets a ring-3 attestation service bind its boot record to the exact
+ * entropy the kernel accepted on the cmdline (0 = no qseed handoff). */
+static uint64_t sys_qseed(uint32_t pid) {
+    uint32_t rid = 0;
+    if (cap_find(pid, CAP_RESOURCE_QUANTUM, CAP_READ, &rid) != CAP_SUCCESS ||
+        rid != QUANTUM_POOL_RESOURCE_ID) {
+        return SYSCALL_EPERM;
+    }
+    return quantum_boot_seed();
+}
+
 /* ============================================================================
  * Dispatch
  * ============================================================================ */
@@ -275,6 +344,12 @@ static void syscall_dispatch(cpu_state_t *state) {
         break;
     case SYS_SEND_TO:
         state->rax = sys_send_to(pid, state->rdi, state->rsi, state->rdx);
+        break;
+    case SYS_COM2:
+        state->rax = sys_com2(pid, state->rdi, state->rsi, state->rdx);
+        break;
+    case SYS_QSEED:
+        state->rax = sys_qseed(pid);
         break;
     default:
         state->rax = SYSCALL_ENOSYS;
@@ -618,4 +693,55 @@ void user_paradox_demo_init(uint32_t ghostd_pid) {
     service_monitor(sid, true);
 
     boot_log("ghostOS: paradoxd (ring 3) coupled to ghostd via capabilities");
+
+    /* ghostd phase 4: bring up swarm_svc, the COM2 serial swarm bridge. */
+    user_swarm_demo_init(ghostd_pid);
+}
+
+/* Bring up swarm_svc — the COM2 serial swarm bridge (ghostd phase 4, #51) —
+ * as a monitored ring-3 user-process service. It is declaratively granted the
+ * COM2 device cap and a quantum-pool read cap (both re-minted on every start),
+ * plus a single IPC send-cap to ghostd so a remote DATA request can be routed
+ * to the field over capability-checked IPC; ghostd gets a send-cap back so it
+ * can reply to swarm_svc (SYS_SEND_TO to the sender pid). swarm_svc holds no
+ * other authority: it can drive COM2, draw quantum bytes, and talk to ghostd —
+ * nothing else. */
+void user_swarm_demo_init(uint32_t ghostd_pid) {
+    service_definition_t swarm_def = {
+        .name = "swarm-svc",
+        .entry = NULL,                        /* user-process service */
+        .user_elf_start = _binary_swarm_svc_elf_start,
+        .user_elf_end = _binary_swarm_svc_elf_end,
+        .dependencies = { NULL },
+        .max_restarts = 2,
+        /* Lamport key material is drawn from the qseed-mixed quantum pool. */
+        .grant_quantum_pool = 1,
+        /* Sole ring-3 holder of the COM2 device capability. */
+        .grant_com2 = 1,
+    };
+
+    uint32_t sid = 0;
+    uint32_t swarm_pid = 0;
+
+    if (service_register(&swarm_def, &sid) == SVC_SUCCESS &&
+        service_start("swarm-svc", NULL) == SVC_SUCCESS) {
+        service_info_t info;
+        if (service_status(sid, &info) == SVC_SUCCESS) {
+            swarm_pid = info.pid;
+        }
+    }
+    if (swarm_pid == 0) {
+        boot_log("Warning: swarm-svc service failed to start");
+        return;
+    }
+
+    /* swarm_svc <-> ghostd: one IPC send-cap each way, so a DATA request can be
+     * routed to ghostd's field and ghostd can reply to the sender. */
+    uint32_t cap = CAP_ID_INVALID;
+    cap_create(swarm_pid, CAP_RESOURCE_IPC, ghostd_pid, CAP_READ | CAP_WRITE, 0, &cap);
+    cap_create(ghostd_pid, CAP_RESOURCE_IPC, swarm_pid, CAP_READ | CAP_WRITE, 0, &cap);
+
+    service_monitor(sid, true);
+
+    boot_log("ghostOS: swarm-svc (ring 3) bridging COM2, wired to ghostd");
 }

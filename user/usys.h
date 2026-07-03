@@ -19,6 +19,12 @@
 #define SYS_SVC_RESTARTS 9
 #define SYS_QRAND     10
 #define SYS_SEND_TO   11
+#define SYS_COM2      12
+#define SYS_QSEED     13
+
+/* SYS_COM2 operations (arg 1) */
+#define SYS_COM2_READ   0
+#define SYS_COM2_WRITE  1
 
 static inline long usys0(long n) {
     long r;
@@ -82,6 +88,22 @@ static inline long qrand_fill(void *buf, long len) {
  * negative if the caller lacks the quantum-pool capability. */
 static inline long qrand_seed_present(void) {
     return usys2(SYS_QRAND, 0, 0);
+}
+/* The boot qseed value the kernel accepted (0 = none), or negative errno
+ * (-4 EPERM) if the caller holds no quantum-pool read capability. */
+static inline long qseed_value(void) {
+    return usys0(SYS_QSEED);
+}
+
+/* Write `len` bytes to the COM2 swarm-bridge UART. Returns bytes written, or
+ * -4 EPERM without a COM2 device write-capability. */
+static inline long com2_write_bytes(const void *buf, long len) {
+    return usys3(SYS_COM2, SYS_COM2_WRITE, (long)buf, len);
+}
+/* Read up to `len` bytes from COM2 (non-blocking: returns 0 if none waiting),
+ * or -4 EPERM without a COM2 device read-capability. */
+static inline long com2_read_bytes(void *buf, long len) {
+    return usys3(SYS_COM2, SYS_COM2_READ, (long)buf, len);
 }
 
 /* Tiny string helpers (no libc) */

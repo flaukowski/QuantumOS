@@ -36,10 +36,28 @@
                          * an IPC send-capability for (EPERM if it holds none for
                          * that dest). Lets a service reply to the sender pid
                          * recv handed it rather than a first-match peer. */
+#define SYS_COM2    12  /* rdi = op (SYS_COM2_READ/WRITE), rsi = buf, rdx = len;
+                         * raw byte pipe on the COM2 swarm-bridge UART (0x2F8).
+                         * Gated on a CAP_RESOURCE_DEVICE capability over
+                         * DEVICE_ID_COM2 (CAP_WRITE to send, CAP_READ to recv);
+                         * EPERM without. Returns bytes moved (read may be 0 when
+                         * nothing is waiting — the pipe is non-blocking). */
+#define SYS_QSEED   13  /* returns the u64 boot qseed the kernel accepted on the
+                         * cmdline (0 = none). Gated on the same quantum-pool read
+                         * capability as SYS_QRAND (EPERM without) — lets an
+                         * attestation service name the entropy the system booted
+                         * with, so a host can bind the boot to that qseed. */
+
+/* SYS_COM2 operations (rdi) */
+#define SYS_COM2_READ    0
+#define SYS_COM2_WRITE   1
 
 /* Bytes SYS_QRAND will draw per call at most (a capless caller is denied
  * before any draw). */
 #define QRAND_MAX_BYTES  64
+
+/* Bytes SYS_COM2 will move per call at most (bounds the kernel bounce buffer). */
+#define COM2_MAX_BYTES   256
 
 /* Error returns (in rax) */
 #define SYSCALL_EINVAL   ((uint64_t)-1)

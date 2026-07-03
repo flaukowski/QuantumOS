@@ -112,6 +112,11 @@ quantum_result_t quantum_user_random(uint32_t pid, uint8_t *out, uint32_t count,
 uint32_t quantum_kernel_rand(void);
 uint64_t quantum_bits_consumed(void);
 
+/* The boot qseed the kernel accepted on the cmdline (0 = none). Backs the
+ * capability-gated SYS_QSEED so a ring-3 attestation service can bind its
+ * boot record to the exact entropy the system started with. */
+uint64_t quantum_boot_seed(void);
+
 /* Pool statistics */
 void quantum_get_pool_stats(qubit_pool_t *stats);
 

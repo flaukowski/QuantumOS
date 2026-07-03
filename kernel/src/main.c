@@ -10,6 +10,7 @@
 #include <kernel/service.h>
 #include <kernel/gdt.h>
 #include <kernel/syscall.h>
+#include <kernel/com2_uart.h>
 #include <kernel/vga.h>
 #include <kernel/fb.h>
 
@@ -125,6 +126,10 @@ static void kernel_init(void) {
     splash_stage("descriptor tables + syscalls", 45);
     gdt_init();
     syscall_init();
+
+    // Bring up the COM2 serial swarm bridge (0x2F8, polled, capability-guarded).
+    // COM1/console is untouched; swarm_svc drives this port from ring 3.
+    com2_init();
 
     // Initialize core services
     splash_stage("capabilities + quantum resources", 60);

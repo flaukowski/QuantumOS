@@ -427,6 +427,10 @@ uint64_t quantum_bits_consumed(void) {
     return qrand_bits_served;
 }
 
+uint64_t quantum_boot_seed(void) {
+    return boot_entropy_present ? boot_entropy : 0;
+}
+
 /* ============================================================================
  * Boot self-test
  * ============================================================================ */
