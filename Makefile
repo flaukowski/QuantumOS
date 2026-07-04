@@ -23,9 +23,17 @@ endif
 GDB = gdb-multiarch
 
 # Compiler flags
+# -MMD -MP: emit header dependency files next to each object, so an edit to
+# any kernel header rebuilds every .c that includes it. Without this, a
+# struct-layout change (e.g. growing process_t) leaves stale objects compiled
+# against the OLD layout — translation units then disagree about field
+# offsets and sizeof, which manifests as wild memory corruption at runtime
+# (found live in epic #62 phase 2). CI builds clean and never sees it; local
+# incremental builds absolutely do.
 CFLAGS = -Wall -Wextra -Werror -nostdlib -ffreestanding -mno-red-zone \
          -mno-mmx -mno-sse -mno-sse2 -fno-omit-frame-pointer \
          -fno-stack-protector -fno-pic -fno-pie -mcmodel=kernel \
+         -MMD -MP \
          -I$(KERNEL_DIR)/include -I$(KERNEL_DIR)/../msi/include
 
 # Linker flags
@@ -84,7 +92,12 @@ OBJECTS = $(KERNEL_SOURCES:$(KERNEL_DIR)/src/%.c=$(BUILD_DIR)/%.o) \
           $(IPC_SOURCES:$(KERNEL_DIR)/src/ipc/%.c=$(BUILD_DIR)/ipc/%.o) \
           $(RESONANCE_SOURCES:$(KERNEL_DIR)/src/resonance/%.c=$(BUILD_DIR)/resonance/%.o) \
           $(ASSEMBLY_SOURCES:$(KERNEL_DIR)/src/%.S=$(BUILD_DIR)/%_asm.o) \
-          $(USER_ELF_OBJS)
+          $(USER_ELF_OBJS) \
+          $(BUILD_DIR)/initrd_tar.o
+
+# Auto-generated header dependencies (-MMD). Missing .d files (asm, wrapped
+# binaries, first build) are silently ignored.
+-include $(OBJECTS:.o=.d)
 
 # Targets
 .PHONY: all clean kernel run debug dump test test-list test-coverage ci-smoke ci-smoke-resonant ci-smoke-qseed ci-smoke-swarm swarm-pingpong
@@ -124,6 +137,23 @@ $(USER_BUILD)/%.elf: $(USER_DIR)/%.c $(USER_DIR)/user.ld $(USER_DIR)/usys.h $(US
 $(USER_BUILD)/%_elf.o: $(USER_BUILD)/%.elf
 	cd $(USER_BUILD) && $(OBJCOPY) -I binary -O elf64-x86-64 -B i386:x86-64 \
 		$*.elf $*_elf.o
+
+# --- Embedded initrd (epic #62 phase 2) --------------------------------------
+# A deterministic ustar archive of rootfs/, wrapped like the user ELFs so the
+# kernel carries it (symbols _binary_initrd_tar_{start,end}). The GNU tar
+# flags pin ordering/ownership/mtime so identical trees give identical bytes.
+ROOTFS_DIR = rootfs
+ROOTFS_FILES = $(shell find $(ROOTFS_DIR) -type f 2>/dev/null)
+
+$(BUILD_DIR)/initrd.tar: $(ROOTFS_FILES)
+	@mkdir -p $(BUILD_DIR)
+	@echo "Building initrd (ustar) from $(ROOTFS_DIR)/..."
+	tar --format=ustar --sort=name --owner=0 --group=0 --numeric-owner \
+		--mtime='@0' -C $(ROOTFS_DIR) -cf $@ .
+
+$(BUILD_DIR)/initrd_tar.o: $(BUILD_DIR)/initrd.tar
+	cd $(BUILD_DIR) && $(OBJCOPY) -I binary -O elf64-x86-64 -B i386:x86-64 \
+		initrd.tar initrd_tar.o
 
 $(BUILD_DIR)/%.o: $(KERNEL_DIR)/src/%.c
 	@mkdir -p $(dir $@)
@@ -311,7 +341,7 @@ ci-smoke: kernel
 	@echo "[1/3] Build verified: $(BUILD_DIR)/kernel.elf exists"
 	@test -f $(BUILD_DIR)/kernel.elf || (echo "ERROR: Kernel not built" && exit 1)
 	@echo "[2/3] Running QEMU boot test (14 second timeout, shell session piped into the console)..."
-	@( printf 'help\nps\nfree\nuptime\nghost\nqrand\nexit\n'; sleep 13 ) | \
+	@( printf 'help\nps\nfree\nuptime\nghost\nqrand\nls\ncat /docs/hello.txt\nexit\n'; sleep 13 ) | \
 		timeout 14s qemu-system-x86_64 -kernel $(BUILD_DIR)/kernel.elf32 \
 		-serial stdio -m 128M -display none -no-reboot 2>&1 | tee /tmp/qemu-boot.log || true
 	@echo ""
@@ -437,6 +467,28 @@ ci-smoke: kernel
 		echo ""; echo "=== Smoke Test FAILED ==="; exit 1; \
 	fi
 	@echo "SUCCESS: uptime + qrand answered (shell quantum-pool cap live)"
+	@# epic #62 phase 2 (issue #64): the shell must greet with /etc/motd read
+	@# through the VFS off the embedded initrd.
+	@if ! grep -q "Welcome to QuantumOS" /tmp/qemu-boot.log 2>/dev/null; then \
+		echo "ERROR: motd was not served through the VFS (Welcome to QuantumOS)"; \
+		echo "Boot log:"; cat /tmp/qemu-boot.log 2>/dev/null || true; \
+		echo ""; echo "=== Smoke Test FAILED ==="; exit 1; \
+	fi
+	@echo "SUCCESS: motd greeted through the VFS (initrd read path live)"
+	@# 'ls' must list the initrd inventory (SYS_READDIR).
+	@if ! grep -q "FS: etc/motd" /tmp/qemu-boot.log 2>/dev/null; then \
+		echo "ERROR: piped 'ls' did not list the initrd (FS: etc/motd)"; \
+		echo "Boot log:"; cat /tmp/qemu-boot.log 2>/dev/null || true; \
+		echo ""; echo "=== Smoke Test FAILED ==="; exit 1; \
+	fi
+	@echo "SUCCESS: ls listed the initrd inventory (SYS_READDIR live)"
+	@# 'cat' must stream a file's actual bytes (open/read/close round trip).
+	@if ! grep -q "The initrd is real" /tmp/qemu-boot.log 2>/dev/null; then \
+		echo "ERROR: piped 'cat /docs/hello.txt' did not print the file (The initrd is real)"; \
+		echo "Boot log:"; cat /tmp/qemu-boot.log 2>/dev/null || true; \
+		echo ""; echo "=== Smoke Test FAILED ==="; exit 1; \
+	fi
+	@echo "SUCCESS: cat streamed a file off the initrd (open/read/close live)"
 	@# Capability gate: the capless ghost-test must be denied SYS_CONS — only
 	@# qsh holds the console device capability.
 	@if ! grep -q "CONS: capless caller denied (EPERM)" /tmp/qemu-boot.log 2>/dev/null; then \

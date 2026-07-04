@@ -24,6 +24,10 @@
 #define SYS_FIELD_SNAPSHOT 14
 #define SYS_CONS 15
 #define SYS_SYSINFO 16
+#define SYS_OPEN 17
+#define SYS_READ 18
+#define SYS_CLOSE 19
+#define SYS_READDIR 20
 
 /* SYS_COM2 operations (arg 1) */
 #define SYS_COM2_READ 0
@@ -152,6 +156,26 @@ static inline long cons_write(const void *buf, long len) {
  * buf. Uncapped, read-only. Returns bytes copied. */
 static inline long sysinfo(long op, void *buf, long len) {
     return usys3(SYS_SYSINFO, op, (long)buf, len);
+}
+
+/* Open a regular file on the read-only embedded initrd. Returns a small
+ * non-negative fd, -6 ENOENT if the path names no file. */
+static inline long open_(const char *path) {
+    return usys1(SYS_OPEN, (long)path);
+}
+/* Sequential read from an open initrd file. Returns bytes copied (0 = EOF),
+ * -1 EINVAL on a bad fd. */
+static inline long read_(long fd, void *buf, long len) {
+    return usys3(SYS_READ, fd, (long)buf, len);
+}
+/* Release an fd table slot. */
+static inline long close_(long fd) {
+    return usys1(SYS_CLOSE, fd);
+}
+/* Kernel-formatted initrd listing under `path` ("/" lists everything):
+ * one "FS: <name> <size>" line per file. Returns bytes copied. */
+static inline long readdir_(const char *path, void *buf, long len) {
+    return usys3(SYS_READDIR, (long)path, (long)buf, len);
 }
 
 /* Tiny string helpers (no libc) */

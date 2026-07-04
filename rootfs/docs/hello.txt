@@ -1,0 +1,2 @@
+The initrd is real: this file was read through the VFS, from a ustar
+archive built at compile time and carried inside the kernel image.

@@ -23,6 +23,7 @@
 #include <kernel/service.h>
 #include <kernel/com2_uart.h>
 #include <kernel/console.h>
+#include <kernel/initrd.h>
 #include <kernel/boot.h>
 
 /* Embedded user programs (kernel/src/user_blob.S) */
@@ -408,6 +409,129 @@ static uint64_t sys_sysinfo(uint32_t pid, uint64_t op, uint64_t user_ptr, uint64
     return n;
 }
 
+/* ---- Read-only VFS over the embedded initrd (epic #62 phase 2, #64) ----
+ *
+ * Four calls: open/read/close/readdir. The backing store is the ustar
+ * archive baked into the kernel image — public, read-only data — so the
+ * calls are uncapped like SYS_SYSINFO (per-file capabilities are future
+ * work). File state lives in the caller's PCB fd table and dies with it. */
+
+/* Copy a NUL-terminated path out of user memory, bounded. Returns 0 on
+ * success, -1 if the pointer or termination is bad. */
+static int copy_user_path(uint64_t user_ptr, char *dst, size_t max) {
+    if (!in_user_range(user_ptr)) {
+        return -1;
+    }
+    const char *src = (const char *)user_ptr;
+    size_t i = 0;
+    while (i < max - 1 && in_user_range(user_ptr + i) && src[i]) {
+        dst[i] = src[i];
+        i++;
+    }
+    dst[i] = '\0';
+    return 0;
+}
+
+static uint64_t sys_open(uint32_t pid, uint64_t path_ptr) {
+    process_t *cur = process_get_by_pid(pid);
+    if (!cur) {
+        return SYSCALL_EINVAL;
+    }
+
+    char path[VFS_PATH_MAX];
+    if (copy_user_path(path_ptr, path, sizeof(path)) != 0) {
+        return SYSCALL_EFAULT;
+    }
+
+    const uint8_t *data = NULL;
+    uint32_t size = 0;
+    if (initrd_lookup(path, &data, &size) != 0) {
+        return SYSCALL_ENOENT;
+    }
+
+    for (uint32_t fd = 0; fd < PROCESS_MAX_FDS; fd++) {
+        if (!cur->fds[fd].used) {
+            cur->fds[fd].data = data;
+            cur->fds[fd].size = size;
+            cur->fds[fd].offset = 0;
+            cur->fds[fd].used = true;
+            return fd;
+        }
+    }
+    return SYSCALL_EIO; /* fd table full */
+}
+
+static uint64_t sys_read(uint32_t pid, uint64_t fd, uint64_t user_ptr, uint64_t len) {
+    process_t *cur = process_get_by_pid(pid);
+    if (!cur || fd >= PROCESS_MAX_FDS || !cur->fds[fd].used) {
+        return SYSCALL_EINVAL;
+    }
+    if (len == 0) {
+        return 0;
+    }
+    if (!in_user_range(user_ptr)) {
+        return SYSCALL_EFAULT;
+    }
+
+    uint32_t remaining = cur->fds[fd].size - cur->fds[fd].offset;
+    if (len > remaining) {
+        len = remaining;
+    }
+
+    const uint8_t *src = cur->fds[fd].data + cur->fds[fd].offset;
+    uint8_t *dst = (uint8_t *)user_ptr;
+    uint32_t n = 0;
+    while (n < len && in_user_range(user_ptr + n)) {
+        dst[n] = src[n];
+        n++;
+    }
+    cur->fds[fd].offset += n;
+    return n;
+}
+
+static uint64_t sys_close(uint32_t pid, uint64_t fd) {
+    process_t *cur = process_get_by_pid(pid);
+    if (!cur || fd >= PROCESS_MAX_FDS || !cur->fds[fd].used) {
+        return SYSCALL_EINVAL;
+    }
+    cur->fds[fd].used = false;
+    cur->fds[fd].data = NULL;
+    cur->fds[fd].size = 0;
+    cur->fds[fd].offset = 0;
+    return 0;
+}
+
+static uint64_t sys_readdir(uint32_t pid, uint64_t path_ptr, uint64_t user_ptr, uint64_t len) {
+    (void)pid;
+    if (len == 0) {
+        return 0;
+    }
+    if (!in_user_range(user_ptr)) {
+        return SYSCALL_EFAULT;
+    }
+
+    char path[VFS_PATH_MAX];
+    if (copy_user_path(path_ptr, path, sizeof(path)) != 0) {
+        return SYSCALL_EFAULT;
+    }
+
+    /* Static bounce buffer: syscalls run cli'd on one CPU (same
+     * justification as sys_sysinfo). */
+    static char tmp[SYSINFO_MAX_BYTES];
+    size_t produced = initrd_format_list(path, tmp, sizeof(tmp));
+
+    if (len > produced) {
+        len = produced;
+    }
+    char *dst = (char *)user_ptr;
+    uint32_t n = 0;
+    while (n < len && in_user_range(user_ptr + n)) {
+        dst[n] = tmp[n];
+        n++;
+    }
+    return n;
+}
+
 /* Report the boot qseed (SYS_QSEED). Gated on the same quantum-pool read
  * capability as SYS_QRAND — a capless caller cannot even learn the seed. The
  * value lets a ring-3 attestation service bind its boot record to the exact
@@ -524,6 +648,18 @@ static void syscall_dispatch(cpu_state_t *state) {
         break;
     case SYS_SYSINFO:
         state->rax = sys_sysinfo(pid, state->rdi, state->rsi, state->rdx);
+        break;
+    case SYS_OPEN:
+        state->rax = sys_open(pid, state->rdi);
+        break;
+    case SYS_READ:
+        state->rax = sys_read(pid, state->rdi, state->rsi, state->rdx);
+        break;
+    case SYS_CLOSE:
+        state->rax = sys_close(pid, state->rdi);
+        break;
+    case SYS_READDIR:
+        state->rax = sys_readdir(pid, state->rdi, state->rsi, state->rdx);
         break;
     default:
         state->rax = SYSCALL_ENOSYS;
