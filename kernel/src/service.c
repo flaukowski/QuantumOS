@@ -136,6 +136,23 @@ svc_result_t service_register(const service_definition_t *def, uint32_t *service
     return SVC_ERROR_NO_SPACE;
 }
 
+/* Interrupt save/restore (single CPU): start_slot must commit the whole
+ * spawn -> grant caps -> record pid/generation sequence atomically vs the
+ * scheduler, or a watchdog-reborn service (spawned from the IF=1 health
+ * monitor thread) could be preempted and SCHEDULED before its console /
+ * quantum / spawn caps and slot->info.pid exist — it would then run with
+ * no authority (console EPERM -> shell suicide) and, if the reaper freed
+ * the half-built PCB first, the caps would be minted for a dead, recyclable
+ * pid and never revoked. cli across the commit closes that window. */
+static inline uint64_t svc_irq_save(void) {
+    uint64_t flags;
+    __asm__ volatile("pushfq; pop %0; cli" : "=r"(flags) : : "memory");
+    return flags;
+}
+static inline void svc_irq_restore(uint64_t flags) {
+    __asm__ volatile("push %0; popfq" : : "r"(flags) : "memory");
+}
+
 static svc_result_t start_slot(service_slot_t *slot) {
     if (slot->info.state == SERVICE_STATE_RUNNING || slot->info.state == SERVICE_STATE_STARTING) {
         return SVC_SUCCESS;
@@ -161,11 +178,18 @@ static svc_result_t start_slot(service_slot_t *slot) {
 
     slot->info.state = SERVICE_STATE_STARTING;
 
+    /* Commit the spawn atomically vs the scheduler (see svc_irq_save). The
+     * process_create inside spawn enqueues the process as READY immediately;
+     * without this the timer could preempt us and run it before its caps and
+     * pid are committed below. */
+    uint64_t irqflags = svc_irq_save();
+
     uint32_t pid = 0;
     if (slot->def.user_elf_start) {
         /* Isolated ring-3 user-process service, loaded from its ELF */
         if (user_process_spawn_elf(slot->info.name, slot->def.user_elf_start,
                                    slot->def.user_elf_end, &pid) != STATUS_SUCCESS) {
+            svc_irq_restore(irqflags);
             slot->info.state = SERVICE_STATE_CRASHED;
             slot->starting = 0;
             return SVC_ERROR_SPAWN_FAILED;
@@ -220,12 +244,25 @@ static svc_result_t start_slot(service_slot_t *slot) {
             boot_log(slot->info.name);
         }
     }
+    if (slot->def.grant_spawn) {
+        uint32_t scap = CAP_ID_INVALID;
+        if (cap_create(pid, CAP_RESOURCE_PROCESS, SPAWN_RESOURCE_ID, CAP_EXECUTE, 0, &scap) !=
+            CAP_SUCCESS) {
+            boot_log("service: spawn cap grant failed");
+            boot_log(slot->info.name);
+        }
+    }
 
     slot->info.pid = pid;
+    slot->info.pid_generation = process_get_generation(pid);
     slot->info.start_time = timer_get_ticks();
     slot->last_heartbeat = timer_get_ticks();
     slot->info.state = SERVICE_STATE_RUNNING;
     slot->starting = 0;
+
+    /* All caps minted and pid/generation recorded — the reborn process may
+     * now be scheduled with full authority. */
+    svc_irq_restore(irqflags);
 
     boot_log("service started:");
     boot_log(slot->info.name);
@@ -255,13 +292,20 @@ svc_result_t service_stop(uint32_t service_id) {
 
     slot->info.state = SERVICE_STATE_STOPPING;
 
-    /* Retire the service process: block it out of the scheduler's
-     * rotation, then tear it down (revokes its capabilities too) */
-    if (slot->info.pid != 0) {
+    /* Retire the service process: block it out of the scheduler's rotation,
+     * then tear it down (revokes its capabilities too). But ONLY if the pid
+     * still names the process we spawned — a service can reach TERMINATED and
+     * be freed by the idle reaper up to ~2 s before the watchdog trips, and
+     * pids are recycled first-fit, so an unguarded destroy here would remove
+     * an innocent process that landed in the freed slot. The generation check
+     * makes this a no-op when the slot has been recycled (the process is
+     * already gone, which is what we wanted anyway). */
+    if (slot->info.pid != 0 && process_is_valid(slot->info.pid) &&
+        process_get_generation(slot->info.pid) == slot->info.pid_generation) {
         process_set_state(slot->info.pid, PROCESS_STATE_BLOCKED);
         process_destroy(slot->info.pid);
-        slot->info.pid = 0;
     }
+    slot->info.pid = 0;
 
     slot->info.capabilities = CAP_ID_INVALID;
     slot->info.state = SERVICE_STATE_STOPPED;

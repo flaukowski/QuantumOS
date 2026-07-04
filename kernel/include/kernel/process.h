@@ -216,6 +216,12 @@ status_t process_reset_stats(void);
  * SYS_SYSINFO). Bounded, NUL-terminated; returns bytes written. */
 size_t process_format_ps(char *buf, size_t max);
 
+/* Generation of the slot backing `pid`, bumped on every (re)use. A holder
+ * of a pid captured earlier can compare this against the value it saw to
+ * tell whether the slot still holds the same process or has been recycled
+ * to an unrelated one (epic #62 phase 3 watchdog hardening). */
+uint32_t process_get_generation(uint32_t pid);
+
 /* Quantum process support */
 status_t process_set_quantum_aware(uint32_t pid, bool aware);
 bool process_is_quantum_aware(uint32_t pid);

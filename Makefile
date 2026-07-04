@@ -142,14 +142,26 @@ $(USER_BUILD)/%_elf.o: $(USER_BUILD)/%.elf
 # A deterministic ustar archive of rootfs/, wrapped like the user ELFs so the
 # kernel carries it (symbols _binary_initrd_tar_{start,end}). The GNU tar
 # flags pin ordering/ownership/mtime so identical trees give identical bytes.
+#
+# Phase 3: the archive is built from a STAGING copy of rootfs/ into which the
+# compiled /bin programs are placed — programs that live on the filesystem
+# and are started by the shell via SYS_SPAWN, NOT embedded in the kernel like
+# the service ELFs. First citizen: /bin/hello.
 ROOTFS_DIR = rootfs
 ROOTFS_FILES = $(shell find $(ROOTFS_DIR) -type f 2>/dev/null)
+ROOTFS_STAGE = $(BUILD_DIR)/rootfs-stage
+INITRD_BIN_PROGS = hello
 
-$(BUILD_DIR)/initrd.tar: $(ROOTFS_FILES)
+$(BUILD_DIR)/initrd.tar: $(ROOTFS_FILES) $(INITRD_BIN_PROGS:%=$(USER_BUILD)/%.elf)
 	@mkdir -p $(BUILD_DIR)
-	@echo "Building initrd (ustar) from $(ROOTFS_DIR)/..."
+	@echo "Staging initrd tree ($(ROOTFS_DIR)/ + /bin programs)..."
+	rm -rf $(ROOTFS_STAGE)
+	mkdir -p $(ROOTFS_STAGE)/bin
+	cp -r $(ROOTFS_DIR)/. $(ROOTFS_STAGE)/
+	$(foreach p,$(INITRD_BIN_PROGS),cp $(USER_BUILD)/$(p).elf $(ROOTFS_STAGE)/bin/$(p);)
+	@echo "Building initrd (ustar)..."
 	tar --format=ustar --sort=name --owner=0 --group=0 --numeric-owner \
-		--mtime='@0' -C $(ROOTFS_DIR) -cf $@ .
+		--mtime='@0' -C $(ROOTFS_STAGE) -cf $@ .
 
 $(BUILD_DIR)/initrd_tar.o: $(BUILD_DIR)/initrd.tar
 	cd $(BUILD_DIR) && $(OBJCOPY) -I binary -O elf64-x86-64 -B i386:x86-64 \
@@ -341,7 +353,7 @@ ci-smoke: kernel
 	@echo "[1/3] Build verified: $(BUILD_DIR)/kernel.elf exists"
 	@test -f $(BUILD_DIR)/kernel.elf || (echo "ERROR: Kernel not built" && exit 1)
 	@echo "[2/3] Running QEMU boot test (14 second timeout, shell session piped into the console)..."
-	@( printf 'help\nps\nfree\nuptime\nghost\nqrand\nls\ncat /docs/hello.txt\nexit\n'; sleep 13 ) | \
+	@( printf 'help\nps\nfree\nuptime\nghost\nqrand\nls\ncat /docs/hello.txt\nrun /bin/hello\nexit\n'; sleep 13 ) | \
 		timeout 14s qemu-system-x86_64 -kernel $(BUILD_DIR)/kernel.elf32 \
 		-serial stdio -m 128M -display none -no-reboot 2>&1 | tee /tmp/qemu-boot.log || true
 	@echo ""
@@ -489,6 +501,29 @@ ci-smoke: kernel
 		echo ""; echo "=== Smoke Test FAILED ==="; exit 1; \
 	fi
 	@echo "SUCCESS: cat streamed a file off the initrd (open/read/close live)"
+	@# epic #62 phase 3 (issue #65): 'run /bin/hello' must start a program OFF
+	@# THE FILESYSTEM (not kernel-embedded) and the program must actually run.
+	@if ! grep -q "HELLO: greetings from /bin/hello" /tmp/qemu-boot.log 2>/dev/null; then \
+		echo "ERROR: /bin/hello did not run from the initrd (HELLO: greetings)"; \
+		echo "Boot log:"; cat /tmp/qemu-boot.log 2>/dev/null || true; \
+		echo ""; echo "=== Smoke Test FAILED ==="; exit 1; \
+	fi
+	@echo "SUCCESS: shell executed a program off the filesystem (SYS_SPAWN live)"
+	@# ...and the shell must collect its exit code (SYS_WAITPID round trip).
+	@if ! grep -q "exited (code 42)" /tmp/qemu-boot.log 2>/dev/null; then \
+		echo "ERROR: the shell did not report hello's exit code (exited (code 42))"; \
+		echo "Boot log:"; cat /tmp/qemu-boot.log 2>/dev/null || true; \
+		echo ""; echo "=== Smoke Test FAILED ==="; exit 1; \
+	fi
+	@echo "SUCCESS: exit code returned to the shell (SYS_WAITPID live)"
+	@# Capability gate: the capless ghost-test must be denied SYS_SPAWN — only
+	@# qsh holds the spawn capability.
+	@if ! grep -q "SPAWN: capless caller denied (EPERM)" /tmp/qemu-boot.log 2>/dev/null; then \
+		echo "ERROR: capless SYS_SPAWN was not denied (SPAWN: capless caller denied)"; \
+		echo "Boot log:"; cat /tmp/qemu-boot.log 2>/dev/null || true; \
+		echo ""; echo "=== Smoke Test FAILED ==="; exit 1; \
+	fi
+	@echo "SUCCESS: SYS_SPAWN capability gate proven (capless caller denied EPERM)"
 	@# Capability gate: the capless ghost-test must be denied SYS_CONS — only
 	@# qsh holds the console device capability.
 	@if ! grep -q "CONS: capless caller denied (EPERM)" /tmp/qemu-boot.log 2>/dev/null; then \

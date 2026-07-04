@@ -1,0 +1,7 @@
+# The initrd is built by tar'ing rootfs/ — its bytes must be identical on
+# every platform, so these files must never be CRLF-converted on checkout.
+rootfs/** text eol=lf
+
+# Shell scripts run under WSL/Linux and die on CRLF ("$'\r': command not
+# found"); keep them LF everywhere.
+scripts/*.sh text eol=lf

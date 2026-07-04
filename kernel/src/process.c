@@ -44,6 +44,13 @@ static char *strncpy_local(char *dest, const char *src, size_t n) {
 static process_t process_table[MAX_PROCESSES];
 static bool process_table_initialized = false;
 
+/* Per-slot generation counter, bumped every time a slot is (re)used.
+ * PIDs are slot indices allocated first-fit, so a freed slot's pid can
+ * be handed to an unrelated process; a stale holder of (pid) can be
+ * disambiguated from the current occupant by comparing generations.
+ * Lives outside the PCB so init_process_pcb's memset can't reset it. */
+static uint32_t process_generation[MAX_PROCESSES];
+
 /* Current running process */
 static process_t *current_process = NULL;
 static uint32_t current_pid = KERNEL_PROCESS_ID;
@@ -280,6 +287,10 @@ status_t process_create(const process_create_params_t *params, process_t **proce
     if (pid >= MAX_PROCESSES) {
         return PROCESS_ERROR_TOO_MANY_PROCESSES;
     }
+
+    /* New occupant of this slot — bump its generation so any stale holder
+     * of the old (pid) can detect the recycling (process_get_generation). */
+    process_generation[pid]++;
 
     /* Allocate memory for process stack */
     void *stack_memory = params->stack_address;
@@ -800,6 +811,13 @@ status_t process_get_stats(process_stats_t *stats) {
  * formats because it owns the table. Bounded by `max` (always
  * NUL-terminated); returns the byte count written, excluding the NUL.
  */
+uint32_t process_get_generation(uint32_t pid) {
+    if (pid >= MAX_PROCESSES) {
+        return 0;
+    }
+    return process_generation[pid];
+}
+
 size_t process_format_ps(char *buf, size_t max) {
     static const char *const state_names[] = {"UNUSED",  "CREATED",    "READY", "RUNNING",
                                               "BLOCKED", "TERMINATED", "ZOMBIE"};

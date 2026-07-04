@@ -96,6 +96,28 @@
                          * listing of initrd files under path ("/" lists all):
                          * one "FS: <name> <size>" line per file. Returns bytes
                          * copied. */
+#define SYS_SPAWN                                                                                  \
+    21 /* rdi = path ptr (NUL-terminated, user memory); load the
+                         * named initrd ELF into a fresh address space and start
+                         * it as a ring-3 process. Returns the new pid. Spawning
+                         * is REAL authority — gated on a CAP_RESOURCE_PROCESS
+                         * capability carrying CAP_EXECUTE over SPAWN_RESOURCE_ID
+                         * (EPERM without); only qsh is granted it. ENOENT if the
+                         * path names no file, EIO if the load fails. */
+#define SYS_WAITPID                                                                                \
+    22 /* rdi = target pid; poll a spawned process's fate. Returns
+                         * the exit code (0-255) once it has exited (served from
+                         * a small kernel exit ledger, so a reaped PCB still
+                         * answers), WAITPID_RUNNING (256) while it lives, ENOENT
+                         * if the pid is unknown. Non-blocking: the caller loops
+                         * with SYS_YIELD. Uncapped introspection, like
+                         * SYS_SYSINFO. */
+
+/* SYS_WAITPID: the target is still running. */
+#define WAITPID_RUNNING 256
+
+/* Resource id of the spawn right under CAP_RESOURCE_PROCESS. */
+#define SPAWN_RESOURCE_ID 0
 
 /* Bytes SYS_FIELD_SNAPSHOT stores at most (bounds the kernel viz buffer). */
 #define FIELD_SNAP_BYTES 256

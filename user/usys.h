@@ -28,6 +28,11 @@
 #define SYS_READ 18
 #define SYS_CLOSE 19
 #define SYS_READDIR 20
+#define SYS_SPAWN 21
+#define SYS_WAITPID 22
+
+/* SYS_WAITPID: the target is still running. */
+#define WAITPID_RUNNING 256
 
 /* SYS_COM2 operations (arg 1) */
 #define SYS_COM2_READ 0
@@ -176,6 +181,17 @@ static inline long close_(long fd) {
  * one "FS: <name> <size>" line per file. Returns bytes copied. */
 static inline long readdir_(const char *path, void *buf, long len) {
     return usys3(SYS_READDIR, (long)path, (long)buf, len);
+}
+
+/* Start an initrd ELF as a new ring-3 process. Returns the new pid, or
+ * -4 EPERM without the spawn capability, -6 ENOENT if no such file. */
+static inline long spawn_(const char *path) {
+    return usys1(SYS_SPAWN, (long)path);
+}
+/* Poll a spawned process: exit code (0-255) once exited, WAITPID_RUNNING
+ * (256) while it lives, -6 ENOENT for an unknown pid. */
+static inline long waitpid_(long pid) {
+    return usys1(SYS_WAITPID, pid);
 }
 
 /* Tiny string helpers (no libc) */

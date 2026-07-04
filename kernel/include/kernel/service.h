@@ -63,9 +63,12 @@ typedef struct {
     uint32_t service_id;
     char name[SERVICE_NAME_MAX];
     uint32_t pid;
-    uint32_t state;        /* service_state_t */
-    uint32_t capabilities; /* CAP_RESOURCE_SERVICE cap_id */
-    uint64_t start_time;   /* timer ticks */
+    uint32_t pid_generation; /* process_get_generation(pid) at spawn; guards
+                              * against acting on a recycled pid after the
+                              * idle reaper freed our PCB (phase 3 hardening) */
+    uint32_t state;          /* service_state_t */
+    uint32_t capabilities;   /* CAP_RESOURCE_SERVICE cap_id */
+    uint64_t start_time;     /* timer ticks */
     uint32_t restart_count;
     uint32_t max_restarts;
     uint32_t cpu_limit; /* quota fields; enforcement TODO */
@@ -104,6 +107,10 @@ typedef struct {
      * qsh, so the shell is the sole ring-3 process that can read keystrokes
      * or write raw console bytes (epic #62 phase 1). */
     uint8_t grant_console;
+    /* Grant a CAP_RESOURCE_PROCESS execute cap over SPAWN_RESOURCE_ID,
+     * re-minted on every start. The spawn right: SYS_SPAWN starts initrd
+     * programs only for holders. Held only by qsh (epic #62 phase 3). */
+    uint8_t grant_spawn;
 } service_definition_t;
 
 /* ============================================================================
