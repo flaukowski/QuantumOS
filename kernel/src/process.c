@@ -791,6 +791,83 @@ status_t process_get_stats(process_stats_t *stats) {
 }
 
 /**
+ * Format the live process table as text (backs SYS_SYSINFO's PS op,
+ * epic #62 phase 1). One line per non-UNUSED slot:
+ *
+ *   PS: <pid> <name> <STATE>\n
+ *
+ * The kernel formats so the user side needs no struct ABI, and this file
+ * formats because it owns the table. Bounded by `max` (always
+ * NUL-terminated); returns the byte count written, excluding the NUL.
+ */
+size_t process_format_ps(char *buf, size_t max) {
+    static const char *const state_names[] = {"UNUSED",  "CREATED",    "READY", "RUNNING",
+                                              "BLOCKED", "TERMINATED", "ZOMBIE"};
+    if (!buf || max == 0) {
+        return 0;
+    }
+
+    size_t o = 0;
+    for (uint32_t pid = 0; pid < MAX_PROCESSES; pid++) {
+        process_t *p = &process_table[pid];
+        if (p->state == PROCESS_STATE_UNUSED) {
+            continue;
+        }
+
+        /* Build one row into a small local first so a row never lands
+         * truncated in the output. */
+        char row[64];
+        size_t r = 0;
+        const char *pfx = "PS: ";
+        while (*pfx && r < sizeof(row) - 1) {
+            row[r++] = *pfx++;
+        }
+        /* pid (decimal) */
+        char t[10];
+        int n = 0;
+        uint32_t v = p->pid;
+        if (v == 0) {
+            t[n++] = '0';
+        }
+        while (v && n < (int)sizeof(t)) {
+            t[n++] = (char)('0' + (v % 10));
+            v /= 10;
+        }
+        while (n > 0 && r < sizeof(row) - 1) {
+            row[r++] = t[--n];
+        }
+        if (r < sizeof(row) - 1) {
+            row[r++] = ' ';
+        }
+        for (const char *s = p->name; *s && r < sizeof(row) - 1; s++) {
+            row[r++] = *s;
+        }
+        if (r < sizeof(row) - 1) {
+            row[r++] = ' ';
+        }
+        const char *st =
+            (p->state < sizeof(state_names) / sizeof(state_names[0])) ? state_names[p->state] : "?";
+        while (*st && r < sizeof(row) - 1) {
+            row[r++] = *st++;
+        }
+        /* Console line ending — the consumer is a serial terminal. */
+        if (r < sizeof(row) - 2) {
+            row[r++] = '\r';
+            row[r++] = '\n';
+        }
+
+        if (o + r + 1 > max) {
+            break; /* out of room — stop at a whole row */
+        }
+        for (size_t i = 0; i < r; i++) {
+            buf[o++] = row[i];
+        }
+    }
+    buf[o] = '\0';
+    return o;
+}
+
+/**
  * Dump process information for debugging
  */
 void process_dump_info(uint32_t pid) {

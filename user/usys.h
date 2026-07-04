@@ -22,10 +22,20 @@
 #define SYS_COM2 12
 #define SYS_QSEED 13
 #define SYS_FIELD_SNAPSHOT 14
+#define SYS_CONS 15
+#define SYS_SYSINFO 16
 
 /* SYS_COM2 operations (arg 1) */
 #define SYS_COM2_READ 0
 #define SYS_COM2_WRITE 1
+
+/* SYS_CONS operations (arg 1) */
+#define SYS_CONS_READ 0
+#define SYS_CONS_WRITE 1
+
+/* SYS_SYSINFO operations (arg 1) */
+#define SYSINFO_PS 0
+#define SYSINFO_MEM 1
 
 static inline long usys0(long n) {
     long r;
@@ -125,6 +135,23 @@ static inline long com2_read_bytes(void *buf, long len) {
  * present. Returns bytes stored. */
 static inline long field_snapshot(const void *buf, long len) {
     return usys2(SYS_FIELD_SNAPSHOT, (long)buf, len);
+}
+
+/* Drain up to `len` buffered console input bytes (COM1 RX + PS/2 keyboard).
+ * Non-blocking: returns 0 when nothing is waiting, or -4 EPERM without a
+ * console device read-capability. */
+static inline long cons_read(void *buf, long len) {
+    return usys3(SYS_CONS, SYS_CONS_READ, (long)buf, len);
+}
+/* Write `len` raw bytes to the console (no "[user pid]" prefix). Returns
+ * bytes written, or -4 EPERM without a console device write-capability. */
+static inline long cons_write(const void *buf, long len) {
+    return usys3(SYS_CONS, SYS_CONS_WRITE, (long)buf, len);
+}
+/* Copy kernel-formatted introspection text (SYSINFO_PS / SYSINFO_MEM) into
+ * buf. Uncapped, read-only. Returns bytes copied. */
+static inline long sysinfo(long op, void *buf, long len) {
+    return usys3(SYS_SYSINFO, op, (long)buf, len);
 }
 
 /* Tiny string helpers (no libc) */

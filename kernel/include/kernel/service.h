@@ -99,6 +99,11 @@ typedef struct {
      * Held only by swarm_svc, so it is the sole ring-3 process that can drive
      * the serial bridge (ghostd phase 4). */
     uint8_t grant_com2;
+    /* Grant a CAP_RESOURCE_DEVICE read/write cap over the interactive
+     * console (DEVICE_ID_CONSOLE), re-minted on every start. Held only by
+     * qsh, so the shell is the sole ring-3 process that can read keystrokes
+     * or write raw console bytes (epic #62 phase 1). */
+    uint8_t grant_console;
 } service_definition_t;
 
 /* ============================================================================
