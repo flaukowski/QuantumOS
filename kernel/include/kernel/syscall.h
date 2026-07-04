@@ -78,8 +78,30 @@
                          * and uncapped, like SYS_GETPID/SYS_TICKS: it names no
                          * authority, it only reports. Returns bytes copied. */
 
+#define SYS_OPEN                                                                                   \
+    17 /* rdi = path ptr (NUL-terminated, user memory); open a
+                         * regular file on the read-only embedded initrd. Returns
+                         * a small non-negative fd, ENOENT if the path names no
+                         * file, EIO if the caller's fd table is full. Uncapped:
+                         * the initrd is public read-only data baked into the
+                         * kernel image (per-file capabilities are future work,
+                         * noted in docs/INITRD_VFS.md). */
+#define SYS_READ                                                                                   \
+    18               /* rdi = fd, rsi = buf, rdx = len; sequential read from an
+                         * open initrd file. Returns bytes copied (0 = EOF),
+                         * EINVAL on a bad fd. */
+#define SYS_CLOSE 19 /* rdi = fd; release the fd table slot. */
+#define SYS_READDIR                                                                                \
+    20 /* rdi = path ptr, rsi = buf, rdx = len; kernel-formatted
+                         * listing of initrd files under path ("/" lists all):
+                         * one "FS: <name> <size>" line per file. Returns bytes
+                         * copied. */
+
 /* Bytes SYS_FIELD_SNAPSHOT stores at most (bounds the kernel viz buffer). */
 #define FIELD_SNAP_BYTES 256
+
+/* Longest path SYS_OPEN/SYS_READDIR will copy from user memory. */
+#define VFS_PATH_MAX 128
 
 /* SYS_COM2 operations (rdi) */
 #define SYS_COM2_READ 0
@@ -110,8 +132,9 @@
 #define SYSCALL_EINVAL ((uint64_t) - 1)
 #define SYSCALL_EFAULT ((uint64_t) - 2)
 #define SYSCALL_ENOSYS ((uint64_t) - 3)
-#define SYSCALL_EPERM ((uint64_t) - 4) /* no capability authorising the op */
-#define SYSCALL_EIO ((uint64_t) - 5)   /* delivery failed (e.g. queue full) */
+#define SYSCALL_EPERM ((uint64_t) - 4)  /* no capability authorising the op */
+#define SYSCALL_EIO ((uint64_t) - 5)    /* delivery failed (e.g. queue full) */
+#define SYSCALL_ENOENT ((uint64_t) - 6) /* no such file on the initrd */
 
 /* User memory window: identity-mapped, user-bit pages above the
  * kernel heap. Each user process gets one 2 MB region (code at the

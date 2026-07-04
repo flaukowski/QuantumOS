@@ -26,6 +26,7 @@
  * ============================================================================ */
 
 #define MAX_PROCESSES 256          /* Maximum concurrent processes */
+#define PROCESS_MAX_FDS 8          /* Open initrd files per process (epic #62) */
 #define PROCESS_STACK_SIZE 8192    /* Default kernel stack size */
 #define MAX_THREADS_PER_PROCESS 16 /* Maximum threads per process */
 #define PROCESS_NAME_MAX_LEN 64    /* Maximum process name length */
@@ -122,6 +123,17 @@ typedef struct process {
         uint64_t quantum_runtime;  /* Time spent on quantum operations */
         uint32_t quantum_cap;      /* Capability for the shared qubit pool */
     } quantum;
+
+    /* VFS (epic #62 phase 2): per-process open-file table over the
+     * read-only embedded initrd. Cleared with the PCB, so nothing
+     * survives exit; the data pointers reference the embedded archive,
+     * which lives forever. */
+    struct {
+        const uint8_t *data; /* file bytes inside the embedded image */
+        uint32_t size;
+        uint32_t offset;
+        bool used;
+    } fds[PROCESS_MAX_FDS];
 
     /* Internal kernel fields */
     uint32_t magic;       /* Magic number for validation */

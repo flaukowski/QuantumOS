@@ -12,6 +12,7 @@
 #include <kernel/syscall.h>
 #include <kernel/com2_uart.h>
 #include <kernel/console.h>
+#include <kernel/initrd.h>
 #include <kernel/vga.h>
 #include <kernel/fb.h>
 #ifdef SCHED_RESONANT
@@ -148,6 +149,11 @@ static void kernel_init(void) {
     // CI has already piped into the serial console is rescued here, before
     // interrupts are even on. IRQ1/IRQ4 unmask alongside the timer below.
     console_init();
+
+    // Mount the embedded initrd (epic #62 phase 2): a read-only ustar
+    // archive baked into the kernel image, served to ring 3 through the
+    // SYS_OPEN/SYS_READ/SYS_CLOSE/SYS_READDIR VFS calls.
+    initrd_init();
 
     // Initialize core services
     splash_stage("capabilities + quantum resources", 60);

@@ -87,7 +87,54 @@ static const char *arg_of(const char *line, const char *cmd) {
  * ------------------------------------------------------------------ */
 
 static void cmd_help(void) {
-    out("qsh: commands: help echo ps free uptime pid qrand qseed ghost clear exit\r\n");
+    out("qsh: commands: help echo ps free uptime pid ls cat qrand qseed ghost clear exit\r\n");
+}
+
+/* Print an initrd file raw (used for the motd greeting and `cat`).
+ * Returns 0 on success, the negative errno if the open failed. */
+static long print_file(const char *path) {
+    long fd = open_(path);
+    if (fd < 0) {
+        return fd;
+    }
+    char buf[192];
+    long n;
+    char last = '\n';
+    while ((n = read_(fd, buf, sizeof(buf))) > 0) {
+        heartbeat();
+        out_bytes(buf, n);
+        last = buf[n - 1];
+    }
+    close_(fd);
+    if (last != '\n') {
+        out("\r\n");
+    }
+    return 0;
+}
+
+static void cmd_ls(const char *path) {
+    static char buf[900];
+    long n = readdir_(path, buf, sizeof(buf));
+    if (n > 0) {
+        out_bytes(buf, n);
+    } else {
+        out("qsh: ls: nothing found\r\n");
+    }
+}
+
+static void cmd_cat(const char *path) {
+    long err = print_file(path);
+    if (err != 0) {
+        char b[LINE_MAX + 48];
+        int o = ghost_put(b, 0, "qsh: cat: cannot open '");
+        for (int i = 0; path[i] && o < (int)sizeof(b) - 24; i++) {
+            b[o++] = path[i];
+        }
+        o = ghost_put(b, o, "' (err ");
+        o = ghost_put_u(b, o, (unsigned)(-err));
+        o = ghost_put(b, o, ")\r\n");
+        out_bytes(b, o);
+    }
 }
 
 static void cmd_ps(void) {
@@ -174,9 +221,14 @@ static void cmd_ghost(void) {
         return;
     }
 
+    /* Poll for the reply, heartbeating: ghostd may be compute-bound in a
+     * field relaxation for a while, and a silent wait would otherwise get
+     * this shell watchdog-killed mid-command (found live: the phase-2
+     * smoke run landed this query in ghostd's imprint window). */
     ghost_rep_t rep;
     long sender = 0;
-    for (int tries = 0; tries < 500 && sender == 0; tries++) {
+    for (int tries = 0; tries < 5000 && sender == 0; tries++) {
+        heartbeat();
         sender = recv_msg((char *)&rep, sizeof(rep));
         if (sender == 0) {
             yield();
@@ -230,6 +282,14 @@ static void execute(const char *line) {
         out("qsh: \r\n");
     } else if (is_cmd(line, "ps")) {
         cmd_ps();
+    } else if ((a = arg_of(line, "ls")) != 0) {
+        cmd_ls(a);
+    } else if (is_cmd(line, "ls")) {
+        cmd_ls("/");
+    } else if ((a = arg_of(line, "cat")) != 0) {
+        cmd_cat(a);
+    } else if (is_cmd(line, "cat")) {
+        out("qsh: cat: usage: cat <path>\r\n");
     } else if (is_cmd(line, "free")) {
         cmd_free();
     } else if (is_cmd(line, "uptime")) {
@@ -267,10 +327,26 @@ void _start(void) {
     } else {
         out("QSH: QuantumOS interactive shell ready — type 'help'\r\n");
     }
+
+    /* Greet with the message of the day — read through the VFS, off the
+     * embedded initrd. The first file the OS ever serves to a user. */
+    {
+        long err = print_file("/etc/motd");
+        if (err != 0) {
+            char b[48];
+            int o = ghost_put(b, 0, "QSH: motd open failed (err ");
+            o = ghost_put_u(b, o, (unsigned)(-err));
+            o = ghost_put(b, o, ")\r\n");
+            out_bytes(b, o);
+        }
+    }
+
     prompt();
 
     char line[LINE_MAX];
     int len = 0;
+    int esc = 0;      /* 0 = none, 1 = got ESC, 2 = inside a CSI sequence */
+    char prev_cr = 0; /* last byte was CR (suppress the LF of a CRLF pair) */
 
     for (;;) {
         heartbeat();
@@ -290,8 +366,39 @@ void _start(void) {
 
         for (long i = 0; i < n; i++) {
             char c = (char)chunk[i];
+
+            /* Swallow ANSI escape sequences (arrow keys over serial send
+             * ESC [ A etc.) instead of letting the residue pollute the
+             * line — mirrors the PS/2 path's unmapped extended keys. */
+            if (esc == 1) {
+                esc = (c == '[') ? 2 : 0;
+                continue;
+            }
+            if (esc == 2) {
+                if ((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || c == '~') {
+                    esc = 0;
+                }
+                continue;
+            }
+            if (c == 27) {
+                esc = 1;
+                continue;
+            }
+
+            /* A CRLF pair is ONE Enter: the CR executed the line, so the
+             * trailing LF must not run it again (double prompt). */
+            if (c == '\n' && prev_cr) {
+                prev_cr = 0;
+                continue;
+            }
+            prev_cr = (c == '\r');
+
             if (c == '\r' || c == '\n') {
                 out("\r\n");
+                /* Trim trailing spaces so "ps " matches the builtin. */
+                while (len > 0 && line[len - 1] == ' ') {
+                    len--;
+                }
                 line[len] = '\0';
                 execute(line);
                 len = 0;
