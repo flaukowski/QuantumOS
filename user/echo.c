@@ -20,7 +20,7 @@ void _start(void) {
     while (handled < 2 && spins < 100000) {
         long sender = recv_msg(buf, sizeof(buf));
         if (sender == 0) {
-            yield();          /* mailbox empty — let the client run */
+            yield(); /* mailbox empty — let the client run */
             spins++;
             continue;
         }
@@ -39,11 +39,12 @@ void _start(void) {
         }
         reply[i] = 0;
 
-        send_msg(reply, i);   /* routed to the client by capability */
+        send_msg(reply, i); /* routed to the client by capability */
         handled++;
     }
 
     write_str("echo-service: served requests, shutting down");
     exit_(0);
-    for (;;) { }
+    for (;;) {
+    }
 }

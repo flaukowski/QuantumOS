@@ -174,18 +174,16 @@ uint64_t scheduler_get_switches(void) {
     return switch_count;
 }
 
-status_t kernel_thread_create(const char *name, void (*entry)(void),
-                              uint8_t priority, uint32_t *pid_out) {
-    process_create_params_t params = {
-        .name = name,
-        .type = PROCESS_TYPE_KERNEL,
-        .priority = priority,
-        .parent_pid = KERNEL_PROCESS_ID,
-        .entry_point = (void *)entry,
-        .stack_address = NULL, /* process_create kmallocs a stack */
-        .stack_size = PROCESS_STACK_SIZE,
-        .is_quantum_aware = false
-    };
+status_t kernel_thread_create(const char *name, void (*entry)(void), uint8_t priority,
+                              uint32_t *pid_out) {
+    process_create_params_t params = {.name = name,
+                                      .type = PROCESS_TYPE_KERNEL,
+                                      .priority = priority,
+                                      .parent_pid = KERNEL_PROCESS_ID,
+                                      .entry_point = (void *)entry,
+                                      .stack_address = NULL, /* process_create kmallocs a stack */
+                                      .stack_size = PROCESS_STACK_SIZE,
+                                      .is_quantum_aware = false};
 
     process_t *thread = NULL;
     status_t result = process_create(&params, &thread);

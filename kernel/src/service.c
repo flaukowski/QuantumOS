@@ -26,10 +26,10 @@
 typedef struct {
     service_info_t info;
     service_definition_t def;
-    uint64_t last_heartbeat;   /* timer ticks */
+    uint64_t last_heartbeat; /* timer ticks */
     uint8_t registered;
     uint8_t monitored;
-    uint8_t starting;          /* dependency-cycle guard */
+    uint8_t starting; /* dependency-cycle guard */
 } service_slot_t;
 
 static service_slot_t services[MAX_SERVICES];
@@ -42,8 +42,10 @@ static uint32_t monitor_restarts = 0;
 
 static int str_eq(const char *a, const char *b) {
     while (*a && *b) {
-        if (*a != *b) return 0;
-        a++; b++;
+        if (*a != *b)
+            return 0;
+        a++;
+        b++;
     }
     return *a == *b;
 }
@@ -99,10 +101,8 @@ svc_result_t service_manager_init(void) {
     return SVC_SUCCESS;
 }
 
-svc_result_t service_register(const service_definition_t *def,
-                              uint32_t *service_id_out) {
-    if (!manager_initialized || !def || !def->name ||
-        (!def->entry && !def->user_elf_start)) {
+svc_result_t service_register(const service_definition_t *def, uint32_t *service_id_out) {
+    if (!manager_initialized || !def || !def->name || (!def->entry && !def->user_elf_start)) {
         return SVC_ERROR_INVALID_ARG;
     }
     if (slot_by_name(def->name)) {
@@ -118,14 +118,13 @@ svc_result_t service_register(const service_definition_t *def,
             slot->info.service_id = i + 1;
             str_copy_n(slot->info.name, def->name, SERVICE_NAME_MAX);
             slot->info.state = SERVICE_STATE_STOPPED;
-            slot->info.max_restarts = def->max_restarts ?
-                def->max_restarts : SERVICE_DEFAULT_MAX_RESTARTS;
+            slot->info.max_restarts =
+                def->max_restarts ? def->max_restarts : SERVICE_DEFAULT_MAX_RESTARTS;
             slot->info.cpu_limit = def->cpu_limit;
             slot->info.memory_limit = def->memory_limit;
             slot->info.quantum_limit = def->quantum_limit;
             for (uint32_t d = 0; d < SERVICE_MAX_DEPS && def->dependencies[d]; d++) {
-                str_copy_n(slot->info.dependencies[d], def->dependencies[d],
-                           SERVICE_NAME_MAX);
+                str_copy_n(slot->info.dependencies[d], def->dependencies[d], SERVICE_NAME_MAX);
             }
             if (service_id_out) {
                 *service_id_out = slot->info.service_id;
@@ -137,8 +136,7 @@ svc_result_t service_register(const service_definition_t *def,
 }
 
 static svc_result_t start_slot(service_slot_t *slot) {
-    if (slot->info.state == SERVICE_STATE_RUNNING ||
-        slot->info.state == SERVICE_STATE_STARTING) {
+    if (slot->info.state == SERVICE_STATE_RUNNING || slot->info.state == SERVICE_STATE_STARTING) {
         return SVC_SUCCESS;
     }
     if (slot->starting) {
@@ -173,8 +171,8 @@ static svc_result_t start_slot(service_slot_t *slot) {
         }
     } else {
         /* In-kernel thread service */
-        if (kernel_thread_create(slot->info.name, slot->def.entry,
-                                 PRIORITY_NORMAL, &pid) != STATUS_SUCCESS) {
+        if (kernel_thread_create(slot->info.name, slot->def.entry, PRIORITY_NORMAL, &pid) !=
+            STATUS_SUCCESS) {
             slot->info.state = SERVICE_STATE_CRASHED;
             slot->starting = 0;
             return SVC_ERROR_SPAWN_FAILED;
@@ -188,8 +186,8 @@ static svc_result_t start_slot(service_slot_t *slot) {
         }
     }
     uint32_t svc_cap = CAP_ID_INVALID;
-    if (cap_create(pid, CAP_RESOURCE_SERVICE, slot->info.service_id,
-                   CAP_READ | CAP_WRITE, 0, &svc_cap) == CAP_SUCCESS) {
+    if (cap_create(pid, CAP_RESOURCE_SERVICE, slot->info.service_id, CAP_READ | CAP_WRITE, 0,
+                   &svc_cap) == CAP_SUCCESS) {
         slot->info.capabilities = svc_cap;
     }
 
@@ -207,8 +205,8 @@ static svc_result_t start_slot(service_slot_t *slot) {
     }
     if (slot->def.grant_com2) {
         uint32_t dcap = CAP_ID_INVALID;
-        if (cap_create(pid, CAP_RESOURCE_DEVICE, DEVICE_ID_COM2,
-                       CAP_DEVICE | CAP_READ | CAP_WRITE, 0, &dcap) != CAP_SUCCESS) {
+        if (cap_create(pid, CAP_RESOURCE_DEVICE, DEVICE_ID_COM2, CAP_DEVICE | CAP_READ | CAP_WRITE,
+                       0, &dcap) != CAP_SUCCESS) {
             boot_log("service: COM2 device cap grant failed");
             boot_log(slot->info.name);
         }
@@ -242,8 +240,7 @@ svc_result_t service_stop(uint32_t service_id) {
     if (!slot) {
         return SVC_ERROR_NOT_FOUND;
     }
-    if (slot->info.state != SERVICE_STATE_RUNNING &&
-        slot->info.state != SERVICE_STATE_CRASHED) {
+    if (slot->info.state != SERVICE_STATE_RUNNING && slot->info.state != SERVICE_STATE_CRASHED) {
         return SVC_SUCCESS;
     }
 
@@ -346,8 +343,7 @@ static void health_monitor_scan(void) {
 
     for (uint32_t i = 0; i < MAX_SERVICES; i++) {
         service_slot_t *slot = &services[i];
-        if (!slot->registered || !slot->monitored ||
-            slot->info.state != SERVICE_STATE_RUNNING) {
+        if (!slot->registered || !slot->monitored || slot->info.state != SERVICE_STATE_RUNNING) {
             continue;
         }
         if (now - slot->last_heartbeat > SERVICE_HEARTBEAT_TIMEOUT) {
@@ -426,27 +422,35 @@ static void flaky_demo_service(void) {
  * Boot wiring + self-test
  * ============================================================================ */
 
-#define SV_ASSERT(cond, msg)                          \
-    do {                                              \
-        if (!(cond)) {                                \
-            boot_log("service-selftest FAIL: " msg);  \
-            return SVC_ERROR_INVALID_ARG;             \
-        }                                             \
+#define SV_ASSERT(cond, msg)                                                                       \
+    do {                                                                                           \
+        if (!(cond)) {                                                                             \
+            boot_log("service-selftest FAIL: " msg);                                               \
+            return SVC_ERROR_INVALID_ARG;                                                          \
+        }                                                                                          \
     } while (0)
 
 svc_result_t service_selftest(void) {
     /* Register built-ins: quantum-scheduler depends on entropy-manager,
      * exercising dependency-ordered startup */
     service_definition_t defs[] = {
-        { .name = "entropy-manager", .entry = entropy_manager_service,
-          .dependencies = { NULL }, .max_restarts = 3 },
-        { .name = "quantum-scheduler", .entry = quantum_scheduler_service,
-          .dependencies = { "entropy-manager", NULL }, .max_restarts = 3,
-          .quantum_limit = 8 },
-        { .name = "device-manager", .entry = device_manager_service,
-          .dependencies = { NULL }, .max_restarts = 3 },
-        { .name = "flaky-demo", .entry = flaky_demo_service,
-          .dependencies = { NULL }, .max_restarts = 2 },
+        {.name = "entropy-manager",
+         .entry = entropy_manager_service,
+         .dependencies = {NULL},
+         .max_restarts = 3},
+        {.name = "quantum-scheduler",
+         .entry = quantum_scheduler_service,
+         .dependencies = {"entropy-manager", NULL},
+         .max_restarts = 3,
+         .quantum_limit = 8},
+        {.name = "device-manager",
+         .entry = device_manager_service,
+         .dependencies = {NULL},
+         .max_restarts = 3},
+        {.name = "flaky-demo",
+         .entry = flaky_demo_service,
+         .dependencies = {NULL},
+         .max_restarts = 2},
     };
 
     for (uint32_t i = 0; i < ARRAY_SIZE(defs); i++) {
@@ -458,8 +462,7 @@ svc_result_t service_selftest(void) {
               "unknown service refused");
 
     /* Starting quantum-scheduler must start entropy-manager first */
-    SV_ASSERT(service_start("quantum-scheduler", NULL) == SVC_SUCCESS,
-              "dependency-ordered start");
+    SV_ASSERT(service_start("quantum-scheduler", NULL) == SVC_SUCCESS, "dependency-ordered start");
     uint32_t dep_id = 0;
     SV_ASSERT(service_find("entropy-manager", &dep_id) == SVC_SUCCESS, "find dep");
     service_info_t info;
@@ -480,8 +483,8 @@ svc_result_t service_selftest(void) {
     }
 
     /* Spawn the health monitor thread */
-    SV_ASSERT(kernel_thread_create("svc-monitor", health_monitor_thread,
-                                   PRIORITY_HIGH, NULL) == STATUS_SUCCESS,
+    SV_ASSERT(kernel_thread_create("svc-monitor", health_monitor_thread, PRIORITY_HIGH, NULL) ==
+                  STATUS_SUCCESS,
               "monitor thread");
 
     boot_log("service self-test: PASS");

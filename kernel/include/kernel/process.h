@@ -25,38 +25,38 @@
  * Constants
  * ============================================================================ */
 
-#define MAX_PROCESSES              256     /* Maximum concurrent processes */
-#define PROCESS_STACK_SIZE         8192    /* Default kernel stack size */
-#define MAX_THREADS_PER_PROCESS    16      /* Maximum threads per process */
-#define PROCESS_NAME_MAX_LEN       64      /* Maximum process name length */
-#define KERNEL_PROCESS_ID          0       /* Reserved for kernel process */
-#define INIT_PROCESS_ID            1       /* First user process */
+#define MAX_PROCESSES 256          /* Maximum concurrent processes */
+#define PROCESS_STACK_SIZE 8192    /* Default kernel stack size */
+#define MAX_THREADS_PER_PROCESS 16 /* Maximum threads per process */
+#define PROCESS_NAME_MAX_LEN 64    /* Maximum process name length */
+#define KERNEL_PROCESS_ID 0        /* Reserved for kernel process */
+#define INIT_PROCESS_ID 1          /* First user process */
 
 /* Process priorities */
-#define PRIORITY_IDLE              0       /* Lowest priority */
-#define PRIORITY_LOW               1       /* Low priority */
-#define PRIORITY_NORMAL            2       /* Normal priority */
-#define PRIORITY_HIGH              3       /* High priority */
-#define PRIORITY_REALTIME          4       /* Real-time priority */
-#define PRIORITY_KERNEL            5       /* Kernel priority (highest) */
+#define PRIORITY_IDLE 0     /* Lowest priority */
+#define PRIORITY_LOW 1      /* Low priority */
+#define PRIORITY_NORMAL 2   /* Normal priority */
+#define PRIORITY_HIGH 3     /* High priority */
+#define PRIORITY_REALTIME 4 /* Real-time priority */
+#define PRIORITY_KERNEL 5   /* Kernel priority (highest) */
 
 /* Process states */
 typedef enum {
-    PROCESS_STATE_UNUSED = 0,      /* Process slot not used */
-    PROCESS_STATE_CREATED,         /* Process created but not runnable */
-    PROCESS_STATE_READY,           /* Process ready to run */
-    PROCESS_STATE_RUNNING,         /* Process currently running */
-    PROCESS_STATE_BLOCKED,         /* Process blocked (waiting for I/O, etc.) */
-    PROCESS_STATE_TERMINATED,      /* Process terminated but not cleaned up */
-    PROCESS_STATE_ZOMBIE           /* Process terminated, waiting for parent */
+    PROCESS_STATE_UNUSED = 0, /* Process slot not used */
+    PROCESS_STATE_CREATED,    /* Process created but not runnable */
+    PROCESS_STATE_READY,      /* Process ready to run */
+    PROCESS_STATE_RUNNING,    /* Process currently running */
+    PROCESS_STATE_BLOCKED,    /* Process blocked (waiting for I/O, etc.) */
+    PROCESS_STATE_TERMINATED, /* Process terminated but not cleaned up */
+    PROCESS_STATE_ZOMBIE      /* Process terminated, waiting for parent */
 } process_state_t;
 
 /* Process types */
 typedef enum {
-    PROCESS_TYPE_KERNEL = 0,       /* Kernel process */
-    PROCESS_TYPE_USER,             /* Regular user process */
-    PROCESS_TYPE_SERVICE,          /* System service */
-    PROCESS_TYPE_QUANTUM           /* Quantum-aware process */
+    PROCESS_TYPE_KERNEL = 0, /* Kernel process */
+    PROCESS_TYPE_USER,       /* Regular user process */
+    PROCESS_TYPE_SERVICE,    /* System service */
+    PROCESS_TYPE_QUANTUM     /* Quantum-aware process */
 } process_type_t;
 
 /* ============================================================================
@@ -71,87 +71,87 @@ typedef enum {
  */
 typedef struct process {
     /* Basic process information */
-    uint32_t pid;                  /* Process ID */
-    uint32_t parent_pid;           /* Parent process ID */
+    uint32_t pid;                    /* Process ID */
+    uint32_t parent_pid;             /* Parent process ID */
     char name[PROCESS_NAME_MAX_LEN]; /* Process name */
-    process_type_t type;           /* Process type */
-    process_state_t state;         /* Current process state */
-    uint8_t priority;              /* Process priority */
-    
+    process_type_t type;             /* Process type */
+    process_state_t state;           /* Current process state */
+    uint8_t priority;                /* Process priority */
+
     /* Execution context */
-    uint64_t rip;                  /* Instruction pointer */
-    uint64_t rsp;                  /* Stack pointer */
-    uint64_t rbp;                  /* Base pointer */
-    uint64_t cr3;                  /* Page table physical address */
-    cpu_state_t context;           /* Full register state (saved/restored by
+    uint64_t rip;        /* Instruction pointer */
+    uint64_t rsp;        /* Stack pointer */
+    uint64_t rbp;        /* Base pointer */
+    uint64_t cr3;        /* Page table physical address */
+    cpu_state_t context; /* Full register state (saved/restored by
                                       the scheduler on the interrupt frame) */
-    bool context_valid;            /* context holds a runnable state */
-    
+    bool context_valid;  /* context holds a runnable state */
+
     /* Memory management */
-    void *virtual_address_space;   /* Virtual memory root */
-    size_t memory_size;            /* Total memory allocated */
-    void *stack_top;               /* Top of kernel stack */
-    void *stack_bottom;            /* Bottom of kernel stack */
-    bool owns_kernel_stack;        /* stack_bottom was kmalloc'd (kfree on destroy) */
-    
+    void *virtual_address_space; /* Virtual memory root */
+    size_t memory_size;          /* Total memory allocated */
+    void *stack_top;             /* Top of kernel stack */
+    void *stack_bottom;          /* Bottom of kernel stack */
+    bool owns_kernel_stack;      /* stack_bottom was kmalloc'd (kfree on destroy) */
+
     /* Process timing */
-    uint64_t creation_time;        /* When process was created */
-    uint64_t runtime_total;        /* Total runtime in nanoseconds */
-    uint64_t runtime_last;         /* Runtime of last quantum */
-    uint64_t last_scheduled;       /* Last time process was scheduled */
-    
+    uint64_t creation_time;  /* When process was created */
+    uint64_t runtime_total;  /* Total runtime in nanoseconds */
+    uint64_t runtime_last;   /* Runtime of last quantum */
+    uint64_t last_scheduled; /* Last time process was scheduled */
+
     /* IPC integration - queues managed internally by PID via ipc_process_init() */
-    uint32_t port_count;           /* Number of owned IPC ports */
-    
+    uint32_t port_count; /* Number of owned IPC ports */
+
     /* Capability security */
-    uint32_t capability_root;      /* Root capability for this process */
-    uint32_t capability_count;     /* Number of held capabilities */
-    
+    uint32_t capability_root;  /* Root capability for this process */
+    uint32_t capability_count; /* Number of held capabilities */
+
     /* Process relationships */
     uint32_t children[MAX_PROCESSES]; /* Child process PIDs */
-    uint32_t child_count;          /* Number of children */
-    
+    uint32_t child_count;             /* Number of children */
+
     /* Exit information */
-    int32_t exit_code;             /* Process exit code */
-    bool has_exited;               /* True if process has exited */
-    
+    int32_t exit_code; /* Process exit code */
+    bool has_exited;   /* True if process has exited */
+
     /* Quantum-specific fields (for quantum-aware processes) */
     struct {
         bool is_quantum_aware;     /* Process can use quantum resources */
         uint32_t qubit_allocation; /* Allocated qubits */
-        uint64_t quantum_runtime; /* Time spent on quantum operations */
+        uint64_t quantum_runtime;  /* Time spent on quantum operations */
         uint32_t quantum_cap;      /* Capability for the shared qubit pool */
     } quantum;
-    
+
     /* Internal kernel fields */
-    uint32_t magic;                /* Magic number for validation */
-    struct process *next;          /* Next process in scheduling queue */
-    struct process *prev;          /* Previous process in scheduling queue */
+    uint32_t magic;       /* Magic number for validation */
+    struct process *next; /* Next process in scheduling queue */
+    struct process *prev; /* Previous process in scheduling queue */
 } process_t;
 
 /**
  * Process creation parameters
  */
 typedef struct {
-    const char *name;              /* Process name */
-    process_type_t type;           /* Process type */
-    uint8_t priority;              /* Initial priority */
-    uint32_t parent_pid;           /* Parent process ID (0 for kernel) */
-    void *entry_point;             /* Process entry point */
-    void *stack_address;           /* Stack base address */
-    size_t stack_size;             /* Stack size */
-    bool is_quantum_aware;         /* Quantum-aware process flag */
+    const char *name;      /* Process name */
+    process_type_t type;   /* Process type */
+    uint8_t priority;      /* Initial priority */
+    uint32_t parent_pid;   /* Parent process ID (0 for kernel) */
+    void *entry_point;     /* Process entry point */
+    void *stack_address;   /* Stack base address */
+    size_t stack_size;     /* Stack size */
+    bool is_quantum_aware; /* Quantum-aware process flag */
 } process_create_params_t;
 
 /**
  * Process statistics
  */
 typedef struct {
-    uint32_t total_processes;      /* Total processes created */
-    uint32_t active_processes;     /* Currently active processes */
-    uint32_t zombie_processes;     /* Zombie processes */
-    uint64_t total_runtime;        /* Total runtime of all processes */
-    uint64_t context_switches;     /* Number of context switches */
+    uint32_t total_processes;  /* Total processes created */
+    uint32_t active_processes; /* Currently active processes */
+    uint32_t zombie_processes; /* Zombie processes */
+    uint64_t total_runtime;    /* Total runtime of all processes */
+    uint64_t context_switches; /* Number of context switches */
 } process_stats_t;
 
 /* ============================================================================
@@ -224,31 +224,31 @@ void process_reap(void);
  * ============================================================================ */
 
 /* Process magic number for validation */
-#define PROCESS_MAGIC 0x50524F43  /* "PROC" */
+#define PROCESS_MAGIC 0x50524F43 /* "PROC" */
 
 /* Process flags */
-#define PROCESS_FLAG_KERNEL        (1 << 0)  /* Kernel process */
-#define PROCESS_FLAG_SYSTEM        (1 << 1)  /* System process */
-#define PROCESS_FLAG_QUANTUM       (1 << 2)  /* Quantum-aware */
-#define PROCESS_FLAG_PRIVILEGED    (1 << 3)  /* Privileged process */
+#define PROCESS_FLAG_KERNEL (1 << 0)     /* Kernel process */
+#define PROCESS_FLAG_SYSTEM (1 << 1)     /* System process */
+#define PROCESS_FLAG_QUANTUM (1 << 2)    /* Quantum-aware */
+#define PROCESS_FLAG_PRIVILEGED (1 << 3) /* Privileged process */
 
 /* Process error codes */
-#define PROCESS_ERROR_INVALID_PID      -1001
-#define PROCESS_ERROR_ALREADY_EXISTS   -1002
-#define PROCESS_ERROR_NOT_FOUND        -1003
-#define PROCESS_ERROR_INVALID_STATE   -1004
+#define PROCESS_ERROR_INVALID_PID -1001
+#define PROCESS_ERROR_ALREADY_EXISTS -1002
+#define PROCESS_ERROR_NOT_FOUND -1003
+#define PROCESS_ERROR_INVALID_STATE -1004
 #define PROCESS_ERROR_PERMISSION_DENIED -1005
-#define PROCESS_ERROR_NO_MEMORY        -1006
+#define PROCESS_ERROR_NO_MEMORY -1006
 #define PROCESS_ERROR_TOO_MANY_PROCESSES -1007
-#define PROCESS_ERROR_INVALID_PARENT   -1008
+#define PROCESS_ERROR_INVALID_PARENT -1008
 
 /* Convenience macros */
-#define PROCESS_IS_KERNEL(p)     ((p)->type == PROCESS_TYPE_KERNEL)
-#define PROCESS_IS_USER(p)       ((p)->type == PROCESS_TYPE_USER)
-#define PROCESS_IS_SERVICE(p)    ((p)->type == PROCESS_TYPE_SERVICE)
-#define PROCESS_IS_QUANTUM(p)     ((p)->type == PROCESS_TYPE_QUANTUM)
-#define PROCESS_IS_ALIVE(p)      ((p)->state != PROCESS_STATE_UNUSED && \
-                                 (p)->state != PROCESS_STATE_TERMINATED && \
-                                 (p)->state != PROCESS_STATE_ZOMBIE)
+#define PROCESS_IS_KERNEL(p) ((p)->type == PROCESS_TYPE_KERNEL)
+#define PROCESS_IS_USER(p) ((p)->type == PROCESS_TYPE_USER)
+#define PROCESS_IS_SERVICE(p) ((p)->type == PROCESS_TYPE_SERVICE)
+#define PROCESS_IS_QUANTUM(p) ((p)->type == PROCESS_TYPE_QUANTUM)
+#define PROCESS_IS_ALIVE(p)                                                                        \
+    ((p)->state != PROCESS_STATE_UNUSED && (p)->state != PROCESS_STATE_TERMINATED &&               \
+     (p)->state != PROCESS_STATE_ZOMBIE)
 
 #endif /* PROCESS_H */

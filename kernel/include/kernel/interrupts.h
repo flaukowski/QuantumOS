@@ -13,57 +13,57 @@ typedef enum {
 } irq_result_t;
 
 // x86_64 interrupt vectors
-#define IRQ_BASE          32
-#define IRQ_MAX           255
-#define EXCEPTION_BASE    0
-#define EXCEPTION_MAX     31
+#define IRQ_BASE 32
+#define IRQ_MAX 255
+#define EXCEPTION_BASE 0
+#define EXCEPTION_MAX 31
 
 // Exception vectors
-#define EXC_DIVIDE_ERROR          0
-#define EXC_DEBUG                 1
-#define EXC_NMI                   2
-#define EXC_BREAKPOINT            3
-#define EXC_OVERFLOW              4
-#define EXC_BOUND_RANGE          5
-#define EXC_INVALID_OPCODE        6
-#define EXC_DEVICE_NOT_AVAILABLE  7
-#define EXC_DOUBLE_FAULT          8
-#define EXC_INVALID_TSS           10
-#define EXC_SEGMENT_NOT_PRESENT   11
-#define EXC_STACK_SEGMENT_FAULT   12
-#define EXC_GENERAL_PROTECTION    13
-#define EXC_PAGE_FAULT            14
-#define EXC_X87_FPU_ERROR         16
-#define EXC_ALIGNMENT_CHECK       17
-#define EXC_MACHINE_CHECK         18
-#define EXC_SIMD_FP_EXCEPTION     19
-#define EXC_VIRTUALIZATION        20
-#define EXC_SECURITY             30
-#define EXC_RESERVED              31
+#define EXC_DIVIDE_ERROR 0
+#define EXC_DEBUG 1
+#define EXC_NMI 2
+#define EXC_BREAKPOINT 3
+#define EXC_OVERFLOW 4
+#define EXC_BOUND_RANGE 5
+#define EXC_INVALID_OPCODE 6
+#define EXC_DEVICE_NOT_AVAILABLE 7
+#define EXC_DOUBLE_FAULT 8
+#define EXC_INVALID_TSS 10
+#define EXC_SEGMENT_NOT_PRESENT 11
+#define EXC_STACK_SEGMENT_FAULT 12
+#define EXC_GENERAL_PROTECTION 13
+#define EXC_PAGE_FAULT 14
+#define EXC_X87_FPU_ERROR 16
+#define EXC_ALIGNMENT_CHECK 17
+#define EXC_MACHINE_CHECK 18
+#define EXC_SIMD_FP_EXCEPTION 19
+#define EXC_VIRTUALIZATION 20
+#define EXC_SECURITY 30
+#define EXC_RESERVED 31
 
 // IRQ vectors (hardware interrupts)
-#define IRQ_TIMER                0
-#define IRQ_KEYBOARD             1
-#define IRQ_CASCADE              2
-#define IRQ_COM2                 3
-#define IRQ_COM1                 4
-#define IRQ_LPT2                 5
-#define IRQ_FLOPPY               6
-#define IRQ_LPT1                 7
-#define IRQ_CMOS_RTC             8
-#define IRQ_FREE1                9
-#define IRQ_FREE2                10
-#define IRQ_FREE3                11
-#define IRQ_MOUSE                12
-#define IRQ_MATH_COPROCESSOR     13
-#define IRQ_PRIMARY_ATA          14
-#define IRQ_SECONDARY_ATA        15
+#define IRQ_TIMER 0
+#define IRQ_KEYBOARD 1
+#define IRQ_CASCADE 2
+#define IRQ_COM2 3
+#define IRQ_COM1 4
+#define IRQ_LPT2 5
+#define IRQ_FLOPPY 6
+#define IRQ_LPT1 7
+#define IRQ_CMOS_RTC 8
+#define IRQ_FREE1 9
+#define IRQ_FREE2 10
+#define IRQ_FREE3 11
+#define IRQ_MOUSE 12
+#define IRQ_MATH_COPROCESSOR 13
+#define IRQ_PRIMARY_ATA 14
+#define IRQ_SECONDARY_ATA 15
 
 // Interrupt gate descriptor
 typedef struct {
     uint16_t offset_low;
     uint16_t selector;
-    uint8_t ist;      // Interrupt stack table index
+    uint8_t ist; // Interrupt stack table index
     uint8_t type_attr;
     uint16_t offset_mid;
     uint32_t offset_high;
@@ -91,8 +91,8 @@ typedef void (*interrupt_handler_t)(cpu_state_t *state);
 typedef void (*timer_callback_t)(cpu_state_t *state);
 
 // PIT (8253/8254) programmable interval timer
-#define PIT_BASE_FREQUENCY 1193182  // Hz
-#define TIMER_DEFAULT_HZ   100      // 10 ms tick
+#define PIT_BASE_FREQUENCY 1193182 // Hz
+#define TIMER_DEFAULT_HZ 100       // 10 ms tick
 
 void pit_init(uint32_t frequency_hz);
 uint64_t timer_get_ticks(void);
@@ -153,28 +153,28 @@ void dump_idt(void);
 void interrupt_stats(void);
 
 // Error codes for exceptions
-#define PF_PRESENT     0x01
-#define PF_WRITE       0x02
-#define PF_USER        0x04
-#define PF_RESERVED    0x08
+#define PF_PRESENT 0x01
+#define PF_WRITE 0x02
+#define PF_USER 0x04
+#define PF_RESERVED 0x08
 #define PF_INSTRUCTION 0x10
 
 // Gate types
-#define GATE_TYPE_INTERRUPT    0x0E
-#define GATE_TYPE_TRAP         0x0F
-#define GATE_TYPE_TASK         0x05
+#define GATE_TYPE_INTERRUPT 0x0E
+#define GATE_TYPE_TRAP 0x0F
+#define GATE_TYPE_TASK 0x05
 
 // Gate privileges
 // DPL occupies bits 5-6 of type_attr; bit 7 is Present
-#define DPL_KERNEL    0x00
-#define DPL_USER      0x60
-#define GATE_PRESENT  0x80
+#define DPL_KERNEL 0x00
+#define DPL_USER 0x60
+#define GATE_PRESENT 0x80
 
 // IST indices
-#define IST_NONE      0
+#define IST_NONE 0
 #define IST_DOUBLE_FAULT 1
-#define IST_NMI       2
-#define IST_MAX       7
+#define IST_NMI 2
+#define IST_MAX 7
 
 // Constants
 #define IDT_ENTRIES 256

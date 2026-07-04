@@ -12,21 +12,21 @@
 #include <kernel/boot.h>
 
 /* 16550 register offsets from the UART base */
-#define UART_THR   0   /* Transmit Holding Register (write, DLAB=0) */
-#define UART_RBR   0   /* Receive Buffer Register  (read,  DLAB=0) */
-#define UART_DLL   0   /* Divisor Latch Low        (DLAB=1) */
-#define UART_IER   1   /* Interrupt Enable Register (DLAB=0) */
-#define UART_DLH   1   /* Divisor Latch High       (DLAB=1) */
-#define UART_FCR   2   /* FIFO Control Register (write) */
-#define UART_LCR   3   /* Line Control Register */
-#define UART_MCR   4   /* Modem Control Register */
-#define UART_LSR   5   /* Line Status Register */
+#define UART_THR 0 /* Transmit Holding Register (write, DLAB=0) */
+#define UART_RBR 0 /* Receive Buffer Register  (read,  DLAB=0) */
+#define UART_DLL 0 /* Divisor Latch Low        (DLAB=1) */
+#define UART_IER 1 /* Interrupt Enable Register (DLAB=0) */
+#define UART_DLH 1 /* Divisor Latch High       (DLAB=1) */
+#define UART_FCR 2 /* FIFO Control Register (write) */
+#define UART_LCR 3 /* Line Control Register */
+#define UART_MCR 4 /* Modem Control Register */
+#define UART_LSR 5 /* Line Status Register */
 
-#define LSR_DATA_READY  0x01   /* a byte is waiting in the RBR */
-#define LSR_THR_EMPTY   0x20   /* the THR can accept another byte */
+#define LSR_DATA_READY 0x01 /* a byte is waiting in the RBR */
+#define LSR_THR_EMPTY 0x20  /* the THR can accept another byte */
 
-#define LCR_DLAB        0x80   /* divisor-latch access bit */
-#define LCR_8N1         0x03   /* 8 data bits, no parity, 1 stop bit */
+#define LCR_DLAB 0x80 /* divisor-latch access bit */
+#define LCR_8N1 0x03  /* 8 data bits, no parity, 1 stop bit */
 
 static uint8_t com2_ready = 0;
 

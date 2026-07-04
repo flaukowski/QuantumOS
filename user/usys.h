@@ -8,24 +8,24 @@
 #ifndef USYS_H
 #define USYS_H
 
-#define SYS_WRITE   1
-#define SYS_GETPID  2
-#define SYS_YIELD   3
-#define SYS_EXIT    4
-#define SYS_TICKS   5
-#define SYS_SEND      6
-#define SYS_RECV      7
+#define SYS_WRITE 1
+#define SYS_GETPID 2
+#define SYS_YIELD 3
+#define SYS_EXIT 4
+#define SYS_TICKS 5
+#define SYS_SEND 6
+#define SYS_RECV 7
 #define SYS_HEARTBEAT 8
 #define SYS_SVC_RESTARTS 9
-#define SYS_QRAND     10
-#define SYS_SEND_TO   11
-#define SYS_COM2      12
-#define SYS_QSEED     13
+#define SYS_QRAND 10
+#define SYS_SEND_TO 11
+#define SYS_COM2 12
+#define SYS_QSEED 13
 #define SYS_FIELD_SNAPSHOT 14
 
 /* SYS_COM2 operations (arg 1) */
-#define SYS_COM2_READ   0
-#define SYS_COM2_WRITE  1
+#define SYS_COM2_READ 0
+#define SYS_COM2_WRITE 1
 
 static inline long usys0(long n) {
     long r;
@@ -39,26 +39,38 @@ static inline long usys1(long n, long a1) {
 }
 static inline long usys2(long n, long a1, long a2) {
     long r;
-    __asm__ volatile("int $0x80"
-                     : "=a"(r) : "a"(n), "D"(a1), "S"(a2) : "memory");
+    __asm__ volatile("int $0x80" : "=a"(r) : "a"(n), "D"(a1), "S"(a2) : "memory");
     return r;
 }
 static inline long usys3(long n, long a1, long a2, long a3) {
     long r;
-    __asm__ volatile("int $0x80"
-                     : "=a"(r) : "a"(n), "D"(a1), "S"(a2), "d"(a3) : "memory");
+    __asm__ volatile("int $0x80" : "=a"(r) : "a"(n), "D"(a1), "S"(a2), "d"(a3) : "memory");
     return r;
 }
 
-static inline void write_str(const char *s) { usys1(SYS_WRITE, (long)s); }
-static inline long getpid(void)              { return usys0(SYS_GETPID); }
-static inline void yield(void)               { usys0(SYS_YIELD); }
-static inline long ticks(void)               { return usys0(SYS_TICKS); }
-static inline void exit_(long code)          { usys1(SYS_EXIT, code); }
-static inline void heartbeat(void)           { usys0(SYS_HEARTBEAT); }
+static inline void write_str(const char *s) {
+    usys1(SYS_WRITE, (long)s);
+}
+static inline long getpid(void) {
+    return usys0(SYS_GETPID);
+}
+static inline void yield(void) {
+    usys0(SYS_YIELD);
+}
+static inline long ticks(void) {
+    return usys0(SYS_TICKS);
+}
+static inline void exit_(long code) {
+    usys1(SYS_EXIT, code);
+}
+static inline void heartbeat(void) {
+    usys0(SYS_HEARTBEAT);
+}
 /* Restart count of the calling process's service slot, or -1 if the
  * caller is not a registered service. Used to detect a watchdog rebirth. */
-static inline long svc_restarts(void)         { return usys0(SYS_SVC_RESTARTS); }
+static inline long svc_restarts(void) {
+    return usys0(SYS_SVC_RESTARTS);
+}
 
 /* Capability-routed send: goes to whatever destination this process
  * holds an IPC send-capability for. Returns 0 on success, negative on
@@ -118,7 +130,8 @@ static inline long field_snapshot(const void *buf, long len) {
 /* Tiny string helpers (no libc) */
 static inline long str_len(const char *s) {
     long n = 0;
-    while (s[n]) n++;
+    while (s[n])
+        n++;
     return n;
 }
 

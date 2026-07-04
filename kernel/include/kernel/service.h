@@ -22,15 +22,15 @@
  * Constants
  * ============================================================================ */
 
-#define MAX_SERVICES              16
-#define SERVICE_NAME_MAX          64
-#define SERVICE_MAX_DEPS          8
+#define MAX_SERVICES 16
+#define SERVICE_NAME_MAX 64
+#define SERVICE_MAX_DEPS 8
 #define SERVICE_DEFAULT_MAX_RESTARTS 3
 
 /* Heartbeat freshness threshold (timer ticks; 10 ms each) */
-#define SERVICE_HEARTBEAT_TIMEOUT 200   /* 2 s */
+#define SERVICE_HEARTBEAT_TIMEOUT 200 /* 2 s */
 /* How often the health monitor scans (timer ticks) */
-#define SERVICE_MONITOR_INTERVAL  100   /* 1 s */
+#define SERVICE_MONITOR_INTERVAL 100 /* 1 s */
 
 /* Service states (issue #6 spec) */
 typedef enum {
@@ -63,12 +63,12 @@ typedef struct {
     uint32_t service_id;
     char name[SERVICE_NAME_MAX];
     uint32_t pid;
-    uint32_t state;                 /* service_state_t */
-    uint32_t capabilities;          /* CAP_RESOURCE_SERVICE cap_id */
-    uint64_t start_time;            /* timer ticks */
+    uint32_t state;        /* service_state_t */
+    uint32_t capabilities; /* CAP_RESOURCE_SERVICE cap_id */
+    uint64_t start_time;   /* timer ticks */
     uint32_t restart_count;
     uint32_t max_restarts;
-    uint32_t cpu_limit;             /* quota fields; enforcement TODO */
+    uint32_t cpu_limit; /* quota fields; enforcement TODO */
     size_t memory_limit;
     uint32_t quantum_limit;
     char dependencies[SERVICE_MAX_DEPS][SERVICE_NAME_MAX];
@@ -81,8 +81,8 @@ typedef struct {
  * `user_elf_start`/`user_elf_end`, leave `entry` NULL). */
 typedef struct {
     const char *name;
-    void (*entry)(void);            /* kernel-thread main loop; must not return */
-    const void *user_elf_start;     /* user-process service: embedded ELF image */
+    void (*entry)(void);        /* kernel-thread main loop; must not return */
+    const void *user_elf_start; /* user-process service: embedded ELF image */
     const void *user_elf_end;
     const char *dependencies[SERVICE_MAX_DEPS]; /* NULL-terminated list */
     uint32_t max_restarts;

@@ -47,33 +47,33 @@
 #include <stdint.h>
 
 /* ---- framing ---- */
-#define SWARM_MAGIC        0xA5u
-#define SWARM_HDR_LEN      4       /* magic + type + len(2) */
-#define SWARM_MAX_PAYLOAD  512     /* keep frames small for the polled UART */
+#define SWARM_MAGIC 0xA5u
+#define SWARM_HDR_LEN 4       /* magic + type + len(2) */
+#define SWARM_MAX_PAYLOAD 512 /* keep frames small for the polled UART */
 
 /* Frame types */
-#define FRAME_HANDSHAKE    0x01u
-#define FRAME_DATA         0x02u
-#define FRAME_PING         0x03u
-#define FRAME_PONG         0x04u
-#define FRAME_DISCONNECT   0x05u
-#define FRAME_PKDIGEST     0x10u   /* 32-byte Lamport public-key commitment */
-#define FRAME_ATTEST       0x11u   /* attestation ASCII string */
-#define FRAME_SIG          0x12u   /* signature chunk (concatenated in order) */
+#define FRAME_HANDSHAKE 0x01u
+#define FRAME_DATA 0x02u
+#define FRAME_PING 0x03u
+#define FRAME_PONG 0x04u
+#define FRAME_DISCONNECT 0x05u
+#define FRAME_PKDIGEST 0x10u /* 32-byte Lamport public-key commitment */
+#define FRAME_ATTEST 0x11u   /* attestation ASCII string */
+#define FRAME_SIG 0x12u      /* signature chunk (concatenated in order) */
 
 /* ---- DATA routing opcodes (payload[0]) ----
  * A DATA frame is a remote request routed over capability-checked IPC to a
  * ghostOS service and answered with a DATA frame carrying the reply. Kept
  * deliberately tiny and explicit. */
-#define SWARM_OP_STATUS    0x01u   /* -> ghostd GHOST_STATUS : field R + live */
-#define SWARM_OP_RECALL    0x02u   /* -> ghostd GHOST_RECALL : payload = 32B probe */
+#define SWARM_OP_STATUS 0x01u /* -> ghostd GHOST_STATUS : field R + live */
+#define SWARM_OP_RECALL 0x02u /* -> ghostd GHOST_RECALL : payload = 32B probe */
 
 /* ---- Lamport parameters ---- */
-#define LAMPORT_BITS       256     /* SHA-256 digest width */
-#define LAMPORT_HASH_LEN   32      /* SHA-256 output bytes */
-#define LAMPORT_SEED_LEN   32      /* master-seed bytes drawn from the pool */
-#define LAMPORT_SIG_ELEM   64      /* preimage(32) + complementary pk hash(32) */
-#define LAMPORT_SIG_LEN    (LAMPORT_BITS * LAMPORT_SIG_ELEM)  /* 16384 bytes */
+#define LAMPORT_BITS 256    /* SHA-256 digest width */
+#define LAMPORT_HASH_LEN 32 /* SHA-256 output bytes */
+#define LAMPORT_SEED_LEN 32 /* master-seed bytes drawn from the pool */
+#define LAMPORT_SIG_ELEM 64 /* preimage(32) + complementary pk hash(32) */
+#define LAMPORT_SIG_LEN (LAMPORT_BITS * LAMPORT_SIG_ELEM) /* 16384 bytes */
 
 /* CRC-8/CCITT (poly 0x07, init 0x00), MSB-first — matches verify_attestation.py. */
 static inline uint8_t swarm_crc8(const uint8_t *data, uint32_t len) {

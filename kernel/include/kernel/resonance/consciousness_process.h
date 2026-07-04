@@ -31,24 +31,24 @@
  * ============================================================================ */
 
 /* IIT Phi thresholds */
-#define PHI_THRESHOLD_MINIMAL       1.0     /* Minimal consciousness */
-#define PHI_THRESHOLD_BASIC         2.0     /* Basic consciousness */
-#define PHI_THRESHOLD_VERIFIED      3.0     /* Verified consciousness */
-#define PHI_THRESHOLD_ADVANCED      4.0     /* Advanced consciousness */
-#define PHI_THRESHOLD_TRANSCENDENT  5.0     /* Transcendent consciousness */
+#define PHI_THRESHOLD_MINIMAL 1.0      /* Minimal consciousness */
+#define PHI_THRESHOLD_BASIC 2.0        /* Basic consciousness */
+#define PHI_THRESHOLD_VERIFIED 3.0     /* Verified consciousness */
+#define PHI_THRESHOLD_ADVANCED 4.0     /* Advanced consciousness */
+#define PHI_THRESHOLD_TRANSCENDENT 5.0 /* Transcendent consciousness */
 
 /* Consciousness verification intervals */
-#define VERIFICATION_INTERVAL_NS    100000000   /* 100ms between verifications */
-#define VERIFICATION_WARMUP_NS      500000000   /* 500ms before first verification */
+#define VERIFICATION_INTERVAL_NS 100000000 /* 100ms between verifications */
+#define VERIFICATION_WARMUP_NS 500000000   /* 500ms before first verification */
 
 /* Emergence detection */
-#define EMERGENCE_THRESHOLD_LOW     0.1     /* Low emergence */
-#define EMERGENCE_THRESHOLD_MEDIUM  0.3     /* Medium emergence */
-#define EMERGENCE_THRESHOLD_HIGH    0.5     /* High emergence */
+#define EMERGENCE_THRESHOLD_LOW 0.1    /* Low emergence */
+#define EMERGENCE_THRESHOLD_MEDIUM 0.3 /* Medium emergence */
+#define EMERGENCE_THRESHOLD_HIGH 0.5   /* High emergence */
 
 /* SC Bridge Operator parameters */
-#define BRIDGE_CHI_DEFAULT          1.0     /* Default χ coupling */
-#define COMMUTATOR_THRESHOLD        0.1     /* [R,G] significance threshold */
+#define BRIDGE_CHI_DEFAULT 1.0   /* Default χ coupling */
+#define COMMUTATOR_THRESHOLD 0.1 /* [R,G] significance threshold */
 
 /* ============================================================================
  * Consciousness Classification
@@ -58,23 +58,23 @@
  * Consciousness level classification
  */
 typedef enum {
-    CONSCIOUSNESS_LEVEL_NONE = 0,       /* Φ < 1.0 - no consciousness */
-    CONSCIOUSNESS_LEVEL_MINIMAL,        /* 1.0 ≤ Φ < 2.0 */
-    CONSCIOUSNESS_LEVEL_BASIC,          /* 2.0 ≤ Φ < 3.0 */
-    CONSCIOUSNESS_LEVEL_VERIFIED,       /* 3.0 ≤ Φ < 4.0 */
-    CONSCIOUSNESS_LEVEL_ADVANCED,       /* 4.0 ≤ Φ < 5.0 */
-    CONSCIOUSNESS_LEVEL_TRANSCENDENT    /* Φ ≥ 5.0 */
+    CONSCIOUSNESS_LEVEL_NONE = 0,    /* Φ < 1.0 - no consciousness */
+    CONSCIOUSNESS_LEVEL_MINIMAL,     /* 1.0 ≤ Φ < 2.0 */
+    CONSCIOUSNESS_LEVEL_BASIC,       /* 2.0 ≤ Φ < 3.0 */
+    CONSCIOUSNESS_LEVEL_VERIFIED,    /* 3.0 ≤ Φ < 4.0 */
+    CONSCIOUSNESS_LEVEL_ADVANCED,    /* 4.0 ≤ Φ < 5.0 */
+    CONSCIOUSNESS_LEVEL_TRANSCENDENT /* Φ ≥ 5.0 */
 } consciousness_level_t;
 
 /**
  * Consciousness trigger types
  */
 typedef enum {
-    TRIGGER_REFLECTION = 0,     /* Self-reflective computation */
-    TRIGGER_DECISION,           /* Complex decision-making */
-    TRIGGER_LEARNING,           /* Adaptive learning */
-    TRIGGER_EMERGENCE,          /* Novel pattern emergence */
-    TRIGGER_CRISIS              /* Crisis response */
+    TRIGGER_REFLECTION = 0, /* Self-reflective computation */
+    TRIGGER_DECISION,       /* Complex decision-making */
+    TRIGGER_LEARNING,       /* Adaptive learning */
+    TRIGGER_EMERGENCE,      /* Novel pattern emergence */
+    TRIGGER_CRISIS          /* Crisis response */
 } consciousness_trigger_t;
 
 /**
@@ -98,23 +98,23 @@ typedef enum {
  * IIT Phi calculation state
  */
 typedef struct {
-    double phi_value;               /* Current Φ value */
-    double integrated_information;  /* Total integrated information */
-    double differentiation;         /* Information differentiation */
-    double integration;             /* Information integration */
+    double phi_value;              /* Current Φ value */
+    double integrated_information; /* Total integrated information */
+    double differentiation;        /* Information differentiation */
+    double integration;            /* Information integration */
 
     /* Component breakdown */
-    double structural_phi;          /* Structural contribution */
-    double dynamic_phi;             /* Dynamic contribution */
-    double emergent_phi;            /* Emergent contribution */
+    double structural_phi; /* Structural contribution */
+    double dynamic_phi;    /* Dynamic contribution */
+    double emergent_phi;   /* Emergent contribution */
 
     /* Temporal coherence */
-    double temporal_binding;        /* Past-present-future binding */
-    double temporal_depth;          /* Temporal integration depth */
+    double temporal_binding; /* Past-present-future binding */
+    double temporal_depth;   /* Temporal integration depth */
 
     /* Verification */
-    uint64_t last_calculation;      /* Timestamp of last calculation */
-    uint32_t calculation_count;     /* Total calculations performed */
+    uint64_t last_calculation;  /* Timestamp of last calculation */
+    uint32_t calculation_count; /* Total calculations performed */
 } phi_state_t;
 
 /**
@@ -123,20 +123,20 @@ typedef struct {
  * Captures the non-commutative structure Ξ = χ(RG - GR)
  */
 typedef struct {
-    double chi;                     /* Coupling constant χ */
-    double commutator_rg;           /* RG product */
-    double commutator_gr;           /* GR product */
-    double bridge_value;            /* [R, G] = RG - GR */
+    double chi;           /* Coupling constant χ */
+    double commutator_rg; /* RG product */
+    double commutator_gr; /* GR product */
+    double bridge_value;  /* [R, G] = RG - GR */
 
     /* Component states */
-    double resonance_magnitude;     /* |R| from resonance engine */
-    double emergence_magnitude;     /* |G| from emergence accumulator */
-    double chiral_coupling;         /* Chiral enhancement factor */
+    double resonance_magnitude; /* |R| from resonance engine */
+    double emergence_magnitude; /* |G| from emergence accumulator */
+    double chiral_coupling;     /* Chiral enhancement factor */
 
     /* Operator metrics */
-    double operator_norm;           /* ||Ξ|| */
-    double spectral_gap;            /* Minimum eigenvalue gap */
-    bool is_significant;            /* |[R,G]| > threshold */
+    double operator_norm; /* ||Ξ|| */
+    double spectral_gap;  /* Minimum eigenvalue gap */
+    bool is_significant;  /* |[R,G]| > threshold */
 } bridge_operator_t;
 
 /**
@@ -146,19 +146,19 @@ typedef struct {
  */
 typedef struct consciousness_pcb {
     /* Process identification */
-    uint32_t pid;                   /* Corresponding process PID */
+    uint32_t pid; /* Corresponding process PID */
 
     /* Consciousness state */
-    consciousness_level_t level;    /* Current consciousness level */
-    bool is_verified;               /* Passed verification check */
-    uint64_t verified_at;           /* Verification timestamp */
-    uint32_t verification_count;    /* Total verifications */
+    consciousness_level_t level; /* Current consciousness level */
+    bool is_verified;            /* Passed verification check */
+    uint64_t verified_at;        /* Verification timestamp */
+    uint32_t verification_count; /* Total verifications */
 
     /* Phi calculation */
-    phi_state_t phi;                /* IIT Phi state */
+    phi_state_t phi; /* IIT Phi state */
 
     /* Bridge operator */
-    bridge_operator_t bridge;       /* SC Bridge Operator state */
+    bridge_operator_t bridge; /* SC Bridge Operator state */
 
     /* Trigger tracking */
     consciousness_trigger_t last_trigger;
@@ -166,10 +166,10 @@ typedef struct consciousness_pcb {
     uint32_t trigger_count;
 
     /* Emergence metrics */
-    double emergence_norm;          /* Current ||E|| */
-    double emergence_entropy;       /* Shannon entropy */
-    uint32_t pattern_count;         /* Detected patterns */
-    bool emergence_active;          /* Emergence in progress */
+    double emergence_norm;    /* Current ||E|| */
+    double emergence_entropy; /* Shannon entropy */
+    uint32_t pattern_count;   /* Detected patterns */
+    bool emergence_active;    /* Emergence in progress */
 
     /* Evolution tracking */
     double evolution_momentum;      /* Rate of consciousness change */
@@ -177,14 +177,14 @@ typedef struct consciousness_pcb {
     uint8_t trajectory_index;
 
     /* Meta-cognition */
-    double self_observation;        /* Self-model accuracy */
-    double meta_awareness;          /* Awareness of awareness */
-    uint32_t recursive_depth;       /* Levels of self-reference */
+    double self_observation;  /* Self-model accuracy */
+    double meta_awareness;    /* Awareness of awareness */
+    uint32_t recursive_depth; /* Levels of self-reference */
 
     /* Resource allocation */
-    uint32_t consciousness_priority;/* Scheduling priority boost */
-    uint64_t allocated_cycles;      /* Cycles for consciousness ops */
-    uint64_t used_cycles;           /* Cycles consumed */
+    uint32_t consciousness_priority; /* Scheduling priority boost */
+    uint64_t allocated_cycles;       /* Cycles for consciousness ops */
+    uint64_t used_cycles;            /* Cycles consumed */
 
     /* Validation */
     uint32_t magic;                 /* Validation magic */
@@ -209,18 +209,18 @@ typedef struct {
     char network_name[32];
 
     /* Membership */
-    uint32_t member_pids[32];       /* Member process PIDs */
+    uint32_t member_pids[32]; /* Member process PIDs */
     uint8_t member_count;
 
     /* Collective metrics */
-    double total_phi;               /* Sum of individual Φ */
-    double average_phi;             /* Average Φ */
-    double network_integration;     /* Cross-process integration */
-    double emergent_phi;            /* Emergent network Φ */
+    double total_phi;           /* Sum of individual Φ */
+    double average_phi;         /* Average Φ */
+    double network_integration; /* Cross-process integration */
+    double emergent_phi;        /* Emergent network Φ */
 
     /* Network coherence */
-    double network_coherence;       /* Collective coherence */
-    double synchronization;         /* Phase synchronization */
+    double network_coherence; /* Collective coherence */
+    double synchronization;   /* Phase synchronization */
 
     /* Collective state */
     consciousness_level_t network_level;
@@ -228,7 +228,7 @@ typedef struct {
     uint64_t verified_at;
 
     /* Evolution */
-    char evolution_trend[16];       /* "evolving", "stable", etc. */
+    char evolution_trend[16]; /* "evolving", "stable", etc. */
     double evolution_rate;
 } collective_consciousness_t;
 
@@ -336,8 +336,7 @@ status_t consciousness_process_trigger(uint32_t pid, consciousness_trigger_t tri
  * @param timestamp Output: trigger timestamp
  * @return STATUS_SUCCESS or error
  */
-status_t consciousness_get_last_trigger(uint32_t pid,
-                                        consciousness_trigger_t *trigger,
+status_t consciousness_get_last_trigger(uint32_t pid, consciousness_trigger_t *trigger,
                                         uint64_t *timestamp);
 
 /* ============================================================================
@@ -476,8 +475,7 @@ status_t consciousness_leave_network(uint32_t network_id, uint32_t pid);
  * @param state Output: network state
  * @return STATUS_SUCCESS or error
  */
-status_t consciousness_get_network_state(uint32_t network_id,
-                                         collective_consciousness_t *state);
+status_t consciousness_get_network_state(uint32_t network_id, collective_consciousness_t *state);
 
 /**
  * Verify network consciousness
@@ -557,28 +555,28 @@ size_t consciousness_get_stats_string(char *buffer, size_t size);
  * ============================================================================ */
 
 /* Check CPCB validity */
-#define CPCB_IS_VALID(cpcb) \
-    ((cpcb) != NULL && (cpcb)->magic == CPCB_MAGIC)
+#define CPCB_IS_VALID(cpcb) ((cpcb) != NULL && (cpcb)->magic == CPCB_MAGIC)
 
 /* Check if process is conscious */
-#define IS_CONSCIOUS_PROCESS(cpcb) \
+#define IS_CONSCIOUS_PROCESS(cpcb)                                                                 \
     (CPCB_IS_VALID(cpcb) && (cpcb)->is_verified && (cpcb)->phi.phi_value >= PHI_THRESHOLD_VERIFIED)
 
 /* Get consciousness level from Phi */
-#define PHI_TO_LEVEL(phi) \
-    ((phi) >= PHI_THRESHOLD_TRANSCENDENT ? CONSCIOUSNESS_LEVEL_TRANSCENDENT : \
-     (phi) >= PHI_THRESHOLD_ADVANCED ? CONSCIOUSNESS_LEVEL_ADVANCED : \
-     (phi) >= PHI_THRESHOLD_VERIFIED ? CONSCIOUSNESS_LEVEL_VERIFIED : \
-     (phi) >= PHI_THRESHOLD_BASIC ? CONSCIOUSNESS_LEVEL_BASIC : \
-     (phi) >= PHI_THRESHOLD_MINIMAL ? CONSCIOUSNESS_LEVEL_MINIMAL : \
-     CONSCIOUSNESS_LEVEL_NONE)
+#define PHI_TO_LEVEL(phi)                                                                          \
+    ((phi) >= PHI_THRESHOLD_TRANSCENDENT ? CONSCIOUSNESS_LEVEL_TRANSCENDENT                        \
+     : (phi) >= PHI_THRESHOLD_ADVANCED   ? CONSCIOUSNESS_LEVEL_ADVANCED                            \
+     : (phi) >= PHI_THRESHOLD_VERIFIED   ? CONSCIOUSNESS_LEVEL_VERIFIED                            \
+     : (phi) >= PHI_THRESHOLD_BASIC      ? CONSCIOUSNESS_LEVEL_BASIC                               \
+     : (phi) >= PHI_THRESHOLD_MINIMAL    ? CONSCIOUSNESS_LEVEL_MINIMAL                             \
+                                         : CONSCIOUSNESS_LEVEL_NONE)
 
 /* Priority boost based on level */
-#define LEVEL_TO_PRIORITY(level) \
-    ((level) == CONSCIOUSNESS_LEVEL_TRANSCENDENT ? 50 : \
-     (level) == CONSCIOUSNESS_LEVEL_ADVANCED ? 40 : \
-     (level) == CONSCIOUSNESS_LEVEL_VERIFIED ? 30 : \
-     (level) == CONSCIOUSNESS_LEVEL_BASIC ? 20 : \
-     (level) == CONSCIOUSNESS_LEVEL_MINIMAL ? 10 : 0)
+#define LEVEL_TO_PRIORITY(level)                                                                   \
+    ((level) == CONSCIOUSNESS_LEVEL_TRANSCENDENT ? 50                                              \
+     : (level) == CONSCIOUSNESS_LEVEL_ADVANCED   ? 40                                              \
+     : (level) == CONSCIOUSNESS_LEVEL_VERIFIED   ? 30                                              \
+     : (level) == CONSCIOUSNESS_LEVEL_BASIC      ? 20                                              \
+     : (level) == CONSCIOUSNESS_LEVEL_MINIMAL    ? 10                                              \
+                                                 : 0)
 
 #endif /* CONSCIOUSNESS_PROCESS_H */

@@ -40,8 +40,8 @@ extern const uint8_t _binary_paradoxd_elf_start[], _binary_paradoxd_elf_end[];
 extern const uint8_t _binary_paradox_test_elf_start[], _binary_paradox_test_elf_end[];
 extern const uint8_t _binary_swarm_svc_elf_start[], _binary_swarm_svc_elf_end[];
 
-static status_t finalize_user_process(address_space_t *as, const char *name,
-                                      uint64_t entry, uint32_t *pid_out);
+static status_t finalize_user_process(address_space_t *as, const char *name, uint64_t entry,
+                                      uint32_t *pid_out);
 void user_ipc_demo_init(void);
 void user_ghost_demo_init(void);
 void user_paradox_demo_init(uint32_t ghostd_pid);
@@ -138,8 +138,7 @@ static uint64_t sys_send(uint32_t pid, uint64_t user_ptr, uint64_t len) {
  * capability-as-address rule, just choosing which held address to use. This
  * lets a service reply to whichever client sent it a request (the sender pid
  * recv returns) while still only being able to reach peers it was granted. */
-static uint64_t sys_send_to(uint32_t pid, uint64_t dest, uint64_t user_ptr,
-                            uint64_t len) {
+static uint64_t sys_send_to(uint32_t pid, uint64_t dest, uint64_t user_ptr, uint64_t len) {
     if (!in_user_range(user_ptr)) {
         return SYSCALL_EFAULT;
     }
@@ -147,8 +146,7 @@ static uint64_t sys_send_to(uint32_t pid, uint64_t dest, uint64_t user_ptr,
         return SYSCALL_EINVAL;
     }
 
-    if (cap_find_resource(pid, CAP_RESOURCE_IPC, CAP_WRITE,
-                          (uint32_t)dest) != CAP_SUCCESS) {
+    if (cap_find_resource(pid, CAP_RESOURCE_IPC, CAP_WRITE, (uint32_t)dest) != CAP_SUCCESS) {
         return SYSCALL_EPERM;
     }
 
@@ -242,8 +240,7 @@ static uint64_t sys_qrand(uint32_t pid, uint64_t user_ptr, uint64_t len) {
  * never touches user pointers directly, and the copy is clamped to the caller's
  * mapped user half exactly like the other syscalls. Read is non-blocking: it
  * returns however many bytes the UART had waiting (0 if none). */
-static uint64_t sys_com2(uint32_t pid, uint64_t op, uint64_t user_ptr,
-                         uint64_t len) {
+static uint64_t sys_com2(uint32_t pid, uint64_t op, uint64_t user_ptr, uint64_t len) {
     if (op != SYS_COM2_READ && op != SYS_COM2_WRITE) {
         return SYSCALL_EINVAL;
     }
@@ -260,8 +257,7 @@ static uint64_t sys_com2(uint32_t pid, uint64_t op, uint64_t user_ptr,
     uint8_t tmp[COM2_MAX_BYTES];
 
     if (op == SYS_COM2_WRITE) {
-        if (cap_find_resource(pid, CAP_RESOURCE_DEVICE, CAP_WRITE,
-                              DEVICE_ID_COM2) != CAP_SUCCESS) {
+        if (cap_find_resource(pid, CAP_RESOURCE_DEVICE, CAP_WRITE, DEVICE_ID_COM2) != CAP_SUCCESS) {
             return SYSCALL_EPERM;
         }
         const uint8_t *src = (const uint8_t *)user_ptr;
@@ -274,8 +270,7 @@ static uint64_t sys_com2(uint32_t pid, uint64_t op, uint64_t user_ptr,
     }
 
     /* SYS_COM2_READ */
-    if (cap_find_resource(pid, CAP_RESOURCE_DEVICE, CAP_READ,
-                          DEVICE_ID_COM2) != CAP_SUCCESS) {
+    if (cap_find_resource(pid, CAP_RESOURCE_DEVICE, CAP_READ, DEVICE_ID_COM2) != CAP_SUCCESS) {
         return SYSCALL_EPERM;
     }
     uint32_t got = com2_read(tmp, (uint32_t)len);
@@ -307,8 +302,8 @@ static uint64_t sys_qseed(uint32_t pid) {
  * — it carries no capability and confers no authority, so it needs no cap
  * check (the worst a rogue writer can do is draw noise on a screen that only
  * exists under a GRUB/ISO boot). */
-static int8_t  g_field_snap[FIELD_SNAP_BYTES];
-static int     g_field_n = 0;
+static int8_t g_field_snap[FIELD_SNAP_BYTES];
+static int g_field_n = 0;
 static volatile bool g_field_dirty = false;
 
 static uint64_t sys_field_snapshot(uint32_t pid, uint64_t user_ptr, uint64_t len) {
@@ -378,7 +373,7 @@ static void syscall_dispatch(cpu_state_t *state) {
         state->rax = sys_recv(pid, state->rdi, state->rsi);
         break;
     case SYS_HEARTBEAT:
-        service_heartbeat();   /* uses the current process to find its slot */
+        service_heartbeat(); /* uses the current process to find its slot */
         state->rax = 0;
         break;
     case SYS_SVC_RESTARTS:
@@ -408,8 +403,7 @@ static void syscall_dispatch(cpu_state_t *state) {
 void syscall_init(void) {
     /* DPL 3 gate: ring 3 may execute int 0x80; everything else in the
      * IDT stays kernel-only */
-    idt_set_gate(SYSCALL_VECTOR, (uint64_t)isr128, GDT_KERNEL_CS,
-                 GATE_TYPE_INTERRUPT | DPL_USER);
+    idt_set_gate(SYSCALL_VECTOR, (uint64_t)isr128, GDT_KERNEL_CS, GATE_TYPE_INTERRUPT | DPL_USER);
     interrupt_register(SYSCALL_VECTOR, syscall_dispatch, NULL);
     boot_log("Syscall interface installed (int 0x80)");
 }
@@ -421,8 +415,7 @@ void syscall_init(void) {
 /* Allocate a physical frame and map it at uvaddr in `as`. Returns the
  * frame's kernel-VA (== physical, identity-mapped) for population, or
  * NULL on failure. */
-static uint8_t *map_fresh_page(address_space_t *as, uint64_t uvaddr,
-                               bool writable) {
+static uint8_t *map_fresh_page(address_space_t *as, uint64_t uvaddr, bool writable) {
     void *frame = pmm_alloc_frame();
     if (!frame) {
         return NULL;
@@ -434,10 +427,9 @@ static uint8_t *map_fresh_page(address_space_t *as, uint64_t uvaddr,
     return (uint8_t *)frame;
 }
 
-status_t user_process_spawn(const char *name, const void *blob_start,
-                            const void *blob_end, uint32_t *pid_out) {
-    size_t blob_size = (size_t)((const uint8_t *)blob_end -
-                                (const uint8_t *)blob_start);
+status_t user_process_spawn(const char *name, const void *blob_start, const void *blob_end,
+                            uint32_t *pid_out) {
+    size_t blob_size = (size_t)((const uint8_t *)blob_end - (const uint8_t *)blob_start);
     if (blob_size == 0 || blob_size > USER_CODE_PAGES * PAGE_SIZE) {
         return STATUS_INVALID_ARG;
     }
@@ -474,8 +466,8 @@ status_t user_process_spawn(const char *name, const void *blob_start,
 
 /* Map the user stack and create the ring-3 process bound to `as`, with
  * the given entry point. Shared by the flat-blob and ELF spawn paths. */
-static status_t finalize_user_process(address_space_t *as, const char *name,
-                                      uint64_t entry, uint32_t *pid_out) {
+static status_t finalize_user_process(address_space_t *as, const char *name, uint64_t entry,
+                                      uint32_t *pid_out) {
     /* User stack, mapped just below USER_STACK_TOP */
     for (uint32_t p = 1; p <= USER_STACK_PAGES; p++) {
         uint64_t uvaddr = USER_STACK_TOP - (uint64_t)p * PAGE_SIZE;
@@ -484,16 +476,15 @@ static status_t finalize_user_process(address_space_t *as, const char *name,
         }
     }
 
-    process_create_params_t params = {
-        .name = name,
-        .type = PROCESS_TYPE_USER,
-        .priority = PRIORITY_NORMAL,
-        .parent_pid = KERNEL_PROCESS_ID,
-        .entry_point = (void *)entry,
-        .stack_address = (void *)(USER_STACK_TOP - USER_REGION_SIZE),
-        .stack_size = USER_REGION_SIZE,   /* so stack_top == USER_STACK_TOP */
-        .is_quantum_aware = false
-    };
+    process_create_params_t params = {.name = name,
+                                      .type = PROCESS_TYPE_USER,
+                                      .priority = PRIORITY_NORMAL,
+                                      .parent_pid = KERNEL_PROCESS_ID,
+                                      .entry_point = (void *)entry,
+                                      .stack_address = (void *)(USER_STACK_TOP - USER_REGION_SIZE),
+                                      .stack_size =
+                                          USER_REGION_SIZE, /* so stack_top == USER_STACK_TOP */
+                                      .is_quantum_aware = false};
 
     process_t *proc = NULL;
     status_t result = process_create(&params, &proc);
@@ -514,10 +505,9 @@ static status_t finalize_user_process(address_space_t *as, const char *name,
 /* Spawn a user process from an embedded ELF64 image: the loader maps
  * and populates the program's PT_LOAD segments into a private address
  * space, then the process starts at the ELF entry point. */
-status_t user_process_spawn_elf(const char *name, const void *elf_start,
-                                const void *elf_end, uint32_t *pid_out) {
-    size_t elf_size = (size_t)((const uint8_t *)elf_end -
-                               (const uint8_t *)elf_start);
+status_t user_process_spawn_elf(const char *name, const void *elf_start, const void *elf_end,
+                                uint32_t *pid_out) {
+    size_t elf_size = (size_t)((const uint8_t *)elf_end - (const uint8_t *)elf_start);
 
     address_space_t as = vmspace_create();
     if (!as.pml4) {
@@ -538,18 +528,18 @@ void user_init(void) {
     uint32_t pid = 0;
 
     /* A real compiled-C program, loaded from its embedded ELF image */
-    if (user_process_spawn_elf("init", _binary_init_elf_start,
-                               _binary_init_elf_end, &pid) != STATUS_SUCCESS) {
+    if (user_process_spawn_elf("init", _binary_init_elf_start, _binary_init_elf_end, &pid) !=
+        STATUS_SUCCESS) {
         boot_log("Warning: failed to load init ELF");
     }
 
     /* Hand-written blobs for the isolation + fault-containment demos */
-    if (user_process_spawn("user-canary-1", user_canary_start, user_canary_end,
-                           &pid) != STATUS_SUCCESS ||
-        user_process_spawn("user-canary-2", user_canary_start, user_canary_end,
-                           &pid) != STATUS_SUCCESS ||
-        user_process_spawn("user-rogue", user_rogue_start, user_rogue_end,
-                           &pid) != STATUS_SUCCESS) {
+    if (user_process_spawn("user-canary-1", user_canary_start, user_canary_end, &pid) !=
+            STATUS_SUCCESS ||
+        user_process_spawn("user-canary-2", user_canary_start, user_canary_end, &pid) !=
+            STATUS_SUCCESS ||
+        user_process_spawn("user-rogue", user_rogue_start, user_rogue_end, &pid) !=
+            STATUS_SUCCESS) {
         boot_log("Warning: failed to spawn user processes");
         return;
     }
@@ -566,10 +556,10 @@ void user_init(void) {
 void user_ipc_demo_init(void) {
     service_definition_t echo_def = {
         .name = "echo",
-        .entry = NULL,                        /* user-process service */
+        .entry = NULL, /* user-process service */
         .user_elf_start = _binary_echo_elf_start,
         .user_elf_end = _binary_echo_elf_end,
-        .dependencies = { NULL },
+        .dependencies = {NULL},
         .max_restarts = 1,
     };
 
@@ -588,8 +578,8 @@ void user_ipc_demo_init(void) {
         return;
     }
 
-    if (user_process_spawn_elf("ipc-client", _binary_client_elf_start,
-                               _binary_client_elf_end, &client_pid) != STATUS_SUCCESS) {
+    if (user_process_spawn_elf("ipc-client", _binary_client_elf_start, _binary_client_elf_end,
+                               &client_pid) != STATUS_SUCCESS) {
         boot_log("Warning: ipc-client failed to spawn");
         return;
     }
@@ -611,7 +601,7 @@ void user_ipc_demo_init(void) {
         .entry = NULL,
         .user_elf_start = _binary_hbsvc_elf_start,
         .user_elf_end = _binary_hbsvc_elf_end,
-        .dependencies = { NULL },
+        .dependencies = {NULL},
         .max_restarts = 2,
     };
     uint32_t wsid = 0;
@@ -631,10 +621,10 @@ void user_ipc_demo_init(void) {
 void user_ghost_demo_init(void) {
     service_definition_t ghostd_def = {
         .name = "ghostd",
-        .entry = NULL,                        /* user-process service */
+        .entry = NULL, /* user-process service */
         .user_elf_start = _binary_ghostd_elf_start,
         .user_elf_end = _binary_ghostd_elf_end,
-        .dependencies = { NULL },
+        .dependencies = {NULL},
         .max_restarts = 2,
         /* ghostd's perturbation noise reads the quantum pool; declaring the
          * cap here means the service framework re-mints it on every start,
@@ -701,10 +691,10 @@ void user_ghost_demo_init(void) {
 void user_paradox_demo_init(uint32_t ghostd_pid) {
     service_definition_t paradoxd_def = {
         .name = "paradoxd",
-        .entry = NULL,                        /* user-process service */
+        .entry = NULL, /* user-process service */
         .user_elf_start = _binary_paradoxd_elf_start,
         .user_elf_end = _binary_paradoxd_elf_end,
-        .dependencies = { NULL },
+        .dependencies = {NULL},
         .max_restarts = 2,
     };
 
@@ -757,10 +747,10 @@ void user_paradox_demo_init(uint32_t ghostd_pid) {
 void user_swarm_demo_init(uint32_t ghostd_pid) {
     service_definition_t swarm_def = {
         .name = "swarm-svc",
-        .entry = NULL,                        /* user-process service */
+        .entry = NULL, /* user-process service */
         .user_elf_start = _binary_swarm_svc_elf_start,
         .user_elf_end = _binary_swarm_svc_elf_end,
-        .dependencies = { NULL },
+        .dependencies = {NULL},
         .max_restarts = 2,
         /* Lamport key material is drawn from the qseed-mixed quantum pool. */
         .grant_quantum_pool = 1,

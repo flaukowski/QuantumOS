@@ -25,29 +25,29 @@
  * Constants
  * ============================================================================ */
 
-#define MAX_CAPABILITIES     1024
-#define CAP_ID_INVALID       0
+#define MAX_CAPABILITIES 1024
+#define CAP_ID_INVALID 0
 
 /* Permission bits (issue #3 spec) */
-#define CAP_READ        0x01
-#define CAP_WRITE       0x02
-#define CAP_EXECUTE     0x04
-#define CAP_GRANT       0x08   /* may derive/transfer this capability */
-#define CAP_REVOKE      0x10   /* may revoke this capability's children */
-#define CAP_QUANTUM     0x20
-#define CAP_DEVICE      0x40
-#define CAP_PROCESS     0x80
+#define CAP_READ 0x01
+#define CAP_WRITE 0x02
+#define CAP_EXECUTE 0x04
+#define CAP_GRANT 0x08  /* may derive/transfer this capability */
+#define CAP_REVOKE 0x10 /* may revoke this capability's children */
+#define CAP_QUANTUM 0x20
+#define CAP_DEVICE 0x40
+#define CAP_PROCESS 0x80
 
-#define CAP_PERM_ALL    0xFF
+#define CAP_PERM_ALL 0xFF
 
 /* Resource classes a capability can guard */
 typedef enum {
-    CAP_RESOURCE_MEMORY = 0,   /* memory regions */
-    CAP_RESOURCE_IPC,          /* IPC queues/ports/channels */
-    CAP_RESOURCE_DEVICE,       /* hardware devices */
-    CAP_RESOURCE_QUANTUM,      /* qubits / quantum contexts */
-    CAP_RESOURCE_PROCESS,      /* control over other processes */
-    CAP_RESOURCE_SERVICE,      /* user-space services */
+    CAP_RESOURCE_MEMORY = 0, /* memory regions */
+    CAP_RESOURCE_IPC,        /* IPC queues/ports/channels */
+    CAP_RESOURCE_DEVICE,     /* hardware devices */
+    CAP_RESOURCE_QUANTUM,    /* qubits / quantum contexts */
+    CAP_RESOURCE_PROCESS,    /* control over other processes */
+    CAP_RESOURCE_SERVICE,    /* user-space services */
     CAP_RESOURCE_TYPE_COUNT
 } cap_resource_type_t;
 
@@ -61,7 +61,7 @@ typedef enum {
     CAP_ERROR_NO_SPACE = -5,
     CAP_ERROR_INVALID_ARG = -6,
     CAP_ERROR_NOT_OWNER = -7,
-    CAP_ERROR_ESCALATION = -8,  /* derived perms exceed parent perms */
+    CAP_ERROR_ESCALATION = -8, /* derived perms exceed parent perms */
     CAP_ERROR_NOT_REVOCABLE = -9
 } cap_result_t;
 
@@ -71,15 +71,15 @@ typedef enum {
 
 /* Capability token (issue #3 spec, plus resource_type) */
 typedef struct {
-    uint32_t cap_id;           /* Unique capability identifier */
-    uint32_t owner_id;         /* Owning process */
+    uint32_t cap_id;                   /* Unique capability identifier */
+    uint32_t owner_id;                 /* Owning process */
     cap_resource_type_t resource_type; /* Class of guarded resource */
-    uint32_t resource_id;      /* Resource this cap controls */
-    uint32_t permissions;      /* Permission bits */
-    uint64_t expiration;       /* Expiration (timer ticks, 0 = never) */
-    uint8_t is_revocable;      /* Can this be revoked? */
-    uint8_t is_inherited;      /* Derived from a parent? */
-    uint32_t parent_cap;       /* Parent capability ID (0 = root) */
+    uint32_t resource_id;              /* Resource this cap controls */
+    uint32_t permissions;              /* Permission bits */
+    uint64_t expiration;               /* Expiration (timer ticks, 0 = never) */
+    uint8_t is_revocable;              /* Can this be revoked? */
+    uint8_t is_inherited;              /* Derived from a parent? */
+    uint32_t parent_cap;               /* Parent capability ID (0 = root) */
 } capability_t;
 
 /* Audit statistics */
@@ -101,16 +101,14 @@ typedef struct {
 cap_result_t cap_init(void);
 
 /* Create a root capability for a resource, owned by owner_pid */
-cap_result_t cap_create(uint32_t owner_pid, cap_resource_type_t resource_type,
-                        uint32_t resource_id, uint32_t permissions,
-                        uint64_t expiration, uint32_t *cap_id_out);
+cap_result_t cap_create(uint32_t owner_pid, cap_resource_type_t resource_type, uint32_t resource_id,
+                        uint32_t permissions, uint64_t expiration, uint32_t *cap_id_out);
 
 /* Derive a child capability with a (subset) permission mask for
  * new_owner_pid. Requires CAP_GRANT on the parent. Attempting to widen
  * permissions fails with CAP_ERROR_ESCALATION. */
-cap_result_t cap_derive(uint32_t parent_cap_id, uint32_t requester_pid,
-                        uint32_t new_owner_pid, uint32_t permissions,
-                        uint64_t expiration, uint32_t *cap_id_out);
+cap_result_t cap_derive(uint32_t parent_cap_id, uint32_t requester_pid, uint32_t new_owner_pid,
+                        uint32_t permissions, uint64_t expiration, uint32_t *cap_id_out);
 
 /* Transfer ownership of a capability. Requires CAP_GRANT and ownership. */
 cap_result_t cap_transfer(uint32_t cap_id, uint32_t from_pid, uint32_t to_pid);
@@ -121,8 +119,7 @@ cap_result_t cap_revoke(uint32_t cap_id, uint32_t requester_pid);
 
 /* Validate: does cap_id exist, belong to pid, guard (resource_type,
  * resource_id), carry all `required_perms`, and remain unexpired? */
-cap_result_t cap_check(uint32_t cap_id, uint32_t pid,
-                       cap_resource_type_t resource_type,
+cap_result_t cap_check(uint32_t cap_id, uint32_t pid, cap_resource_type_t resource_type,
                        uint32_t resource_id, uint32_t required_perms);
 
 /* Look up a capability's current data (for diagnostics) */
@@ -131,8 +128,8 @@ cap_result_t cap_get(uint32_t cap_id, capability_t *out);
 /* Find the first live capability owned by `pid` of the given resource
  * type carrying all `required_perms`, and return the resource it
  * guards. Used for capability-as-address routing (e.g. IPC send). */
-cap_result_t cap_find(uint32_t pid, cap_resource_type_t resource_type,
-                      uint32_t required_perms, uint32_t *resource_id_out);
+cap_result_t cap_find(uint32_t pid, cap_resource_type_t resource_type, uint32_t required_perms,
+                      uint32_t *resource_id_out);
 
 /* Like cap_find, but for a *specific* target: does `pid` own a live
  * capability of the given resource type that guards exactly

@@ -32,8 +32,10 @@ static double fabs_d(double x) {
 }
 
 static double clamp(double value, double min, double max) {
-    if (value < min) return min;
-    if (value > max) return max;
+    if (value < min)
+        return min;
+    if (value > max)
+        return max;
     return value;
 }
 
@@ -68,7 +70,8 @@ static chiral_stability_class_t classify_stability(double asymmetry) {
  * Calculate asymmetry ratio |eta/gamma| for a qubit
  */
 static double calculate_asymmetry(double eta, double gamma) {
-    if (gamma <= 0.0) return fabs_d(eta);
+    if (gamma <= 0.0)
+        return fabs_d(eta);
     return fabs_d(eta / gamma);
 }
 
@@ -120,31 +123,31 @@ static void update_pool_stats(void) {
 
         /* Stability class counts */
         switch (q->stability_class) {
-            case CHIRAL_STABILITY_EXCELLENT:
-                excellent++;
-                break;
-            case CHIRAL_STABILITY_GOOD:
-                good++;
-                break;
-            case CHIRAL_STABILITY_MARGINAL:
-                marginal++;
-                break;
-            case CHIRAL_STABILITY_UNSTABLE:
-                unstable++;
-                break;
+        case CHIRAL_STABILITY_EXCELLENT:
+            excellent++;
+            break;
+        case CHIRAL_STABILITY_GOOD:
+            good++;
+            break;
+        case CHIRAL_STABILITY_MARGINAL:
+            marginal++;
+            break;
+        case CHIRAL_STABILITY_UNSTABLE:
+            unstable++;
+            break;
         }
 
         /* Handedness counts */
         switch (q->handedness) {
-            case HANDEDNESS_LEFT:
-                left_count++;
-                break;
-            case HANDEDNESS_RIGHT:
-                right_count++;
-                break;
-            case HANDEDNESS_NEUTRAL:
-                neutral_count++;
-                break;
+        case HANDEDNESS_LEFT:
+            left_count++;
+            break;
+        case HANDEDNESS_RIGHT:
+            right_count++;
+            break;
+        case HANDEDNESS_NEUTRAL:
+            neutral_count++;
+            break;
         }
 
         /* CISS metrics */
@@ -176,14 +179,14 @@ static void update_pool_stats(void) {
     pool_state.neutral_qubits = neutral_count;
 
     pool_state.ciss_enabled_qubits = ciss_count;
-    pool_state.average_ciss_boost = (ciss_count > 0) ?
-        (total_ciss_boost / (double)ciss_count) : 1.0;
+    pool_state.average_ciss_boost =
+        (ciss_count > 0) ? (total_ciss_boost / (double)ciss_count) : 1.0;
 
     pool_state.protected_qubits = topo_count;
     pool_state.total_topological_charge = total_topo_charge;
 
-    pool_state.average_asymmetry = (active_count > 0) ?
-        (total_asymmetry / (double)active_count) : 0.0;
+    pool_state.average_asymmetry =
+        (active_count > 0) ? (total_asymmetry / (double)active_count) : 0.0;
     pool_state.pool_stability = classify_stability(pool_state.average_asymmetry);
 }
 
@@ -210,7 +213,7 @@ status_t chiral_resources_init(void) {
 
         q->base.qubit_id = i;
         q->base.is_allocated = 0;
-        q->base.coherence_time = 1000000000;  /* 1 second default */
+        q->base.coherence_time = 1000000000; /* 1 second default */
         q->base.fidelity = FIDELITY_STANDARD;
 
         q->chiral_eta = ETA_OPTIMAL;
@@ -247,7 +250,8 @@ status_t chiral_resources_init(void) {
 }
 
 void chiral_resources_shutdown(void) {
-    if (!chiral_resources_initialized) return;
+    if (!chiral_resources_initialized)
+        return;
 
     /* Clear all qubit state */
     memset(qubit_pool, 0, sizeof(qubit_pool));
@@ -274,8 +278,7 @@ status_t chiral_get_pool_state(chiral_pool_t *pool) {
  * Qubit Allocation
  * ============================================================================ */
 
-status_t chiral_allocate(const chiral_alloc_request_t *request,
-                         chiral_alloc_result_t *result) {
+status_t chiral_allocate(const chiral_alloc_request_t *request, chiral_alloc_result_t *result) {
     if (!chiral_resources_initialized) {
         return STATUS_ERROR;
     }
@@ -307,18 +310,21 @@ status_t chiral_allocate(const chiral_alloc_request_t *request,
         chiral_qubit_t *q = &qubit_pool[i];
 
         /* Skip already allocated qubits */
-        if (q->base.is_allocated) continue;
+        if (q->base.is_allocated)
+            continue;
 
         /* Check stability requirement */
-        if (q->stability_class > request->min_stability) continue;
+        if (q->stability_class > request->min_stability)
+            continue;
 
         /* Check asymmetry requirement */
-        if (request->max_asymmetry > 0.0 && q->asymmetry > request->max_asymmetry) continue;
+        if (request->max_asymmetry > 0.0 && q->asymmetry > request->max_asymmetry)
+            continue;
 
         /* Check handedness preference */
         if (request->preferred_handedness != HANDEDNESS_NEUTRAL &&
-            q->handedness != HANDEDNESS_NEUTRAL &&
-            q->handedness != request->preferred_handedness) continue;
+            q->handedness != HANDEDNESS_NEUTRAL && q->handedness != request->preferred_handedness)
+            continue;
 
         /* Check CISS requirement */
         if (request->require_ciss && !q->ciss_active) {
@@ -327,14 +333,17 @@ status_t chiral_allocate(const chiral_alloc_request_t *request,
         }
 
         /* Check topological requirement */
-        if (request->require_topological && !q->topologically_protected) continue;
+        if (request->require_topological && !q->topologically_protected)
+            continue;
 
         /* Check coherence time requirement */
         if (request->min_coherence_time > 0 &&
-            q->enhanced_coherence_time < request->min_coherence_time) continue;
+            q->enhanced_coherence_time < request->min_coherence_time)
+            continue;
 
         /* Check fidelity requirement */
-        if (request->min_fidelity > 0 && q->base.fidelity < request->min_fidelity) continue;
+        if (request->min_fidelity > 0 && q->base.fidelity < request->min_fidelity)
+            continue;
 
         /* This qubit qualifies -- allocate it */
         q->base.is_allocated = 1;
@@ -357,10 +366,8 @@ status_t chiral_allocate(const chiral_alloc_request_t *request,
 
     result->qubits_allocated = allocated;
     result->achieved_stability = worst_stability;
-    result->achieved_asymmetry = (allocated > 0) ?
-        (total_asymmetry / (double)allocated) : 0.0;
-    result->ciss_boost = (allocated > 0) ?
-        (total_ciss_boost / (double)allocated) : 1.0;
+    result->achieved_asymmetry = (allocated > 0) ? (total_asymmetry / (double)allocated) : 0.0;
+    result->ciss_boost = (allocated > 0) ? (total_ciss_boost / (double)allocated) : 1.0;
 
     if (allocated > 0) {
         result->achieved_coherence = qubit_pool[result->qubit_ids[0]].enhanced_coherence_time;
@@ -393,14 +400,16 @@ status_t chiral_deallocate(uint32_t pid, const uint32_t *qubit_ids, uint32_t cou
         return STATUS_INVALID_ARG;
     }
 
-    (void)pid;  /* Reserved for ownership validation */
+    (void)pid; /* Reserved for ownership validation */
 
     for (uint32_t i = 0; i < count; i++) {
         uint32_t qid = qubit_ids[i];
-        if (!is_valid_qubit_id(qid)) continue;
+        if (!is_valid_qubit_id(qid))
+            continue;
 
         chiral_qubit_t *q = &qubit_pool[qid];
-        if (!q->base.is_allocated) continue;
+        if (!q->base.is_allocated)
+            continue;
 
         /* Reset the qubit to default state */
         q->base.is_allocated = 0;
@@ -425,7 +434,8 @@ status_t chiral_deallocate(uint32_t pid, const uint32_t *qubit_ids, uint32_t cou
         /* Remove all couplings */
         for (uint8_t c = 0; c < q->coupling_count; c++) {
             uint32_t other_id = q->coupled_qubits[c];
-            if (!is_valid_qubit_id(other_id)) continue;
+            if (!is_valid_qubit_id(other_id))
+                continue;
 
             chiral_qubit_t *other = &qubit_pool[other_id];
             /* Remove qid from other's coupled list */
@@ -530,15 +540,15 @@ status_t chiral_flip_handedness(uint32_t qubit_id) {
     chiral_qubit_t *q = &qubit_pool[qubit_id];
 
     switch (q->handedness) {
-        case HANDEDNESS_LEFT:
-            q->handedness = HANDEDNESS_RIGHT;
-            break;
-        case HANDEDNESS_RIGHT:
-            q->handedness = HANDEDNESS_LEFT;
-            break;
-        case HANDEDNESS_NEUTRAL:
-            /* Neutral stays neutral */
-            break;
+    case HANDEDNESS_LEFT:
+        q->handedness = HANDEDNESS_RIGHT;
+        break;
+    case HANDEDNESS_RIGHT:
+        q->handedness = HANDEDNESS_LEFT;
+        break;
+    case HANDEDNESS_NEUTRAL:
+        /* Neutral stays neutral */
+        break;
     }
 
     return STATUS_SUCCESS;
@@ -580,12 +590,10 @@ status_t chiral_enable_ciss(uint32_t qubit_id) {
     q->ciss_coherence_boost = CISS_COHERENCE_FACTOR;
 
     /* Enhanced coherence = base * CISS factor */
-    q->enhanced_coherence_time = (uint64_t)(
-        (double)q->base.coherence_time * CISS_COHERENCE_FACTOR);
+    q->enhanced_coherence_time = (uint64_t)((double)q->base.coherence_time * CISS_COHERENCE_FACTOR);
 
     /* Enhanced fidelity = base * CISS fidelity factor (capped at 10000) */
-    uint32_t new_fidelity = (uint32_t)(
-        (double)q->base.fidelity * CISS_FIDELITY_FACTOR);
+    uint32_t new_fidelity = (uint32_t)((double)q->base.fidelity * CISS_FIDELITY_FACTOR);
     q->enhanced_fidelity = (new_fidelity > 10000) ? 10000 : new_fidelity;
 
     return STATUS_SUCCESS;
@@ -645,9 +653,7 @@ status_t chiral_enable_topological(uint32_t qubit_id, double target_charge) {
     chiral_qubit_t *q = &qubit_pool[qubit_id];
 
     /* Clamp charge to valid range */
-    q->topological_charge = clamp(target_charge,
-                                   TOPOLOGICAL_CHARGE_MIN,
-                                   TOPOLOGICAL_CHARGE_MAX);
+    q->topological_charge = clamp(target_charge, TOPOLOGICAL_CHARGE_MIN, TOPOLOGICAL_CHARGE_MAX);
 
     q->energy_gap = TOPOLOGICAL_ENERGY_GAP;
     q->topologically_protected = true;
@@ -688,8 +694,7 @@ bool chiral_is_topologically_protected(uint32_t qubit_id) {
 
     chiral_qubit_t *q = &qubit_pool[qubit_id];
 
-    return q->topologically_protected &&
-           q->topological_charge >= TOPOLOGICAL_CHARGE_MIN &&
+    return q->topologically_protected && q->topological_charge >= TOPOLOGICAL_CHARGE_MIN &&
            q->energy_gap >= TOPOLOGICAL_ENERGY_GAP;
 }
 
@@ -721,7 +726,7 @@ status_t chiral_couple_qubits(uint32_t qubit1, uint32_t qubit2) {
     /* Check if already coupled */
     for (uint8_t i = 0; i < q1->coupling_count; i++) {
         if (q1->coupled_qubits[i] == qubit2) {
-            return STATUS_SUCCESS;  /* Already coupled */
+            return STATUS_SUCCESS; /* Already coupled */
         }
     }
 
@@ -805,7 +810,8 @@ double chiral_get_coupling_strength(uint32_t qubit1, uint32_t qubit2) {
     /* CISS boost to coupling */
     if (q1->ciss_active && q2->ciss_active) {
         strength *= CISS_FIDELITY_FACTOR;
-        if (strength > 1.0) strength = 1.0;
+        if (strength > 1.0)
+            strength = 1.0;
     }
 
     return strength;
@@ -882,7 +888,8 @@ static size_t uint_to_hex(uint32_t value, char *buf, size_t buf_size) {
     char tmp[9];
     size_t len = 0;
 
-    if (buf_size == 0) return 0;
+    if (buf_size == 0)
+        return 0;
 
     if (value == 0) {
         if (buf_size >= 2) {
@@ -1035,7 +1042,8 @@ void chiral_dump_pool(void) {
 
 size_t chiral_get_stats_string(char *buffer, size_t size) {
     if (!chiral_resources_initialized || !buffer || size == 0) {
-        if (buffer && size > 0) buffer[0] = '\0';
+        if (buffer && size > 0)
+            buffer[0] = '\0';
         return 0;
     }
 
@@ -1043,22 +1051,22 @@ size_t chiral_get_stats_string(char *buffer, size_t size) {
     size_t remaining;
     size_t written;
 
-#define STATS_APPEND_STR(s) \
-    do { \
-        remaining = (pos < size) ? (size - pos) : 0; \
-        if (remaining > 1) { \
-            written = str_copy(buffer + pos, remaining, (s)); \
-            pos += written; \
-        } \
+#define STATS_APPEND_STR(s)                                                                        \
+    do {                                                                                           \
+        remaining = (pos < size) ? (size - pos) : 0;                                               \
+        if (remaining > 1) {                                                                       \
+            written = str_copy(buffer + pos, remaining, (s));                                      \
+            pos += written;                                                                        \
+        }                                                                                          \
     } while (0)
 
-#define STATS_APPEND_HEX(v) \
-    do { \
-        remaining = (pos < size) ? (size - pos) : 0; \
-        if (remaining > 1) { \
-            written = uint_to_hex((uint32_t)(v), buffer + pos, remaining); \
-            pos += written; \
-        } \
+#define STATS_APPEND_HEX(v)                                                                        \
+    do {                                                                                           \
+        remaining = (pos < size) ? (size - pos) : 0;                                               \
+        if (remaining > 1) {                                                                       \
+            written = uint_to_hex((uint32_t)(v), buffer + pos, remaining);                         \
+            pos += written;                                                                        \
+        }                                                                                          \
     } while (0)
 
     STATS_APPEND_STR("Chiral Pool: total=");

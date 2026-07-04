@@ -9,10 +9,10 @@
 static volatile uint16_t *const VGA_MEM = (uint16_t *)0xB8000;
 
 /* CP437 shade blocks, light -> full */
-#define CH_SHADE_LIGHT  0xB0
-#define CH_SHADE_MED    0xB1
-#define CH_SHADE_DARK   0xB2
-#define CH_BLOCK_FULL   0xDB
+#define CH_SHADE_LIGHT 0xB0
+#define CH_SHADE_MED 0xB1
+#define CH_SHADE_DARK 0xB2
+#define CH_BLOCK_FULL 0xDB
 
 static int splash_frame = 0;
 
@@ -26,11 +26,9 @@ static inline uint16_t cell(char ch, vga_color_t fg, vga_color_t bg) {
 }
 
 /* ---- integer sine, period 32, amplitude +/-100 ---- */
-static const int8_t sine32[32] = {
-      0,  20,  38,  56,  71,  83,  92,  98, 100,  98,  92,  83,
-     71,  56,  38,  20,   0, -20, -38, -56, -71, -83, -92, -98,
-   -100, -98, -92, -83, -71, -56, -38, -20
-};
+static const int8_t sine32[32] = {0,   20,  38,   56,  71,  83,  92,  98,  100, 98,  92,
+                                  83,  71,  56,   38,  20,  0,   -20, -38, -56, -71, -83,
+                                  -92, -98, -100, -98, -92, -83, -71, -56, -38, -20};
 
 /* Coarse busy-wait: interrupts are not enabled during the splash, so
  * animation frames are paced by a calibrated volatile loop. Kept small
@@ -57,7 +55,8 @@ void vga_print(int x, int y, const char *s, vga_color_t fg, vga_color_t bg) {
 
 static int str_len(const char *s) {
     int n = 0;
-    while (s[n]) n++;
+    while (s[n])
+        n++;
     return n;
 }
 
@@ -88,24 +87,36 @@ void vga_init(void) {
  * Two waves travel in opposite directions; their sum sets the shade
  * and colour of each column, producing a shimmering standing pattern. */
 static void draw_wave(int frame) {
-    const int top = 10;      /* wave band rows 10..13 */
+    const int top = 10; /* wave band rows 10..13 */
     const int rows = 4;
     const int mid = top + rows / 2;
 
     for (int x = 4; x < VGA_WIDTH - 4; x++) {
         int a = sine32[(x + frame) & 31];
         int b = sine32[(x * 2 - frame) & 31];
-        int sum = (a + b) / 2;                 /* -100..100 */
-        int amp = sum < 0 ? -sum : sum;        /* 0..100 */
+        int sum = (a + b) / 2;          /* -100..100 */
+        int amp = sum < 0 ? -sum : sum; /* 0..100 */
 
-        int level = amp / 26;                  /* 0..3 shade */
+        int level = amp / 26; /* 0..3 shade */
         char ch;
         vga_color_t fg;
         switch (level) {
-        case 0: ch = CH_SHADE_LIGHT; fg = VGA_BLUE;       break;
-        case 1: ch = CH_SHADE_MED;   fg = VGA_LIGHT_BLUE; break;
-        case 2: ch = CH_SHADE_DARK;  fg = VGA_LIGHT_CYAN; break;
-        default: ch = CH_BLOCK_FULL; fg = VGA_WHITE;      break;
+        case 0:
+            ch = CH_SHADE_LIGHT;
+            fg = VGA_BLUE;
+            break;
+        case 1:
+            ch = CH_SHADE_MED;
+            fg = VGA_LIGHT_BLUE;
+            break;
+        case 2:
+            ch = CH_SHADE_DARK;
+            fg = VGA_LIGHT_CYAN;
+            break;
+        default:
+            ch = CH_BLOCK_FULL;
+            fg = VGA_WHITE;
+            break;
         }
 
         /* Map the signed sum to a row within the band for a crest line */
@@ -114,8 +125,7 @@ static void draw_wave(int frame) {
             if (y == row) {
                 vga_put(x, y, ch, fg, VGA_BLACK);
             } else {
-                vga_put(x, y, CH_SHADE_LIGHT,
-                        (y < row) ? VGA_DARK_GREY : VGA_BLUE, VGA_BLACK);
+                vga_put(x, y, CH_SHADE_LIGHT, (y < row) ? VGA_DARK_GREY : VGA_BLUE, VGA_BLACK);
             }
         }
     }
@@ -133,20 +143,22 @@ void vga_boot_splash(void) {
     /* Title */
     vga_print_center(3, "Q U A N T U M   O S", VGA_LIGHT_CYAN, VGA_BLACK);
     vga_print_center(5, "wave-interference microkernel", VGA_WHITE, VGA_BLACK);
-    vga_print_center(7, "// ring-3 isolation // capability security // qubits //",
-                     VGA_DARK_GREY, VGA_BLACK);
+    vga_print_center(7, "// ring-3 isolation // capability security // qubits //", VGA_DARK_GREY,
+                     VGA_BLACK);
 
     /* Progress bar frame at row 18 */
     vga_print(14, 18, "[", VGA_LIGHT_GREY, VGA_BLACK);
     vga_print(14 + 52 + 1, 18, "]", VGA_LIGHT_GREY, VGA_BLACK);
 
-    vga_print_center(22, "seeding from the quantum lab  ~  qBraid boot target",
-                     VGA_DARK_GREY, VGA_BLACK);
+    vga_print_center(22, "seeding from the quantum lab  ~  qBraid boot target", VGA_DARK_GREY,
+                     VGA_BLACK);
 }
 
 void vga_boot_stage(const char *label, int percent) {
-    if (percent < 0) percent = 0;
-    if (percent > 100) percent = 100;
+    if (percent < 0)
+        percent = 0;
+    if (percent > 100)
+        percent = 100;
 
     /* Animate a couple of wave frames so the pattern travels between
      * stages */
@@ -158,8 +170,7 @@ void vga_boot_stage(const char *label, int percent) {
     /* Progress bar: 52 cells wide starting at column 15 */
     int filled = (percent * 52) / 100;
     for (int i = 0; i < 52; i++) {
-        vga_put(15 + i, 18,
-                (i < filled) ? CH_BLOCK_FULL : CH_SHADE_LIGHT,
+        vga_put(15 + i, 18, (i < filled) ? CH_BLOCK_FULL : CH_SHADE_LIGHT,
                 (i < filled) ? VGA_LIGHT_GREEN : VGA_DARK_GREY, VGA_BLACK);
     }
 
@@ -171,10 +182,11 @@ void vga_boot_stage(const char *label, int percent) {
     pct[3] = '%';
     pct[4] = '\0';
     const char *p = pct;
-    if (percent < 100) p = pct + 1;   /* drop leading zero */
-    vga_print_center(19, "                                        ",
-                     VGA_BLACK, VGA_BLACK);
-    for (int i = 0; i < VGA_WIDTH; i++) vga_put(i, 20, ' ', VGA_BLACK, VGA_BLACK);
+    if (percent < 100)
+        p = pct + 1; /* drop leading zero */
+    vga_print_center(19, "                                        ", VGA_BLACK, VGA_BLACK);
+    for (int i = 0; i < VGA_WIDTH; i++)
+        vga_put(i, 20, ' ', VGA_BLACK, VGA_BLACK);
     vga_print(15, 20, label, VGA_LIGHT_CYAN, VGA_BLACK);
     vga_print(15 + 52 - str_len(p), 20, p, VGA_YELLOW, VGA_BLACK);
 }
@@ -187,7 +199,7 @@ void vga_boot_ready(void) {
     for (int i = 0; i < 52; i++) {
         vga_put(15 + i, 18, CH_BLOCK_FULL, VGA_LIGHT_GREEN, VGA_BLACK);
     }
-    for (int i = 0; i < VGA_WIDTH; i++) vga_put(i, 20, ' ', VGA_BLACK, VGA_BLACK);
-    vga_print_center(20, ">>  Q U A N T U M   O S   R E A D Y  <<",
-                     VGA_YELLOW, VGA_BLACK);
+    for (int i = 0; i < VGA_WIDTH; i++)
+        vga_put(i, 20, ' ', VGA_BLACK, VGA_BLACK);
+    vga_print_center(20, ">>  Q U A N T U M   O S   R E A D Y  <<", VGA_YELLOW, VGA_BLACK);
 }

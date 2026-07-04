@@ -22,34 +22,34 @@
  * Constants
  * ============================================================================ */
 
-#define IPC_MAX_MESSAGE_SIZE    4096    /* Maximum message payload size */
-#define IPC_MAX_QUEUE_SIZE      64      /* Maximum messages in queue */
-#define IPC_DEFAULT_TIMEOUT_NS  1000000000ULL  /* 1 second default timeout */
-#define IPC_NO_TIMEOUT          0       /* Blocking wait forever */
-#define IPC_NO_WAIT             1       /* Non-blocking */
+#define IPC_MAX_MESSAGE_SIZE 4096            /* Maximum message payload size */
+#define IPC_MAX_QUEUE_SIZE 64                /* Maximum messages in queue */
+#define IPC_DEFAULT_TIMEOUT_NS 1000000000ULL /* 1 second default timeout */
+#define IPC_NO_TIMEOUT 0                     /* Blocking wait forever */
+#define IPC_NO_WAIT 1                        /* Non-blocking */
 
 /* Message types */
-#define IPC_MSG_NORMAL          0x0000  /* Standard message */
-#define IPC_MSG_URGENT          0x0001  /* High priority */
-#define IPC_MSG_REPLY           0x0002  /* Reply to previous message */
-#define IPC_MSG_NOTIFICATION    0x0004  /* Async notification */
-#define IPC_MSG_QUANTUM         0x0008  /* Quantum-related message */
-#define IPC_MSG_CIRCUIT_HANDOFF 0x0010  /* Quantum circuit transfer */
+#define IPC_MSG_NORMAL 0x0000          /* Standard message */
+#define IPC_MSG_URGENT 0x0001          /* High priority */
+#define IPC_MSG_REPLY 0x0002           /* Reply to previous message */
+#define IPC_MSG_NOTIFICATION 0x0004    /* Async notification */
+#define IPC_MSG_QUANTUM 0x0008         /* Quantum-related message */
+#define IPC_MSG_CIRCUIT_HANDOFF 0x0010 /* Quantum circuit transfer */
 
 /* Shared region permissions */
-#define IPC_SHARE_READ          0x01
-#define IPC_SHARE_WRITE         0x02
-#define IPC_SHARE_EXEC          0x04
+#define IPC_SHARE_READ 0x01
+#define IPC_SHARE_WRITE 0x02
+#define IPC_SHARE_EXEC 0x04
 
 /* Port states */
-#define IPC_PORT_CLOSED         0
-#define IPC_PORT_OPEN           1
-#define IPC_PORT_LISTENING      2
+#define IPC_PORT_CLOSED 0
+#define IPC_PORT_OPEN 1
+#define IPC_PORT_LISTENING 2
 
 /* Special process IDs */
-#define IPC_PID_KERNEL          0
-#define IPC_PID_ANY             0xFFFFFFFF
-#define IPC_PID_INVALID         0xFFFFFFFE
+#define IPC_PID_KERNEL 0
+#define IPC_PID_ANY 0xFFFFFFFF
+#define IPC_PID_INVALID 0xFFFFFFFE
 
 /* ============================================================================
  * Result Codes
@@ -83,15 +83,15 @@ typedef enum {
  * Maximum payload is IPC_MAX_MESSAGE_SIZE bytes.
  */
 typedef struct {
-    uint32_t sender_id;         /* Process ID of sender */
-    uint32_t receiver_id;       /* Process ID of receiver */
-    uint32_t message_type;      /* Message type flags */
-    uint32_t message_id;        /* Unique message identifier */
-    uint32_t reply_to;          /* Message ID this replies to (0 if none) */
-    uint32_t length;            /* Payload length in bytes */
-    uint64_t timestamp;         /* Send timestamp (ns since boot) */
-    uint64_t deadline;          /* Delivery deadline (0 = no deadline) */
-    uint8_t  data[IPC_MAX_MESSAGE_SIZE];  /* Message payload */
+    uint32_t sender_id;                 /* Process ID of sender */
+    uint32_t receiver_id;               /* Process ID of receiver */
+    uint32_t message_type;              /* Message type flags */
+    uint32_t message_id;                /* Unique message identifier */
+    uint32_t reply_to;                  /* Message ID this replies to (0 if none) */
+    uint32_t length;                    /* Payload length in bytes */
+    uint64_t timestamp;                 /* Send timestamp (ns since boot) */
+    uint64_t deadline;                  /* Delivery deadline (0 = no deadline) */
+    uint8_t data[IPC_MAX_MESSAGE_SIZE]; /* Message payload */
 } PACKED ipc_message_t;
 
 /**
@@ -111,12 +111,12 @@ typedef struct ipc_queue_entry {
  * Per-process queue for incoming messages.
  */
 typedef struct {
-    ipc_queue_entry_t *head;    /* First message in queue */
-    ipc_queue_entry_t *tail;    /* Last message in queue */
-    uint32_t count;             /* Number of messages in queue */
-    uint32_t max_size;          /* Maximum queue size */
-    uint32_t dropped;           /* Count of dropped messages */
-    uint8_t state;              /* Queue state */
+    ipc_queue_entry_t *head; /* First message in queue */
+    ipc_queue_entry_t *tail; /* Last message in queue */
+    uint32_t count;          /* Number of messages in queue */
+    uint32_t max_size;       /* Maximum queue size */
+    uint32_t dropped;        /* Count of dropped messages */
+    uint8_t state;           /* Queue state */
 } ipc_queue_t;
 
 /**
@@ -125,11 +125,11 @@ typedef struct {
  * Named communication endpoint for services.
  */
 typedef struct {
-    uint32_t port_id;           /* Unique port identifier */
-    uint32_t owner_id;          /* Owning process ID */
-    char name[64];              /* Human-readable port name */
-    uint8_t state;              /* Port state */
-    ipc_queue_t queue;          /* Message queue for this port */
+    uint32_t port_id;  /* Unique port identifier */
+    uint32_t owner_id; /* Owning process ID */
+    char name[64];     /* Human-readable port name */
+    uint8_t state;     /* Port state */
+    ipc_queue_t queue; /* Message queue for this port */
 } ipc_port_t;
 
 /**
@@ -138,14 +138,14 @@ typedef struct {
  * Zero-copy memory region for large data transfers.
  */
 typedef struct {
-    uint32_t region_id;         /* Unique region identifier */
-    uint32_t owner_id;          /* Creating process */
-    void *physical_addr;        /* Physical memory address */
-    void *virtual_addr;         /* Virtual address in owner's space */
-    size_t size;                /* Region size in bytes */
-    uint32_t permissions;       /* Access permissions */
-    uint32_t ref_count;         /* Number of processes with access */
-    uint8_t is_active;          /* Region is active */
+    uint32_t region_id;   /* Unique region identifier */
+    uint32_t owner_id;    /* Creating process */
+    void *physical_addr;  /* Physical memory address */
+    void *virtual_addr;   /* Virtual address in owner's space */
+    size_t size;          /* Region size in bytes */
+    uint32_t permissions; /* Access permissions */
+    uint32_t ref_count;   /* Number of processes with access */
+    uint8_t is_active;    /* Region is active */
 } ipc_shared_region_t;
 
 /**
@@ -154,11 +154,11 @@ typedef struct {
  * Records a grant of access to a shared region.
  */
 typedef struct {
-    uint32_t region_id;         /* Shared region ID */
-    uint32_t grantee_id;        /* Process granted access */
-    void *mapped_addr;          /* Address in grantee's space */
-    uint32_t permissions;       /* Granted permissions */
-    uint8_t is_active;          /* Grant is active */
+    uint32_t region_id;   /* Shared region ID */
+    uint32_t grantee_id;  /* Process granted access */
+    void *mapped_addr;    /* Address in grantee's space */
+    uint32_t permissions; /* Granted permissions */
+    uint8_t is_active;    /* Grant is active */
 } ipc_region_grant_t;
 
 /**
@@ -167,12 +167,12 @@ typedef struct {
  * Bidirectional communication channel between two processes.
  */
 typedef struct {
-    uint32_t channel_id;        /* Unique channel identifier */
-    uint32_t endpoint_a;        /* First process ID */
-    uint32_t endpoint_b;        /* Second process ID */
-    ipc_queue_t queue_a_to_b;   /* Messages from A to B */
-    ipc_queue_t queue_b_to_a;   /* Messages from B to A */
-    uint8_t is_active;          /* Channel is active */
+    uint32_t channel_id;      /* Unique channel identifier */
+    uint32_t endpoint_a;      /* First process ID */
+    uint32_t endpoint_b;      /* Second process ID */
+    ipc_queue_t queue_a_to_b; /* Messages from A to B */
+    ipc_queue_t queue_b_to_a; /* Messages from B to A */
+    uint8_t is_active;        /* Channel is active */
 } ipc_channel_t;
 
 /* ============================================================================
@@ -259,8 +259,8 @@ ipc_result_t ipc_reply(const ipc_message_t *original_msg, const ipc_message_t *r
  * @param timeout_ns Timeout in nanoseconds
  * @return IPC_SUCCESS on success, error code otherwise
  */
-ipc_result_t ipc_call(uint32_t receiver_id, const ipc_message_t *request,
-                      ipc_message_t *reply, uint64_t timeout_ns);
+ipc_result_t ipc_call(uint32_t receiver_id, const ipc_message_t *request, ipc_message_t *reply,
+                      uint64_t timeout_ns);
 
 /* ============================================================================
  * Port Operations
@@ -349,8 +349,8 @@ ipc_result_t ipc_share_destroy(uint32_t region_id);
  * @param grant Pointer to store grant info
  * @return IPC_SUCCESS on success, error code otherwise
  */
-ipc_result_t ipc_share_grant(uint32_t region_id, uint32_t grantee_id,
-                             uint32_t permissions, ipc_region_grant_t *grant);
+ipc_result_t ipc_share_grant(uint32_t region_id, uint32_t grantee_id, uint32_t permissions,
+                             ipc_region_grant_t *grant);
 
 /**
  * Revoke access to a shared region
@@ -396,8 +396,7 @@ ipc_result_t ipc_share_unmap(uint32_t region_id);
  * @param channel_id Pointer to store channel ID
  * @return IPC_SUCCESS on success, error code otherwise
  */
-ipc_result_t ipc_channel_create(uint32_t endpoint_a, uint32_t endpoint_b,
-                                uint32_t *channel_id);
+ipc_result_t ipc_channel_create(uint32_t endpoint_a, uint32_t endpoint_b, uint32_t *channel_id);
 
 /**
  * Destroy a channel
@@ -424,8 +423,7 @@ ipc_result_t ipc_channel_send(uint32_t channel_id, const ipc_message_t *msg);
  * @param timeout_ns Timeout in nanoseconds
  * @return IPC_SUCCESS on success, error code otherwise
  */
-ipc_result_t ipc_channel_receive(uint32_t channel_id, ipc_message_t *msg,
-                                 uint64_t timeout_ns);
+ipc_result_t ipc_channel_receive(uint32_t channel_id, ipc_message_t *msg, uint64_t timeout_ns);
 
 /* ============================================================================
  * Quantum IPC Extensions
@@ -455,8 +453,7 @@ ipc_result_t ipc_quantum_circuit_handoff(uint32_t receiver_id, uint32_t circuit_
  * @param probability Result probability
  * @return IPC_SUCCESS on success, error code otherwise
  */
-ipc_result_t ipc_quantum_measurement_result(uint32_t receiver_id,
-                                            uint32_t measurement_id,
+ipc_result_t ipc_quantum_measurement_result(uint32_t receiver_id, uint32_t measurement_id,
                                             uint8_t result, double probability);
 
 /* ============================================================================

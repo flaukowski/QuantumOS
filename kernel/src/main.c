@@ -19,14 +19,22 @@
 
 // Boot splash dispatch: framebuffer when available, else VGA text
 static void splash_begin(void) {
-    if (fb_available()) fb_boot_splash(); else vga_boot_splash();
+    if (fb_available())
+        fb_boot_splash();
+    else
+        vga_boot_splash();
 }
 static void splash_stage(const char *label, int percent) {
-    if (fb_available()) fb_boot_stage(label, percent);
-    else vga_boot_stage(label, percent);
+    if (fb_available())
+        fb_boot_stage(label, percent);
+    else
+        vga_boot_stage(label, percent);
 }
 static void splash_ready(void) {
-    if (fb_available()) fb_boot_ready(); else vga_boot_ready();
+    if (fb_available())
+        fb_boot_ready();
+    else
+        vga_boot_ready();
 }
 
 // External symbols from linker script
@@ -53,16 +61,16 @@ static void parse_boot_cmdline(uint32_t info_addr);
 // Kernel main entry point
 void kernel_main(uint32_t magic, uint32_t info_addr) {
     current_boot_state = BOOT_STATE_KERNEL_ENTRY;
-    
+
     // Validate multiboot
     if (!boot_validate_multiboot(magic, info_addr)) {
         boot_panic("Invalid multiboot information");
         return; // Never reached
     }
-    
+
     // Parse boot configuration
     boot_config.magic = magic;
-    boot_config.boot_flags = *(uint32_t*)(uintptr_t)info_addr;
+    boot_config.boot_flags = *(uint32_t *)(uintptr_t)info_addr;
 
     boot_log("QuantumOS v0.1 booting...");
     boot_log("Multiboot information validated");
@@ -80,13 +88,13 @@ void kernel_main(uint32_t magic, uint32_t info_addr) {
     } else {
         boot_log("No framebuffer — VGA text boot splash");
     }
-    
+
     // Early initialization
     early_init();
-    
+
     // Main kernel initialization
     kernel_init();
-    
+
     // Should never reach here
     boot_panic("Kernel initialization completed unexpectedly");
 }
@@ -94,13 +102,13 @@ void kernel_main(uint32_t magic, uint32_t info_addr) {
 // Early initialization (before memory management)
 static void early_init(void) {
     boot_log("Starting early initialization...");
-    
+
     // Initialize early console
     early_console_init();
-    
+
     // Basic CPU setup
     // TODO: CPU detection and setup
-    
+
     boot_log("Early initialization complete");
 }
 
@@ -174,8 +182,7 @@ static void kernel_init(void) {
         interrupt_disable_all();
         process_reap();
         int field_n = 0;
-        bool have_field = fb_available() &&
-                          field_snapshot_take(field_buf, &field_n);
+        bool have_field = fb_available() && field_snapshot_take(field_buf, &field_n);
         interrupt_enable_all();
         if (have_field) {
             fb_render_field(field_buf, field_n);
@@ -188,12 +195,12 @@ static void kernel_init(void) {
 static void hal_init(void) {
     current_boot_state = BOOT_STATE_HAL_INIT;
     boot_log("Initializing HAL...");
-    
+
     // TODO: Initialize hardware abstraction layer
     // - CPU detection
     // - Feature detection
     // - Basic hardware setup
-    
+
     boot_log("HAL initialization complete");
 }
 
@@ -347,9 +354,12 @@ static void scheduler_subsystem_init(void) {
 // ============================================================================
 
 static int hex_val(char c) {
-    if (c >= '0' && c <= '9') return c - '0';
-    if (c >= 'a' && c <= 'f') return c - 'a' + 10;
-    if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+    if (c >= '0' && c <= '9')
+        return c - '0';
+    if (c >= 'a' && c <= 'f')
+        return c - 'a' + 10;
+    if (c >= 'A' && c <= 'F')
+        return c - 'A' + 10;
     return -1;
 }
 
@@ -369,7 +379,8 @@ static void parse_boot_cmdline(uint32_t info_addr) {
     for (const char *p = cmd; *p; p++) {
         // match key
         int k = 0;
-        while (key[k] && p[k] == key[k]) k++;
+        while (key[k] && p[k] == key[k])
+            k++;
         if (key[k] != '\0') {
             continue;
         }
@@ -398,11 +409,11 @@ bool boot_validate_multiboot(uint32_t magic, uint32_t info_addr) {
     if (magic != MULTIBOOT1_MAGIC && magic != MULTIBOOT2_MAGIC) {
         return false;
     }
-    
+
     if (info_addr == 0) {
         return false;
     }
-    
+
     // TODO: More thorough validation
     return true;
 }
@@ -424,7 +435,7 @@ void early_console_init(void) {
 
 // Utility functions
 void *memset(void *ptr, int value, size_t num) {
-    uint8_t *p = (uint8_t*)ptr;
+    uint8_t *p = (uint8_t *)ptr;
     while (num--) {
         *p++ = (uint8_t)value;
     }
@@ -432,8 +443,8 @@ void *memset(void *ptr, int value, size_t num) {
 }
 
 void *memcpy(void *dest, const void *src, size_t num) {
-    uint8_t *d = (uint8_t*)dest;
-    const uint8_t *s = (const uint8_t*)src;
+    uint8_t *d = (uint8_t *)dest;
+    const uint8_t *s = (const uint8_t *)src;
     while (num--) {
         *d++ = *s++;
     }

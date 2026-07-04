@@ -36,12 +36,12 @@
  */
 
 #include "paradox.h"
-#include "ghost.h"       /* ghost_req_t/ghost_rep_t, GHOST_STATUS, string builders */
+#include "ghost.h" /* ghost_req_t/ghost_rep_t, GHOST_STATUS, string builders */
 
 /* ---- resolver constants ---- */
-#define PARADOX_EPS        4        /* Q16 successive-delta convergence floor (~6e-5) */
-#define PARADOX_MAX_ITERS  64       /* iteration budget per resolve */
-#define PARADOX_VCLAMP     (16 * Q16_ONE)  /* keep vector components bounded */
+#define PARADOX_EPS 4                 /* Q16 successive-delta convergence floor (~6e-5) */
+#define PARADOX_MAX_ITERS 64          /* iteration budget per resolve */
+#define PARADOX_VCLAMP (16 * Q16_ONE) /* keep vector components bounded */
 
 /* ---- phase-transition thresholds, gated on ghostd's R (Q16) ----
  * Measured, not guessed: after the 3/3 recall ghostd's field locks into an
@@ -56,38 +56,42 @@
  * R >= 0.95, an exploration (-> DIVERGENT) needs R < 0.99. Were the field to
  * fall below 0.95 paradoxd would be held DIVERGENT (cannot re-lock); above
  * 0.99 it would be pinned CONVERGENT. */
-#define PARADOX_R_CONVERGE 62259u   /* 0.95: R at/above allows -> CONVERGENT */
-#define PARADOX_R_DIVERGE  64881u   /* 0.99: R below    allows -> DIVERGENT */
+#define PARADOX_R_CONVERGE 62259u /* 0.95: R at/above allows -> CONVERGENT */
+#define PARADOX_R_DIVERGE 64881u  /* 0.99: R below    allows -> DIVERGENT */
 
 /* Bounded length of a DIVERGENT exploration before paradoxd wants to
  * re-converge (perturbation steps). */
-#define PARADOX_DIV_STEPS  16
+#define PARADOX_DIV_STEPS 16
 
 /* ---- ghost poll cadence ---- */
-#define PARADOX_POLL_IDLE  16       /* idle iterations between STATUS queries */
-#define PARADOX_STEPS_PER_TICK 8    /* resolver steps per scheduled quantum */
+#define PARADOX_POLL_IDLE 16     /* idle iterations between STATUS queries */
+#define PARADOX_STEPS_PER_TICK 8 /* resolver steps per scheduled quantum */
 
 /* Set to 1 to trace every observed R while tuning thresholds. */
-#define PARADOX_TRACE_R    0
+#define PARADOX_TRACE_R 0
 
 enum { PHASE_CONVERGENT = 0, PHASE_DIVERGENT = 1 };
 
 /* ---- state (zeroed .bss) ---- */
-static int      phase = PHASE_CONVERGENT;
-static int32_t  state_vec[PARADOX_VK];
+static int phase = PHASE_CONVERGENT;
+static int32_t state_vec[PARADOX_VK];
 static uint32_t prng_state32 = 0x9E3779B9u;
-static int      awaiting_ghost = 0;
-static int      converged = 0;      /* CONVERGENT state has reached consensus */
-static int      div_steps = 0;      /* perturbation steps taken this DIVERGENT run */
-static uint32_t last_R = 0;         /* most recent ghostd order parameter (Q16) */
-static int      have_R = 0;         /* a real R has been received at least once */
+static int awaiting_ghost = 0;
+static int converged = 0;   /* CONVERGENT state has reached consensus */
+static int div_steps = 0;   /* perturbation steps taken this DIVERGENT run */
+static uint32_t last_R = 0; /* most recent ghostd order parameter (Q16) */
+static int have_R = 0;      /* a real R has been received at least once */
 
-static void logline(const char *s) { write_str(s); }
+static void logline(const char *s) {
+    write_str(s);
+}
 
 /* Internal xorshift32 — the divergent-phase perturbation source. */
 static uint32_t prng32(void) {
     uint32_t x = prng_state32;
-    x ^= x << 13; x ^= x >> 17; x ^= x << 5;
+    x ^= x << 13;
+    x ^= x >> 17;
+    x ^= x << 5;
     prng_state32 = x ? x : 0x1u;
     return prng_state32;
 }
@@ -95,23 +99,27 @@ static uint32_t prng32(void) {
 /* Rounded integer reciprocal in Q16.16: returns ONE*ONE / x (i.e. 1/x in
  * Q16), rounded to nearest. x must be nonzero. ONE*ONE = 2^32 fits int64. */
 static int32_t q16_recip(int32_t x) {
-    int64_t num = (int64_t)Q16_ONE * (int64_t)Q16_ONE;   /* 2^32 */
-    int64_t half = (x > 0) ? (x / 2) : -((-x) / 2);      /* round to nearest */
+    int64_t num = (int64_t)Q16_ONE * (int64_t)Q16_ONE; /* 2^32 */
+    int64_t half = (x > 0) ? (x / 2) : -((-x) / 2);    /* round to nearest */
     return (int32_t)((num + half) / x);
 }
 
 /* Rule (a): resolve x = 1/x by damped reciprocal-average. Returns the
  * settled value (~ +-ONE) and writes the iteration count to *iters. */
 static int32_t resolve_scalar(int32_t x0, int *iters) {
-    int32_t x = x0 ? x0 : 1;         /* a zero seed is a degenerate contradiction */
+    int32_t x = x0 ? x0 : 1; /* a zero seed is a degenerate contradiction */
     int it = 0;
     for (; it < PARADOX_MAX_ITERS; it++) {
-        int32_t r  = q16_recip(x);
+        int32_t r = q16_recip(x);
         int32_t nx = (int32_t)(((int64_t)x + (int64_t)r) / 2);
-        int32_t d  = nx - x;
-        if (d < 0) d = -d;
+        int32_t d = nx - x;
+        if (d < 0)
+            d = -d;
         x = nx;
-        if (d < PARADOX_EPS) { it++; break; }
+        if (d < PARADOX_EPS) {
+            it++;
+            break;
+        }
     }
     *iters = it;
     return x;
@@ -130,8 +138,10 @@ static int32_t step_vector(void) {
     int32_t maxd = 0;
     for (int i = 0; i < PARADOX_VK; i++) {
         int32_t d = nv[i] - state_vec[i];
-        if (d < 0) d = -d;
-        if (d > maxd) maxd = d;
+        if (d < 0)
+            d = -d;
+        if (d > maxd)
+            maxd = d;
         state_vec[i] = nv[i];
     }
     return maxd;
@@ -141,11 +151,13 @@ static int32_t step_vector(void) {
  * internal PRNG, clamped so the vector never runs away. */
 static void perturb_vector(void) {
     for (int i = 0; i < PARADOX_VK; i++) {
-        int32_t nb = (int32_t)(int8_t)(prng32() & 0xFFu);   /* [-128, 127] */
-        int32_t kick = nb * (Q16_ONE / 128);                 /* up to ~+-1.0 */
+        int32_t nb = (int32_t)(int8_t)(prng32() & 0xFFu); /* [-128, 127] */
+        int32_t kick = nb * (Q16_ONE / 128);              /* up to ~+-1.0 */
         int32_t v = state_vec[i] + kick;
-        if (v >  PARADOX_VCLAMP) v =  PARADOX_VCLAMP;
-        if (v < -PARADOX_VCLAMP) v = -PARADOX_VCLAMP;
+        if (v > PARADOX_VCLAMP)
+            v = PARADOX_VCLAMP;
+        if (v < -PARADOX_VCLAMP)
+            v = -PARADOX_VCLAMP;
         state_vec[i] = v;
     }
 }
@@ -154,7 +166,8 @@ static void perturb_vector(void) {
  * which addresses ghostd). The reply lands in our own mailbox. */
 static void query_ghost(void) {
     ghost_req_t req;
-    for (unsigned i = 0; i < sizeof(req); i++) ((uint8_t *)&req)[i] = 0;
+    for (unsigned i = 0; i < sizeof(req); i++)
+        ((uint8_t *)&req)[i] = 0;
     req.op = GHOST_STATUS;
     long rc = send_msg((const char *)&req, (long)sizeof(req));
     if (rc == 0) {
@@ -197,15 +210,16 @@ static void log_transition(void) {
  * is honoured until a real R has been seen. */
 static void phase_step(void) {
     if (phase == PHASE_CONVERGENT) {
-        int32_t d = step_vector();              /* contract toward consensus */
-        if (d < PARADOX_EPS) converged = 1;     /* reached the fixed point */
+        int32_t d = step_vector(); /* contract toward consensus */
+        if (d < PARADOX_EPS)
+            converged = 1; /* reached the fixed point */
         if (have_R && converged && last_R < PARADOX_R_DIVERGE) {
             phase = PHASE_DIVERGENT;
             div_steps = 0;
             log_transition();
         }
     } else {
-        perturb_vector();                       /* inject bounded divergence */
+        perturb_vector(); /* inject bounded divergence */
         div_steps++;
         if (have_R && div_steps >= PARADOX_DIV_STEPS && last_R >= PARADOX_R_CONVERGE) {
             phase = PHASE_CONVERGENT;
@@ -227,7 +241,8 @@ static void resolve_gate(const paradox_req_t *req) {
     (void)resolve_scalar(req->x0, &iters);
 
     /* Seed the coupling's vector state from the same request. */
-    for (int i = 0; i < PARADOX_VK; i++) state_vec[i] = req->vec[i];
+    for (int i = 0; i < PARADOX_VK; i++)
+        state_vec[i] = req->vec[i];
 
     char line[48];
     int o = ghost_put(line, 0, "PARADOXD: RESOLVED n=");
@@ -246,7 +261,8 @@ void _start(void) {
     }
 
     prng_state32 = (uint32_t)ticks() ^ 0x9E3779B9u;
-    if (prng_state32 == 0) prng_state32 = 1u;
+    if (prng_state32 == 0)
+        prng_state32 = 1u;
 
     char buf[sizeof(paradox_req_t) + 8];
 
@@ -293,7 +309,8 @@ void _start(void) {
         /* Run a small batch of resolver steps per quantum so the phase cycle
          * turns over promptly under round-robin scheduling; still yields each
          * loop so paradoxd never hogs the CPU. */
-        for (int s = 0; s < PARADOX_STEPS_PER_TICK; s++) phase_step();
+        for (int s = 0; s < PARADOX_STEPS_PER_TICK; s++)
+            phase_step();
         heartbeat();
         yield();
     }

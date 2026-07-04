@@ -25,9 +25,9 @@
  * Constants
  * ============================================================================ */
 
-#define MAX_RESONANT_PROCESSES  256
-#define RESONANT_SYNC_INTERVAL  1000000     /* 1ms in nanoseconds */
-#define DEFAULT_QUANTUM_NS      10000000    /* 10ms default quantum */
+#define MAX_RESONANT_PROCESSES 256
+#define RESONANT_SYNC_INTERVAL 1000000 /* 1ms in nanoseconds */
+#define DEFAULT_QUANTUM_NS 10000000    /* 10ms default quantum */
 
 /* ============================================================================
  * Initialization and Lifecycle
@@ -69,11 +69,7 @@ bool resonant_scheduler_is_active(void);
  * @param handedness Chiral handedness for coupling
  * @return RESONANT_SUCCESS or error code
  */
-resonant_result_t resonant_register(
-    uint32_t pid,
-    resonant_class_t rclass,
-    handedness_t handedness
-);
+resonant_result_t resonant_register(uint32_t pid, resonant_class_t rclass, handedness_t handedness);
 
 /**
  * Unregister a process from resonant scheduling

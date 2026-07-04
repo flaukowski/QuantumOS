@@ -43,10 +43,10 @@ typedef struct {
 } msi_assoc_entry_t;
 
 // State mapping flags
-#define MSI_STATE_READ    0x01
-#define MSI_STATE_WRITE   0x02
+#define MSI_STATE_READ 0x01
+#define MSI_STATE_WRITE 0x02
 #define MSI_STATE_EXECUTE 0x04
-#define MSI_STATE_SHARED  0x08
+#define MSI_STATE_SHARED 0x08
 
 // === Discovery Operations ===
 msi_result_t msi_version(msi_system_info_t *info);

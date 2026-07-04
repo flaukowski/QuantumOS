@@ -25,8 +25,8 @@ status_t scheduler_init(void);
 
 /* Create a kernel thread: own kmalloc'd stack, entry runs at the given
  * priority with interrupts enabled. The entry function must not return. */
-status_t kernel_thread_create(const char *name, void (*entry)(void),
-                              uint8_t priority, uint32_t *pid_out);
+status_t kernel_thread_create(const char *name, void (*entry)(void), uint8_t priority,
+                              uint32_t *pid_out);
 
 /* Number of context switches performed by the scheduler */
 uint64_t scheduler_get_switches(void);

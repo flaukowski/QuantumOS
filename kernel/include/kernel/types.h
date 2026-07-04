@@ -20,7 +20,7 @@ typedef int64_t s64;
 
 // NULL pointer
 #ifndef NULL
-#define NULL ((void*)0)
+#define NULL ((void *)0)
 #endif
 
 // Status codes
@@ -37,12 +37,12 @@ typedef enum {
 } status_t;
 
 // Memory attributes
-#define MEM_READ    0x01
-#define MEM_WRITE   0x02
+#define MEM_READ 0x01
+#define MEM_WRITE 0x02
 #define MEM_EXECUTE 0x04
-#define MEM_USER    0x08
-#define MEM_KERNEL  0x10
-#define MEM_SHARED  0x20
+#define MEM_USER 0x08
+#define MEM_KERNEL 0x10
+#define MEM_SHARED 0x20
 
 // Page size (4KB standard)
 #define PAGE_SIZE 4096
@@ -81,12 +81,12 @@ typedef enum {
 
 // Debug macros
 #ifdef DEBUG
-#define ASSERT(x) \
-    do { \
-        if (!(x)) { \
-            panic("Assertion failed: %s at %s:%d", #x, __FILE__, __LINE__); \
-        } \
-    } while(0)
+#define ASSERT(x)                                                                                  \
+    do {                                                                                           \
+        if (!(x)) {                                                                                \
+            panic("Assertion failed: %s at %s:%d", #x, __FILE__, __LINE__);                        \
+        }                                                                                          \
+    } while (0)
 #else
 #define ASSERT(x) ((void)0)
 #endif

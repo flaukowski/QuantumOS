@@ -36,5 +36,6 @@ void _start(void) {
     }
 
     exit_(0);
-    for (;;) { }   /* unreachable */
+    for (;;) {
+    } /* unreachable */
 }

@@ -48,25 +48,23 @@ void gdt_init(void) {
     /* Descriptors: same kernel entries as the boot GDT (so CS/DS stay
      * valid without reloading), plus DPL-3 user entries. In long mode
      * base/limit are ignored for code/data; the access bits matter. */
-    gdt[0] = 0;                        /* null */
-    gdt[1] = 0x00209A0000000000ULL;    /* 0x08 kernel code: P S X L */
-    gdt[2] = 0x0000920000000000ULL;    /* 0x10 kernel data: P S RW */
-    gdt[3] = 0x0000F20000000000ULL;    /* 0x18 user data:  P DPL3 S RW */
-    gdt[4] = 0x0020FA0000000000ULL;    /* 0x20 user code:  P DPL3 S X L */
+    gdt[0] = 0;                     /* null */
+    gdt[1] = 0x00209A0000000000ULL; /* 0x08 kernel code: P S X L */
+    gdt[2] = 0x0000920000000000ULL; /* 0x10 kernel data: P S RW */
+    gdt[3] = 0x0000F20000000000ULL; /* 0x18 user data:  P DPL3 S RW */
+    gdt[4] = 0x0020FA0000000000ULL; /* 0x20 user code:  P DPL3 S X L */
 
     /* TSS descriptor (16 bytes across two GDT slots) */
     uint64_t base = (uint64_t)&tss;
     uint32_t limit = sizeof(tss_t) - 1;
-    gdt[5] = ((uint64_t)(limit & 0xFFFF)) |
-             ((base & 0xFFFFFFULL) << 16) |
-             (0x89ULL << 40) |                     /* type: available 64-bit TSS, P */
-             (((uint64_t)(limit >> 16) & 0xF) << 48) |
-             (((base >> 24) & 0xFFULL) << 56);
+    gdt[5] = ((uint64_t)(limit & 0xFFFF)) | ((base & 0xFFFFFFULL) << 16) |
+             (0x89ULL << 40) | /* type: available 64-bit TSS, P */
+             (((uint64_t)(limit >> 16) & 0xF) << 48) | (((base >> 24) & 0xFFULL) << 56);
     gdt[6] = base >> 32;
 
     memset(&tss, 0, sizeof(tss));
     tss.rsp0 = (uint64_t)(interrupt_stack + sizeof(interrupt_stack));
-    tss.iomap_base = sizeof(tss_t);   /* no I/O bitmap */
+    tss.iomap_base = sizeof(tss_t); /* no I/O bitmap */
 
     gdt_ptr.limit = sizeof(gdt) - 1;
     gdt_ptr.base = (uint64_t)gdt;

@@ -81,8 +81,11 @@ jobs:
         echo "Scanning for unsafe C functions..."
         UNSAFE_FOUND=0
 
-        # Check for dangerous functions that should never be used
-        if find . -name "*.c" -o -name "*.h" | xargs grep -l "gets\|sprintf[^n]" 2>/dev/null | grep -v test; then
+        # Check for dangerous functions that should never be used.
+        # Match actual call sites (word boundary + open paren), not any
+        # substring — "num_targets" and comment prose like "the caller
+        # gets nothing" are not gets() calls.
+        if find . -name "*.c" -o -name "*.h" | xargs grep -lE "\b(gets|sprintf)[[:space:]]*\(" 2>/dev/null | grep -v test; then
           echo "ERROR: Found usage of dangerous functions (gets, sprintf without bounds)"
           UNSAFE_FOUND=1
         fi
@@ -93,7 +96,7 @@ jobs:
         find . -name "*.c" -o -name "*.h" | xargs grep -n "strcpy\|strcat" 2>/dev/null || true
 
         # Check for shell execution functions (should be rare in kernel code)
-        if find . -name "*.c" | xargs grep -l "system\s*(" 2>/dev/null | grep -v test; then
+        if find . -name "*.c" | xargs grep -lE "\bsystem[[:space:]]*\(" 2>/dev/null | grep -v test; then
           echo "ERROR: Found system() calls in non-test code"
           UNSAFE_FOUND=1
         fi
@@ -350,17 +353,18 @@ jobs:
         sudo apt-get update
         sudo apt-get install -y build-essential qemu-system-x86 nasm lcov
 
-    - name: Build with coverage instrumentation
+    # gcov (--coverage) cannot instrument the freestanding kernel image:
+    # the gcov runtime needs libc, the kernel links with -nostdlib, so an
+    # instrumented build always dies at link on undefined __gcov_* symbols.
+    # Build normally, exercise the test paths, and let the report below say
+    # honestly that line coverage is not measurable until an in-kernel gcov
+    # runtime exists. Functional coverage lives in the smoke/integration jobs.
+    - name: Build kernel
       run: |
         make clean
-        # Build with coverage flags
-        make CFLAGS="-Wall -Wextra -nostdlib -ffreestanding -mno-red-zone \
-          -mno-mmx -mno-sse -mno-sse2 -fno-omit-frame-pointer \
-          -fno-stack-protector -fno-pic -fno-pie -mcmodel=kernel \
-          -Ikernel/include -Ikernel/../msi/include \
-          -g -O0 --coverage -fprofile-arcs -ftest-coverage"
+        make
 
-    - name: Run tests with coverage
+    - name: Run tests
       run: |
         # Run the test suite
         make test || true
