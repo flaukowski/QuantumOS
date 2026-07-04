@@ -60,12 +60,44 @@
                          * GRUB/ISO boot. A no-op in effect under the -kernel/VGA
                          * path (nothing samples it). Returns bytes stored. */
 
+#define SYS_CONS                                                                                   \
+    15 /* rdi = op (SYS_CONS_READ/WRITE), rsi = buf, rdx = len;
+                         * raw byte pipe on the interactive console (COM1 RX ring
+                         * + PS/2 keyboard in, raw COM1 TX out — no "[user pid]"
+                         * prefix, so a shell owns its own line discipline).
+                         * Gated on a CAP_RESOURCE_DEVICE capability over
+                         * DEVICE_ID_CONSOLE (CAP_READ to read, CAP_WRITE to
+                         * write); EPERM without. Read is non-blocking: returns
+                         * the bytes buffered so far (0 if none). */
+#define SYS_SYSINFO                                                                                \
+    16 /* rdi = op (SYSINFO_PS/MEM), rsi = buf, rdx = len;
+                         * kernel-formatted live introspection text copied into
+                         * the caller's buffer: the process table (one "PS: pid
+                         * name STATE" line per live process) or memory stats
+                         * ("MEM: heap free=... frames free=.../..."). Read-only
+                         * and uncapped, like SYS_GETPID/SYS_TICKS: it names no
+                         * authority, it only reports. Returns bytes copied. */
+
 /* Bytes SYS_FIELD_SNAPSHOT stores at most (bounds the kernel viz buffer). */
 #define FIELD_SNAP_BYTES 256
 
 /* SYS_COM2 operations (rdi) */
 #define SYS_COM2_READ 0
 #define SYS_COM2_WRITE 1
+
+/* SYS_CONS operations (rdi) */
+#define SYS_CONS_READ 0
+#define SYS_CONS_WRITE 1
+
+/* SYS_SYSINFO operations (rdi) */
+#define SYSINFO_PS 0
+#define SYSINFO_MEM 1
+
+/* Bytes SYS_CONS will move per call at most (bounds the kernel bounce buffer). */
+#define CONS_MAX_BYTES 256
+
+/* Bytes SYS_SYSINFO will produce at most (bounds the kernel format buffer). */
+#define SYSINFO_MAX_BYTES 1024
 
 /* Bytes SYS_QRAND will draw per call at most (a capless caller is denied
  * before any draw). */

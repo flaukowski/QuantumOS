@@ -71,6 +71,21 @@ void _start(void) {
         }
     }
 
+    /* And for the interactive console (epic #62 phase 1): ghost-test holds
+     * no CAP_RESOURCE_DEVICE cap over DEVICE_ID_CONSOLE, so it can neither
+     * read keystrokes nor forge console output — only qsh is granted the
+     * console. The read attempt must be denied EPERM before the input ring
+     * is even looked at. */
+    {
+        uint8_t kbuf[4];
+        long kr = cons_read(kbuf, (long)sizeof(kbuf));
+        if (kr == -4) {
+            write_str("CONS: capless caller denied (EPERM)");
+        } else {
+            write_str("CONS: WARNING — capless caller was NOT denied");
+        }
+    }
+
     const uint32_t seeds[3] = {GHOST_SEED_0, GHOST_SEED_1, GHOST_SEED_2};
     uint32_t pats[3][GHOST_PW];
 

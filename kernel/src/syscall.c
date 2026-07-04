@@ -22,6 +22,7 @@
 #include <kernel/ipc.h>
 #include <kernel/service.h>
 #include <kernel/com2_uart.h>
+#include <kernel/console.h>
 #include <kernel/boot.h>
 
 /* Embedded user programs (kernel/src/user_blob.S) */
@@ -39,6 +40,7 @@ extern const uint8_t _binary_ghost_test_elf_start[], _binary_ghost_test_elf_end[
 extern const uint8_t _binary_paradoxd_elf_start[], _binary_paradoxd_elf_end[];
 extern const uint8_t _binary_paradox_test_elf_start[], _binary_paradox_test_elf_end[];
 extern const uint8_t _binary_swarm_svc_elf_start[], _binary_swarm_svc_elf_end[];
+extern const uint8_t _binary_qsh_elf_start[], _binary_qsh_elf_end[];
 
 static status_t finalize_user_process(address_space_t *as, const char *name, uint64_t entry,
                                       uint32_t *pid_out);
@@ -46,6 +48,7 @@ void user_ipc_demo_init(void);
 void user_ghost_demo_init(void);
 void user_paradox_demo_init(uint32_t ghostd_pid);
 void user_swarm_demo_init(uint32_t ghostd_pid);
+void user_shell_init(uint32_t ghostd_pid);
 
 /* int 0x80 stub (kernel/src/interrupts.S) */
 extern void isr128(void);
@@ -283,6 +286,128 @@ static uint64_t sys_com2(uint32_t pid, uint64_t op, uint64_t user_ptr, uint64_t 
     return n;
 }
 
+/* Capability-gated interactive console (backs SYS_CONS, epic #62 phase 1).
+ * The console is a guarded device resource exactly like the COM2 bridge: the
+ * caller must hold a CAP_RESOURCE_DEVICE capability over DEVICE_ID_CONSOLE
+ * carrying CAP_READ (to drain the input ring) or CAP_WRITE (to emit raw
+ * bytes). Reads are non-blocking; writes are raw — no "[user pid]" prefix —
+ * so the shell owns its own line discipline. Bytes bounce through a bounded
+ * kernel buffer, clamped to the caller's mapped user half as usual. */
+static uint64_t sys_cons(uint32_t pid, uint64_t op, uint64_t user_ptr, uint64_t len) {
+    if (op != SYS_CONS_READ && op != SYS_CONS_WRITE) {
+        return SYSCALL_EINVAL;
+    }
+    if (len == 0) {
+        return 0;
+    }
+    if (!in_user_range(user_ptr)) {
+        return SYSCALL_EFAULT;
+    }
+    if (len > CONS_MAX_BYTES) {
+        len = CONS_MAX_BYTES;
+    }
+
+    uint8_t tmp[CONS_MAX_BYTES];
+
+    if (op == SYS_CONS_WRITE) {
+        if (cap_find_resource(pid, CAP_RESOURCE_DEVICE, CAP_WRITE, DEVICE_ID_CONSOLE) !=
+            CAP_SUCCESS) {
+            return SYSCALL_EPERM;
+        }
+        const uint8_t *src = (const uint8_t *)user_ptr;
+        uint32_t n = 0;
+        while (n < len && in_user_range(user_ptr + n)) {
+            tmp[n] = src[n];
+            n++;
+        }
+        return console_write(tmp, n);
+    }
+
+    /* SYS_CONS_READ */
+    if (cap_find_resource(pid, CAP_RESOURCE_DEVICE, CAP_READ, DEVICE_ID_CONSOLE) != CAP_SUCCESS) {
+        return SYSCALL_EPERM;
+    }
+    uint32_t got = console_read(tmp, (uint32_t)len);
+    uint8_t *dst = (uint8_t *)user_ptr;
+    uint32_t n = 0;
+    while (n < got && in_user_range(user_ptr + n)) {
+        dst[n] = tmp[n];
+        n++;
+    }
+    return n;
+}
+
+/* Append a decimal u64 to buf at offset o (bounded by max). */
+static size_t fmt_dec(char *buf, size_t o, size_t max, uint64_t v) {
+    char t[20];
+    int n = 0;
+    if (v == 0) {
+        t[n++] = '0';
+    }
+    while (v && n < (int)sizeof(t)) {
+        t[n++] = (char)('0' + (v % 10));
+        v /= 10;
+    }
+    while (n > 0 && o + 1 < max) {
+        buf[o++] = t[--n];
+    }
+    return o;
+}
+
+static size_t fmt_str(char *buf, size_t o, size_t max, const char *s) {
+    while (*s && o + 1 < max) {
+        buf[o++] = *s++;
+    }
+    return o;
+}
+
+/* Live introspection text (backs SYS_SYSINFO). Uncapped read-only reporting,
+ * like SYS_GETPID/SYS_TICKS: it names no authority. The kernel formats the
+ * text so the user side needs no struct ABI — SYSINFO_PS is one "PS: pid
+ * name STATE" line per live process (formatted by process.c, which owns the
+ * table), SYSINFO_MEM is a single "MEM: ..." stats line. */
+static uint64_t sys_sysinfo(uint32_t pid, uint64_t op, uint64_t user_ptr, uint64_t len) {
+    (void)pid;
+    if (len == 0) {
+        return 0;
+    }
+    if (!in_user_range(user_ptr)) {
+        return SYSCALL_EFAULT;
+    }
+
+    /* Static bounce buffer: syscalls run cli'd on one CPU, so this cannot
+     * be re-entered while in use. */
+    static char tmp[SYSINFO_MAX_BYTES];
+    size_t produced = 0;
+
+    if (op == SYSINFO_PS) {
+        produced = process_format_ps(tmp, sizeof(tmp));
+    } else if (op == SYSINFO_MEM) {
+        size_t o = 0;
+        o = fmt_str(tmp, o, sizeof(tmp), "MEM: heap free=");
+        o = fmt_dec(tmp, o, sizeof(tmp), kheap_free_bytes());
+        o = fmt_str(tmp, o, sizeof(tmp), " bytes, frames free=");
+        o = fmt_dec(tmp, o, sizeof(tmp), pmm_get_free_frames());
+        o = fmt_str(tmp, o, sizeof(tmp), "/");
+        o = fmt_dec(tmp, o, sizeof(tmp), pmm_get_total_frames());
+        o = fmt_str(tmp, o, sizeof(tmp), "\r\n");
+        produced = o;
+    } else {
+        return SYSCALL_EINVAL;
+    }
+
+    if (len > produced) {
+        len = produced;
+    }
+    char *dst = (char *)user_ptr;
+    uint32_t n = 0;
+    while (n < len && in_user_range(user_ptr + n)) {
+        dst[n] = tmp[n];
+        n++;
+    }
+    return n;
+}
+
 /* Report the boot qseed (SYS_QSEED). Gated on the same quantum-pool read
  * capability as SYS_QRAND — a capless caller cannot even learn the seed. The
  * value lets a ring-3 attestation service bind its boot record to the exact
@@ -393,6 +518,12 @@ static void syscall_dispatch(cpu_state_t *state) {
         break;
     case SYS_FIELD_SNAPSHOT:
         state->rax = sys_field_snapshot(pid, state->rdi, state->rsi);
+        break;
+    case SYS_CONS:
+        state->rax = sys_cons(pid, state->rdi, state->rsi, state->rdx);
+        break;
+    case SYS_SYSINFO:
+        state->rax = sys_sysinfo(pid, state->rdi, state->rsi, state->rdx);
         break;
     default:
         state->rax = SYSCALL_ENOSYS;
@@ -782,4 +913,58 @@ void user_swarm_demo_init(uint32_t ghostd_pid) {
     service_monitor(sid, true);
 
     boot_log("ghostOS: swarm-svc (ring 3) bridging COM2, wired to ghostd");
+
+    /* Epic #62: the interactive shell is the last citizen up, once the
+     * services it can talk to already exist. */
+    user_shell_init(ghostd_pid);
+}
+
+/* Bring up qsh — the interactive shell (epic #62 phase 1, #63) — as a
+ * monitored ring-3 user-process service. Its authority is declarative and
+ * minimal: the console device capability (its whole reason to exist) and a
+ * quantum-pool read cap (the qrand/qseed builtins) are re-minted by the
+ * service framework on every start, so a watchdog-reborn shell keeps its
+ * console. One IPC send-cap each way wires it to ghostd for the `ghost`
+ * builtin (peer caps are NOT re-minted on restart — a known service.c
+ * limitation shared with the other demo peers).
+ *
+ * `exit` is a feature, not a crash: the shell terminates, its heartbeat
+ * goes silent, and the watchdog restarts it — the reborn banner is the
+ * boot-log proof that an OS operator surface can die and come back. */
+void user_shell_init(uint32_t ghostd_pid) {
+    service_definition_t qsh_def = {
+        .name = "qsh",
+        .entry = NULL, /* user-process service */
+        .user_elf_start = _binary_qsh_elf_start,
+        .user_elf_end = _binary_qsh_elf_end,
+        .dependencies = {NULL},
+        .max_restarts = 3,
+        .grant_quantum_pool = 1,
+        .grant_console = 1,
+    };
+
+    uint32_t sid = 0;
+    uint32_t qsh_pid = 0;
+
+    if (service_register(&qsh_def, &sid) == SVC_SUCCESS &&
+        service_start("qsh", NULL) == SVC_SUCCESS) {
+        service_info_t info;
+        if (service_status(sid, &info) == SVC_SUCCESS) {
+            qsh_pid = info.pid;
+        }
+    }
+    if (qsh_pid == 0) {
+        boot_log("Warning: qsh shell service failed to start");
+        return;
+    }
+
+    /* qsh <-> ghostd: the `ghost` builtin queries the field over
+     * capability-checked IPC; ghostd replies to the sender via SYS_SEND_TO. */
+    uint32_t cap = CAP_ID_INVALID;
+    cap_create(qsh_pid, CAP_RESOURCE_IPC, ghostd_pid, CAP_READ | CAP_WRITE, 0, &cap);
+    cap_create(ghostd_pid, CAP_RESOURCE_IPC, qsh_pid, CAP_READ | CAP_WRITE, 0, &cap);
+
+    service_monitor(sid, true);
+
+    boot_log("qsh: interactive shell online (ring 3, console capability)");
 }

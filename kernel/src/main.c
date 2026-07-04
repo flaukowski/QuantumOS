@@ -11,6 +11,7 @@
 #include <kernel/gdt.h>
 #include <kernel/syscall.h>
 #include <kernel/com2_uart.h>
+#include <kernel/console.h>
 #include <kernel/vga.h>
 #include <kernel/fb.h>
 #ifdef SCHED_RESONANT
@@ -142,6 +143,12 @@ static void kernel_init(void) {
     // COM1/console is untouched; swarm_svc drives this port from ring 3.
     com2_init();
 
+    // Console INPUT (epic #62): COM1 RX + PS/2 keyboard feed a kernel ring
+    // buffer; ring 3 reads it via the capability-guarded SYS_CONS. Any byte
+    // CI has already piped into the serial console is rescued here, before
+    // interrupts are even on. IRQ1/IRQ4 unmask alongside the timer below.
+    console_init();
+
     // Initialize core services
     splash_stage("capabilities + quantum resources", 60);
     core_services_init();
@@ -158,6 +165,8 @@ static void kernel_init(void) {
     splash_stage("timer + interrupts", 98);
     pit_init(TIMER_DEFAULT_HZ);
     interrupt_enable(IRQ_BASE + IRQ_TIMER);
+    interrupt_enable(IRQ_BASE + IRQ_KEYBOARD);
+    interrupt_enable(IRQ_BASE + IRQ_COM1);
     interrupt_enable_all();
     boot_log("Timer started, interrupts enabled");
 

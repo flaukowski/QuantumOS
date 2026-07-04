@@ -1,0 +1,239 @@
+/**
+ * QuantumOS Console Input implementation (epic #62 phase 1, #63).
+ *
+ * A single input ring with two interrupt-driven producers (COM1 RX,
+ * PS/2 keyboard) and one consumer (SYS_CONS reads). Both producers run
+ * inside interrupt handlers (IF=0); the consumer and console_write()
+ * take an explicit IRQ-save guard so they are safe from any context.
+ *
+ * The COM1 transmit path stays in boot.S (early_console_write) — this
+ * file only ever ADDS the receive side (IER bit 0). The one delicate
+ * moment is console_init(): CI pipes shell commands into QEMU's stdin
+ * from t=0, so a byte may already sit in the receiver before the kernel
+ * gets here. The init therefore drains the receiver into the ring FIRST,
+ * so the FIFO-clear that follows discards nothing; QEMU's chardev flow
+ * control holds the rest of the pipe until the guest actually reads.
+ *
+ * SPDX-License-Identifier: GPL-2.0-only
+ */
+
+#include <kernel/console.h>
+#include <kernel/boot.h>
+
+/* 16550 register offsets (same layout as com2_uart.c) */
+#define UART_THR 0 /* Transmit Holding Register (write, DLAB=0) */
+#define UART_RBR 0 /* Receive Buffer Register  (read,  DLAB=0) */
+#define UART_DLL 0 /* Divisor Latch Low        (DLAB=1) */
+#define UART_IER 1 /* Interrupt Enable Register (DLAB=0) */
+#define UART_DLH 1 /* Divisor Latch High       (DLAB=1) */
+#define UART_FCR 2 /* FIFO Control Register (write) */
+#define UART_LCR 3 /* Line Control Register */
+#define UART_MCR 4 /* Modem Control Register */
+#define UART_LSR 5 /* Line Status Register */
+
+#define LSR_DATA_READY 0x01
+#define LSR_THR_EMPTY 0x20
+
+#define LCR_DLAB 0x80
+#define LCR_8N1 0x03
+
+#define IER_RX_AVAIL 0x01 /* interrupt when a received byte is ready */
+
+/* PS/2 controller ports */
+#define PS2_DATA 0x60
+#define PS2_STATUS 0x64
+#define PS2_STATUS_OUTPUT_FULL 0x01
+
+static inline void io_outb(uint16_t port, uint8_t value) {
+    __asm__ volatile("outb %0, %1" : : "a"(value), "Nd"(port));
+}
+
+static inline uint8_t io_inb(uint16_t port) {
+    uint8_t ret;
+    __asm__ volatile("inb %1, %0" : "=a"(ret) : "Nd"(port));
+    return ret;
+}
+
+static inline uint64_t irq_save(void) {
+    uint64_t flags;
+    __asm__ volatile("pushfq; pop %0; cli" : "=r"(flags) : : "memory");
+    return flags;
+}
+
+static inline void irq_restore(uint64_t flags) {
+    __asm__ volatile("push %0; popfq" : : "r"(flags) : "memory");
+}
+
+/* ============================================================================
+ * Input ring buffer
+ * ============================================================================ */
+
+#define CONSOLE_RING_SIZE 1024 /* power of two */
+
+static uint8_t ring[CONSOLE_RING_SIZE];
+static volatile uint32_t ring_head; /* producer index (IRQ context) */
+static volatile uint32_t ring_tail; /* consumer index */
+static volatile uint32_t ring_dropped;
+
+/* Producer side. Called with interrupts off (IRQ handler or init).
+ * Drops the newest byte when full — honest backpressure, and the
+ * counter makes the loss observable. */
+static void ring_push(uint8_t byte) {
+    uint32_t next = (ring_head + 1) & (CONSOLE_RING_SIZE - 1);
+    if (next == ring_tail) {
+        ring_dropped++;
+        return;
+    }
+    ring[ring_head] = byte;
+    ring_head = next;
+}
+
+uint32_t console_read(uint8_t *buf, uint32_t len) {
+    if (!buf || len == 0) {
+        return 0;
+    }
+    uint64_t flags = irq_save();
+    uint32_t n = 0;
+    while (n < len && ring_tail != ring_head) {
+        buf[n++] = ring[ring_tail];
+        ring_tail = (ring_tail + 1) & (CONSOLE_RING_SIZE - 1);
+    }
+    irq_restore(flags);
+    return n;
+}
+
+/* ============================================================================
+ * COM1 receive
+ * ============================================================================ */
+
+void console_com1_irq(void) {
+    while (io_inb(COM1_PORT_BASE + UART_LSR) & LSR_DATA_READY) {
+        ring_push(io_inb(COM1_PORT_BASE + UART_RBR));
+    }
+}
+
+uint32_t console_write(const uint8_t *buf, uint32_t len) {
+    if (!buf) {
+        return 0;
+    }
+    uint64_t flags = irq_save();
+    for (uint32_t i = 0; i < len; i++) {
+        while (!(io_inb(COM1_PORT_BASE + UART_LSR) & LSR_THR_EMPTY)) {
+            /* spin until the transmit holding register drains */
+        }
+        io_outb(COM1_PORT_BASE + UART_THR, buf[i]);
+    }
+    irq_restore(flags);
+    return len;
+}
+
+/* ============================================================================
+ * PS/2 keyboard (scancode set 1, US layout)
+ * ============================================================================ */
+
+static uint8_t kbd_e0;    /* last byte was the 0xE0 extended prefix */
+static uint8_t kbd_shift; /* either shift key currently held */
+
+/* Make-code -> ASCII, unshifted. 0 = no printable mapping. */
+static const char kbd_map[0x40] = {
+    [0x02] = '1', [0x03] = '2',  [0x04] = '3',  [0x05] = '4',  [0x06] = '5', [0x07] = '6',
+    [0x08] = '7', [0x09] = '8',  [0x0A] = '9',  [0x0B] = '0',  [0x0C] = '-', [0x0D] = '=',
+    [0x0E] = 8,   [0x0F] = '\t', [0x10] = 'q',  [0x11] = 'w',  [0x12] = 'e', [0x13] = 'r',
+    [0x14] = 't', [0x15] = 'y',  [0x16] = 'u',  [0x17] = 'i',  [0x18] = 'o', [0x19] = 'p',
+    [0x1A] = '[', [0x1B] = ']',  [0x1C] = '\n', [0x1E] = 'a',  [0x1F] = 's', [0x20] = 'd',
+    [0x21] = 'f', [0x22] = 'g',  [0x23] = 'h',  [0x24] = 'j',  [0x25] = 'k', [0x26] = 'l',
+    [0x27] = ';', [0x28] = '\'', [0x29] = '`',  [0x2B] = '\\', [0x2C] = 'z', [0x2D] = 'x',
+    [0x2E] = 'c', [0x2F] = 'v',  [0x30] = 'b',  [0x31] = 'n',  [0x32] = 'm', [0x33] = ',',
+    [0x34] = '.', [0x35] = '/',  [0x39] = ' ',
+};
+
+/* Make-code -> ASCII with shift held. */
+static const char kbd_map_shift[0x40] = {
+    [0x02] = '!', [0x03] = '@',  [0x04] = '#',  [0x05] = '$', [0x06] = '%', [0x07] = '^',
+    [0x08] = '&', [0x09] = '*',  [0x0A] = '(',  [0x0B] = ')', [0x0C] = '_', [0x0D] = '+',
+    [0x0E] = 8,   [0x0F] = '\t', [0x10] = 'Q',  [0x11] = 'W', [0x12] = 'E', [0x13] = 'R',
+    [0x14] = 'T', [0x15] = 'Y',  [0x16] = 'U',  [0x17] = 'I', [0x18] = 'O', [0x19] = 'P',
+    [0x1A] = '{', [0x1B] = '}',  [0x1C] = '\n', [0x1E] = 'A', [0x1F] = 'S', [0x20] = 'D',
+    [0x21] = 'F', [0x22] = 'G',  [0x23] = 'H',  [0x24] = 'J', [0x25] = 'K', [0x26] = 'L',
+    [0x27] = ':', [0x28] = '"',  [0x29] = '~',  [0x2B] = '|', [0x2C] = 'Z', [0x2D] = 'X',
+    [0x2E] = 'C', [0x2F] = 'V',  [0x30] = 'B',  [0x31] = 'N', [0x32] = 'M', [0x33] = '<',
+    [0x34] = '>', [0x35] = '?',  [0x39] = ' ',
+};
+
+#define SC_LSHIFT 0x2A
+#define SC_RSHIFT 0x36
+
+void console_kbd_irq(void) {
+    uint8_t sc = io_inb(PS2_DATA);
+
+    if (sc == 0xE0) { /* extended prefix: swallow it and the next byte */
+        kbd_e0 = 1;
+        return;
+    }
+    if (kbd_e0) { /* extended keys (arrows etc.) unmapped for now */
+        kbd_e0 = 0;
+        return;
+    }
+    if (sc & 0x80) { /* break (release) — only shift state cares */
+        uint8_t make = sc & 0x7F;
+        if (make == SC_LSHIFT || make == SC_RSHIFT) {
+            kbd_shift = 0;
+        }
+        return;
+    }
+    if (sc == SC_LSHIFT || sc == SC_RSHIFT) {
+        kbd_shift = 1;
+        return;
+    }
+    if (sc < sizeof(kbd_map)) {
+        char c = kbd_shift ? kbd_map_shift[sc] : kbd_map[sc];
+        if (c) {
+            ring_push((uint8_t)c);
+        }
+    }
+}
+
+/* ============================================================================
+ * Init
+ * ============================================================================ */
+
+void console_init(void) {
+    /* 1. Quiesce the receiver's interrupt while we set up. */
+    io_outb(COM1_PORT_BASE + UART_IER, 0x00);
+
+    /* 2. Line settings: 115200 8N1 (matches the COM2 bridge; QEMU's
+     *    stdio chardev ignores baud, real hardware wants it explicit). */
+    io_outb(COM1_PORT_BASE + UART_LCR, LCR_DLAB);
+    io_outb(COM1_PORT_BASE + UART_DLL, 0x01);
+    io_outb(COM1_PORT_BASE + UART_DLH, 0x00);
+    io_outb(COM1_PORT_BASE + UART_LCR, LCR_8N1);
+
+    /* 3. FCR is deliberately NOT touched. CI pipes shell input from t=0
+     *    and QEMU refills the receive register asynchronously the moment
+     *    the guest drains it, so there is NO point in this sequence where
+     *    a FIFO clear is safe — QEMU also forces a clear on ANY change of
+     *    the FIFO-enable bit (a real byte was lost to exactly this race:
+     *    'help' arrived as 'hep'). Per-byte receive interrupts are ample
+     *    for a console, and the flow-controlled chardev never overruns a
+     *    1-byte receiver. */
+
+    /* 4. DTR + RTS + OUT2 — OUT2 gates the UART's IRQ line to the PIC. */
+    io_outb(COM1_PORT_BASE + UART_MCR, 0x0B);
+
+    /* 5. Rescue any byte the receiver already holds into the ring, THEN
+     *    enable the receive interrupt. A byte landing between these two
+     *    writes still raises the IRQ once IER is set (Data-Ready is
+     *    level-evaluated on the IER write), so there is no loss window. */
+    console_com1_irq();
+    io_outb(COM1_PORT_BASE + UART_IER, IER_RX_AVAIL);
+
+    /* 6. Reset keyboard translation state and drain stale PS/2 bytes so
+     *    the first real keystroke starts clean. */
+    kbd_e0 = 0;
+    kbd_shift = 0;
+    while (io_inb(PS2_STATUS) & PS2_STATUS_OUTPUT_FULL) {
+        (void)io_inb(PS2_DATA);
+    }
+
+    boot_log("Console input online (COM1 RX IRQ4 + PS/2 IRQ1 -> 1K ring)");
+}

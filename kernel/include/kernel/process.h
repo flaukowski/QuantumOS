@@ -200,6 +200,10 @@ bool process_is_terminated(uint32_t pid);
 status_t process_get_stats(process_stats_t *stats);
 status_t process_reset_stats(void);
 
+/* Format the live process table as "PS: pid name STATE" lines (backs
+ * SYS_SYSINFO). Bounded, NUL-terminated; returns bytes written. */
+size_t process_format_ps(char *buf, size_t max);
+
 /* Quantum process support */
 status_t process_set_quantum_aware(uint32_t pid, bool aware);
 bool process_is_quantum_aware(uint32_t pid);

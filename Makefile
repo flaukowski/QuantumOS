@@ -77,7 +77,7 @@ ASSEMBLY_SOURCES = $(wildcard $(KERNEL_DIR)/src/*.S)
 # objects (symbols _binary_<name>_elf_start/_end)
 USER_DIR = user
 USER_BUILD = $(BUILD_DIR)/user
-USER_PROGS = init echo client hbsvc ghostd ghost_test paradoxd paradox_test swarm_svc
+USER_PROGS = init echo client hbsvc ghostd ghost_test paradoxd paradox_test swarm_svc qsh
 USER_ELF_OBJS = $(USER_PROGS:%=$(USER_BUILD)/%_elf.o)
 
 OBJECTS = $(KERNEL_SOURCES:$(KERNEL_DIR)/src/%.c=$(BUILD_DIR)/%.o) \
@@ -310,8 +310,9 @@ ci-smoke: kernel
 	@echo ""
 	@echo "[1/3] Build verified: $(BUILD_DIR)/kernel.elf exists"
 	@test -f $(BUILD_DIR)/kernel.elf || (echo "ERROR: Kernel not built" && exit 1)
-	@echo "[2/3] Running QEMU boot test (10 second timeout)..."
-	@timeout 10s qemu-system-x86_64 -kernel $(BUILD_DIR)/kernel.elf32 \
+	@echo "[2/3] Running QEMU boot test (14 second timeout, shell session piped into the console)..."
+	@( printf 'help\nps\nfree\nuptime\nghost\nqrand\nexit\n'; sleep 13 ) | \
+		timeout 14s qemu-system-x86_64 -kernel $(BUILD_DIR)/kernel.elf32 \
 		-serial stdio -m 128M -display none -no-reboot 2>&1 | tee /tmp/qemu-boot.log || true
 	@echo ""
 	@echo "[3/3] Validating boot output..."
@@ -386,6 +387,72 @@ ci-smoke: kernel
 		echo ""; echo "=== Smoke Test FAILED ==="; exit 1; \
 	fi
 	@echo "SUCCESS: paradoxd/ghostd field coupling proven (phase transition gated on ghost R)"
+	@# epic #62 phase 1 (issue #63): the interactive shell must come up as a
+	@# ring-3 service holding the console capability and greet on the console.
+	@if ! grep -q "QSH: QuantumOS interactive shell ready" /tmp/qemu-boot.log 2>/dev/null; then \
+		echo "ERROR: qsh did not greet (QSH: QuantumOS interactive shell ready)"; \
+		echo "Boot log:"; cat /tmp/qemu-boot.log 2>/dev/null || true; \
+		echo ""; echo "=== Smoke Test FAILED ==="; exit 1; \
+	fi
+	@echo "SUCCESS: qsh interactive shell came up (console capability live)"
+	@# Input integrity: the FIRST piped command ('help') must arrive intact
+	@# across the boot handoff — every byte rescued, none eaten by UART init.
+	@if ! grep -q "qsh: commands: help" /tmp/qemu-boot.log 2>/dev/null; then \
+		echo "ERROR: piped 'help' did not execute intact (qsh: commands: help)"; \
+		echo "Boot log:"; cat /tmp/qemu-boot.log 2>/dev/null || true; \
+		echo ""; echo "=== Smoke Test FAILED ==="; exit 1; \
+	fi
+	@echo "SUCCESS: first piped command arrived intact (no input bytes lost at boot)"
+	@# The piped 'ps' must show the shell observing ITSELF running in the live
+	@# process table — the SYS_SYSINFO introspection round trip.
+	@if ! grep -q "qsh RUNNING" /tmp/qemu-boot.log 2>/dev/null; then \
+		echo "ERROR: piped 'ps' did not list qsh RUNNING (SYS_SYSINFO round trip)"; \
+		echo "Boot log:"; cat /tmp/qemu-boot.log 2>/dev/null || true; \
+		echo ""; echo "=== Smoke Test FAILED ==="; exit 1; \
+	fi
+	@echo "SUCCESS: ps ran — the shell sees itself RUNNING in the process table"
+	@# 'free' must report live kernel memory stats.
+	@if ! grep -q "MEM: heap free=" /tmp/qemu-boot.log 2>/dev/null; then \
+		echo "ERROR: piped 'free' produced no memory stats (MEM: heap free=)"; \
+		echo "Boot log:"; cat /tmp/qemu-boot.log 2>/dev/null || true; \
+		echo ""; echo "=== Smoke Test FAILED ==="; exit 1; \
+	fi
+	@echo "SUCCESS: free reported live kernel memory stats"
+	@# 'ghost' must fetch ghostd's field status over capability-checked IPC.
+	@if ! grep -q "qsh: ghost R=" /tmp/qemu-boot.log 2>/dev/null; then \
+		echo "ERROR: piped 'ghost' got no field status from ghostd (qsh: ghost R=)"; \
+		echo "Boot log:"; cat /tmp/qemu-boot.log 2>/dev/null || true; \
+		echo ""; echo "=== Smoke Test FAILED ==="; exit 1; \
+	fi
+	@echo "SUCCESS: shell queried ghostd's field over capability IPC"
+	@# 'uptime' + 'qrand' must answer (the shell's declared quantum-pool cap works).
+	@if ! grep -q "qsh: uptime " /tmp/qemu-boot.log 2>/dev/null; then \
+		echo "ERROR: piped 'uptime' produced no answer (qsh: uptime)"; \
+		echo "Boot log:"; cat /tmp/qemu-boot.log 2>/dev/null || true; \
+		echo ""; echo "=== Smoke Test FAILED ==="; exit 1; \
+	fi
+	@if ! grep -q "qsh: qrand " /tmp/qemu-boot.log 2>/dev/null; then \
+		echo "ERROR: piped 'qrand' drew no bytes (qsh: qrand) — shell quantum cap broken"; \
+		echo "Boot log:"; cat /tmp/qemu-boot.log 2>/dev/null || true; \
+		echo ""; echo "=== Smoke Test FAILED ==="; exit 1; \
+	fi
+	@echo "SUCCESS: uptime + qrand answered (shell quantum-pool cap live)"
+	@# Capability gate: the capless ghost-test must be denied SYS_CONS — only
+	@# qsh holds the console device capability.
+	@if ! grep -q "CONS: capless caller denied (EPERM)" /tmp/qemu-boot.log 2>/dev/null; then \
+		echo "ERROR: capless SYS_CONS was not denied (CONS: capless caller denied)"; \
+		echo "Boot log:"; cat /tmp/qemu-boot.log 2>/dev/null || true; \
+		echo ""; echo "=== Smoke Test FAILED ==="; exit 1; \
+	fi
+	@echo "SUCCESS: SYS_CONS capability gate proven (capless caller denied EPERM)"
+	@# Supervision gate: after the piped 'exit', the watchdog must restart the
+	@# shell, which reintroduces itself as reborn.
+	@if ! grep -q "QSH: reborn" /tmp/qemu-boot.log 2>/dev/null; then \
+		echo "ERROR: shell was not restarted after exit (QSH: reborn)"; \
+		echo "Boot log:"; cat /tmp/qemu-boot.log 2>/dev/null || true; \
+		echo ""; echo "=== Smoke Test FAILED ==="; exit 1; \
+	fi
+	@echo "SUCCESS: watchdog rebirthed the shell after exit (QSH: reborn)"
 	@echo ""
 	@echo "=== Smoke Test PASSED ==="
 

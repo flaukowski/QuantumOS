@@ -3,6 +3,7 @@
 #include <kernel/boot.h>
 #include <kernel/process.h>
 #include <kernel/scheduler.h>
+#include <kernel/console.h>
 
 // Forward declarations for I/O port functions
 static inline void __outb(uint16_t port, uint8_t value);
@@ -333,6 +334,10 @@ void irq_handler(cpu_state_t *state) {
     case IRQ_KEYBOARD:
         keyboard_irq_handler(state);
         break;
+    case IRQ_COM1:
+        /* Console serial input: drain received bytes into the input ring */
+        console_com1_irq();
+        break;
     default:
         boot_log("Unhandled IRQ: ");
         early_console_write_hex(irq);
@@ -373,14 +378,11 @@ void timer_irq_handler(cpu_state_t *state) {
     }
 }
 
-// Keyboard IRQ handler
+// Keyboard IRQ handler: translate the scancode and feed the console
+// input ring (console.c owns the PS/2 state machine and reads 0x60).
 void keyboard_irq_handler(cpu_state_t *state) {
-    (void)state; // Unused for now
-
-    uint8_t scancode = __inb(0x60);
-
-    // TODO: Handle keyboard input
-    (void)scancode;
+    (void)state;
+    console_kbd_irq();
 }
 
 // PIC initialization
