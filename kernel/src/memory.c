@@ -289,7 +289,9 @@ mem_result_t kheap_init(void) {
     // Use the .heap region from link.ld — identity-mapped by the boot
     // page tables. (KERNEL_HEAP_START is higher-half virtual space that
     // is not mapped yet; using it would fault on first kmalloc.)
-    size_t heap_size = (size_t)(__heap_end - __heap_start);
+    /* uintptr_t arithmetic: the two linker symbols are distinct C objects,
+     * so direct pointer subtraction between them is UB. */
+    size_t heap_size = (size_t)((uintptr_t)__heap_end - (uintptr_t)__heap_start);
 
     kernel_heap.start = (void *)__heap_start;
     kernel_heap.end = (void *)__heap_end;

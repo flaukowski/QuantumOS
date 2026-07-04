@@ -202,6 +202,23 @@ docs(readme): update installation instructions
 - Comment non-obvious code
 - Use descriptive variable names
 
+### Automatic Formatting
+The repository ships a [`.clang-format`](.clang-format) that codifies the
+project style (4-space indent, attached braces, right-aligned pointers,
+100-column limit, include order preserved). CI enforces it, so format
+before committing:
+
+```bash
+# Format the files you touched
+clang-format -i path/to/changed_file.c
+
+# Or check without modifying (what CI runs)
+clang-format --dry-run --Werror path/to/changed_file.c
+```
+
+CI installs clang-format from ubuntu-latest apt (currently major version
+18); if your local version disagrees with CI, prefer the CI verdict.
+
 ### C Code Style
 ```c
 // Good example
