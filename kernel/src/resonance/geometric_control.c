@@ -21,12 +21,14 @@
  * Mathematical Helpers (mirrors resonant_scheduler.c)
  * ============================================================================ */
 
-#define PI      3.14159265358979323846
-#define TWO_PI  (2.0 * PI)
+#define PI 3.14159265358979323846
+#define TWO_PI (2.0 * PI)
 
 static double fast_sin(double x) {
-    while (x > PI) x -= TWO_PI;
-    while (x < -PI) x += TWO_PI;
+    while (x > PI)
+        x -= TWO_PI;
+    while (x < -PI)
+        x += TWO_PI;
     double x2 = x * x;
     double x3 = x2 * x;
     double x5 = x3 * x2;
@@ -39,7 +41,8 @@ static double fast_cos(double x) {
 }
 
 static double fast_sqrt(double x) {
-    if (x <= 0) return 0;
+    if (x <= 0)
+        return 0;
     double guess = x / 2.0;
     for (int i = 0; i < 10; i++) {
         guess = (guess + x / guess) / 2.0;
@@ -48,21 +51,29 @@ static double fast_sqrt(double x) {
 }
 
 static double fast_asin(double x) {
-    if (x > 1.0) x = 1.0;
-    if (x < -1.0) x = -1.0;
+    if (x > 1.0)
+        x = 1.0;
+    if (x < -1.0)
+        x = -1.0;
     double x2 = x * x;
-    return x * (1.0 + x2 * (1.0/6.0 + x2 * (3.0/40.0 + x2 * 15.0/336.0)));
+    return x * (1.0 + x2 * (1.0 / 6.0 + x2 * (3.0 / 40.0 + x2 * 15.0 / 336.0)));
 }
 
 static double fast_atan2(double y, double x) {
     double r = fast_sqrt(x * x + y * y);
-    if (r < 1e-15) return 0;
+    if (r < 1e-15)
+        return 0;
     double sin_val = y / r;
-    if (x > 0) return fast_asin(sin_val);
-    if (x < 0 && y >= 0) return PI - fast_asin(sin_val);
-    if (x < 0 && y < 0) return -PI - fast_asin(sin_val);
-    if (y > 0) return PI / 2.0;
-    if (y < 0) return -PI / 2.0;
+    if (x > 0)
+        return fast_asin(sin_val);
+    if (x < 0 && y >= 0)
+        return PI - fast_asin(sin_val);
+    if (x < 0 && y < 0)
+        return -PI - fast_asin(sin_val);
+    if (y > 0)
+        return PI / 2.0;
+    if (y < 0)
+        return -PI / 2.0;
     return 0;
 }
 
@@ -71,8 +82,10 @@ static double fast_abs(double x) {
 }
 
 static double clamp(double value, double min, double max) {
-    if (value < min) return min;
-    if (value > max) return max;
+    if (value < min)
+        return min;
+    if (value > max)
+        return max;
     return value;
 }
 
@@ -135,7 +148,8 @@ geometric_result_t geometric_init(geometric_state_t *state, uint32_t dimension) 
 }
 
 void geometric_shutdown(geometric_state_t *state) {
-    if (!state) return;
+    if (!state)
+        return;
 
     state->initialized = false;
     state->magic = 0;
@@ -147,11 +161,8 @@ void geometric_shutdown(geometric_state_t *state) {
  * Metric Operations
  * ============================================================================ */
 
-geometric_result_t geometric_update_metric(
-    geometric_state_t *state,
-    const double *point,
-    const double *gradient
-) {
+geometric_result_t geometric_update_metric(geometric_state_t *state, const double *point,
+                                           const double *gradient) {
     if (!GEOMETRIC_IS_VALID(state) || !point || !gradient) {
         return GEOMETRIC_ERROR_NOT_INITIALIZED;
     }
@@ -180,8 +191,10 @@ geometric_result_t geometric_update_metric(
     double s[GEOMETRIC_MAX_DIM];
     for (uint32_t i = 0; i < n; i++) {
         double diff = point[i] - state->prev_point[i];
-        while (diff > PI) diff -= TWO_PI;
-        while (diff < -PI) diff += TWO_PI;
+        while (diff > PI)
+            diff -= TWO_PI;
+        while (diff < -PI)
+            diff += TWO_PI;
         s[i] = diff;
     }
 
@@ -225,8 +238,7 @@ geometric_result_t geometric_update_metric(
         for (uint32_t i = 0; i < n; i++) {
             for (uint32_t j = 0; j < n; j++) {
                 state->metric.g[i][j] +=
-                    rho * factor * s[i] * s[j] -
-                    rho * (s[i] * Hy[j] + Hy[i] * s[j]);
+                    rho * factor * s[i] * s[j] - rho * (s[i] * Hy[j] + Hy[i] * s[j]);
             }
         }
 
@@ -330,7 +342,8 @@ geometric_result_t geometric_invert_metric(geometric_state_t *state) {
 
         /* Eliminate column in other rows */
         for (uint32_t row = 0; row < n; row++) {
-            if (row == col) continue;
+            if (row == col)
+                continue;
             double factor = aug[row][col];
             for (uint32_t j = 0; j < 2 * n; j++) {
                 aug[row][j] -= factor * aug[col][j];
@@ -348,11 +361,8 @@ geometric_result_t geometric_invert_metric(geometric_state_t *state) {
     return GEOMETRIC_SUCCESS;
 }
 
-double geometric_geodesic_distance(
-    const geometric_state_t *state,
-    const double *a,
-    const double *b
-) {
+double geometric_geodesic_distance(const geometric_state_t *state, const double *a,
+                                   const double *b) {
     if (!GEOMETRIC_IS_VALID(state) || !a || !b) {
         return -1.0;
     }
@@ -377,7 +387,8 @@ double geometric_geodesic_distance(
         }
     }
 
-    if (dist_sq < 0.0) dist_sq = 0.0;
+    if (dist_sq < 0.0)
+        dist_sq = 0.0;
     return fast_sqrt(dist_sq);
 }
 
@@ -486,10 +497,10 @@ geometric_result_t geometric_compute_ricci_scalar(geometric_state_t *state) {
                 for (uint32_t j = 0; j < n; j++) {
                     double value = 0.0;
                     for (uint32_t m = 0; m < n; m++) {
-                        value += state->christoffel.gamma[l][i][m] *
-                                 state->christoffel.gamma[m][j][k];
-                        value -= state->christoffel.gamma[l][j][m] *
-                                 state->christoffel.gamma[m][i][k];
+                        value +=
+                            state->christoffel.gamma[l][i][m] * state->christoffel.gamma[m][j][k];
+                        value -=
+                            state->christoffel.gamma[l][j][m] * state->christoffel.gamma[m][i][k];
                     }
                     riemann[l][k][i][j] = value;
                 }
@@ -521,7 +532,8 @@ geometric_result_t geometric_compute_ricci_scalar(geometric_state_t *state) {
 }
 
 double geometric_get_ricci_scalar(const geometric_state_t *state) {
-    if (!GEOMETRIC_IS_VALID(state)) return 0.0;
+    if (!GEOMETRIC_IS_VALID(state))
+        return 0.0;
     return state->ricci_scalar;
 }
 
@@ -529,10 +541,8 @@ double geometric_get_ricci_scalar(const geometric_state_t *state) {
  * Berry Phase
  * ============================================================================ */
 
-geometric_result_t geometric_update_berry_phase(
-    geometric_state_t *state,
-    const double *oscillator_phases
-) {
+geometric_result_t geometric_update_berry_phase(geometric_state_t *state,
+                                                const double *oscillator_phases) {
     if (!GEOMETRIC_IS_VALID(state) || !oscillator_phases) {
         return GEOMETRIC_ERROR_NOT_INITIALIZED;
     }
@@ -587,7 +597,8 @@ geometric_result_t geometric_update_berry_phase(
 
         /* Compute overlap angle */
         double cross_mag_sq = 1.0 - normalized_dot * normalized_dot;
-        if (cross_mag_sq < 0.0) cross_mag_sq = 0.0;
+        if (cross_mag_sq < 0.0)
+            cross_mag_sq = 0.0;
         double cross_mag = fast_sqrt(cross_mag_sq);
         double sign = signed_cross >= 0 ? 1.0 : -1.0;
         double phi = fast_atan2(sign * cross_mag, normalized_dot);
@@ -597,14 +608,15 @@ geometric_result_t geometric_update_berry_phase(
         /* Update connection: A_i ≈ phi / delta_theta_i */
         for (uint32_t i = 0; i < n; i++) {
             double delta = oscillator_phases[i] - state->berry.prev_state[i];
-            while (delta > PI) delta -= TWO_PI;
-            while (delta < -PI) delta += TWO_PI;
+            while (delta > PI)
+                delta -= TWO_PI;
+            while (delta < -PI)
+                delta += TWO_PI;
             if (fast_abs(delta) > GEOMETRIC_EPSILON) {
                 double new_conn = phi / delta;
                 /* Estimate curvature from connection change */
                 if (state->berry.step_count > 1 && fast_abs(delta) > GEOMETRIC_EPSILON) {
-                    state->berry.curvature +=
-                        (new_conn - state->berry.prev_connection[i]) / delta;
+                    state->berry.curvature += (new_conn - state->berry.prev_connection[i]) / delta;
                 }
                 state->berry.prev_connection[i] = new_conn;
                 state->berry.connection[i] = new_conn;
@@ -619,8 +631,10 @@ geometric_result_t geometric_update_berry_phase(
 
     /* Update holonomy: phase mod 2π in [-π, π] */
     double holonomy = state->berry.phase;
-    while (holonomy > PI) holonomy -= TWO_PI;
-    while (holonomy < -PI) holonomy += TWO_PI;
+    while (holonomy > PI)
+        holonomy -= TWO_PI;
+    while (holonomy < -PI)
+        holonomy += TWO_PI;
     state->berry.holonomy = holonomy;
 
     /* Store current state */
@@ -632,11 +646,8 @@ geometric_result_t geometric_update_berry_phase(
     return GEOMETRIC_SUCCESS;
 }
 
-double geometric_compute_berry_phase_loop(
-    const double loop[][GEOMETRIC_MAX_DIM],
-    uint32_t loop_size,
-    uint32_t dimension
-) {
+double geometric_compute_berry_phase_loop(const double loop[][GEOMETRIC_MAX_DIM],
+                                          uint32_t loop_size, uint32_t dimension) {
     if (!loop || loop_size < 3 || dimension == 0 || dimension > GEOMETRIC_MAX_DIM) {
         return 0.0;
     }
@@ -684,7 +695,8 @@ double geometric_compute_berry_phase_loop(
         }
 
         double cross_mag_sq = 1.0 - normalized_dot * normalized_dot;
-        if (cross_mag_sq < 0.0) cross_mag_sq = 0.0;
+        if (cross_mag_sq < 0.0)
+            cross_mag_sq = 0.0;
         double cross_mag = fast_sqrt(cross_mag_sq);
         double sign = signed_cross >= 0 ? 1.0 : -1.0;
 
@@ -695,12 +707,14 @@ double geometric_compute_berry_phase_loop(
 }
 
 double geometric_get_berry_phase(const geometric_state_t *state) {
-    if (!GEOMETRIC_IS_VALID(state)) return 0.0;
+    if (!GEOMETRIC_IS_VALID(state))
+        return 0.0;
     return state->berry.phase;
 }
 
 double geometric_get_berry_curvature(const geometric_state_t *state) {
-    if (!GEOMETRIC_IS_VALID(state)) return 0.0;
+    if (!GEOMETRIC_IS_VALID(state))
+        return 0.0;
     return state->berry.curvature;
 }
 
@@ -708,14 +722,10 @@ double geometric_get_berry_curvature(const geometric_state_t *state) {
  * Chiral Anomaly Detection
  * ============================================================================ */
 
-geometric_result_t geometric_detect_chiral_anomaly(
-    geometric_state_t *state,
-    const double *left_modes,
-    uint32_t left_count,
-    const double *right_modes,
-    uint32_t right_count,
-    double threshold
-) {
+geometric_result_t geometric_detect_chiral_anomaly(geometric_state_t *state,
+                                                   const double *left_modes, uint32_t left_count,
+                                                   const double *right_modes, uint32_t right_count,
+                                                   double threshold) {
     if (!GEOMETRIC_IS_VALID(state)) {
         return GEOMETRIC_ERROR_NOT_INITIALIZED;
     }
@@ -802,8 +812,10 @@ geometric_result_t geometric_detect_chiral_anomaly(
 }
 
 bool geometric_is_anomalous(const geometric_state_t *state) {
-    if (!GEOMETRIC_IS_VALID(state)) return false;
-    if (state->anomaly_history_count < 3) return false;
+    if (!GEOMETRIC_IS_VALID(state))
+        return false;
+    if (state->anomaly_history_count < 3)
+        return false;
 
     /* Check last 3 consecutive readings */
     uint32_t consecutive = 0;
@@ -821,7 +833,8 @@ bool geometric_is_anomalous(const geometric_state_t *state) {
 }
 
 const chiral_anomaly_t *geometric_get_last_anomaly(const geometric_state_t *state) {
-    if (!GEOMETRIC_IS_VALID(state)) return (const chiral_anomaly_t *)0;
+    if (!GEOMETRIC_IS_VALID(state))
+        return (const chiral_anomaly_t *)0;
     return &state->last_anomaly;
 }
 

@@ -21,8 +21,8 @@
 
 /* I/O base of the second UART. Also used as the capability resource_id so
  * the guarded resource is self-identifying (CAP_RESOURCE_DEVICE / 0x2F8). */
-#define COM2_PORT_BASE   0x2F8
-#define DEVICE_ID_COM2   COM2_PORT_BASE
+#define COM2_PORT_BASE 0x2F8
+#define DEVICE_ID_COM2 COM2_PORT_BASE
 
 /* Bring up COM2: 115200 8N1, FIFOs on, interrupts off (polled). Idempotent
  * and safe to call once at boot. Never touches COM1. */

@@ -33,10 +33,10 @@
  * Constants
  * ============================================================================ */
 
-#define GEOMETRIC_MAX_DIM           8       /* Maximum manifold dimension */
-#define GEOMETRIC_MAX_MODES        32       /* Maximum modes for anomaly detection */
-#define GEOMETRIC_BERRY_HISTORY     8       /* Berry phase ring buffer size */
-#define GEOMETRIC_EPSILON           1e-12   /* Numerical zero threshold */
+#define GEOMETRIC_MAX_DIM 8       /* Maximum manifold dimension */
+#define GEOMETRIC_MAX_MODES 32    /* Maximum modes for anomaly detection */
+#define GEOMETRIC_BERRY_HISTORY 8 /* Berry phase ring buffer size */
+#define GEOMETRIC_EPSILON 1e-12   /* Numerical zero threshold */
 
 /* Magic number: "GEOM" */
 #define GEOMETRIC_MAGIC 0x47454F4D
@@ -51,11 +51,11 @@
  * Stores g_ij, inverse g^ij, and previous metric for BFGS updates.
  */
 typedef struct {
-    double g[GEOMETRIC_MAX_DIM][GEOMETRIC_MAX_DIM];         /* Metric g_ij */
-    double g_inv[GEOMETRIC_MAX_DIM][GEOMETRIC_MAX_DIM];     /* Inverse g^ij */
-    double g_prev[GEOMETRIC_MAX_DIM][GEOMETRIC_MAX_DIM];    /* Previous metric */
-    uint32_t dimension;                                      /* Active dimension */
-    uint32_t update_count;                                   /* BFGS update count */
+    double g[GEOMETRIC_MAX_DIM][GEOMETRIC_MAX_DIM];      /* Metric g_ij */
+    double g_inv[GEOMETRIC_MAX_DIM][GEOMETRIC_MAX_DIM];  /* Inverse g^ij */
+    double g_prev[GEOMETRIC_MAX_DIM][GEOMETRIC_MAX_DIM]; /* Previous metric */
+    uint32_t dimension;                                  /* Active dimension */
+    uint32_t update_count;                               /* BFGS update count */
 } metric_state_t;
 
 /**
@@ -69,27 +69,27 @@ typedef struct {
  * Berry phase/curvature tracker
  */
 typedef struct {
-    double connection[GEOMETRIC_MAX_DIM];                    /* Berry connection A_μ */
-    double curvature;                                        /* Berry curvature F_12 (scalar) */
-    double phase;                                            /* Accumulated Berry phase */
-    double holonomy;                                         /* Phase mod 2π */
-    double prev_state[GEOMETRIC_MAX_DIM];                    /* Previous state vector */
-    double prev_connection[GEOMETRIC_MAX_DIM];               /* Previous connection */
-    bool has_previous;                                       /* Has a previous state */
-    uint32_t step_count;                                     /* Number of updates */
+    double connection[GEOMETRIC_MAX_DIM];      /* Berry connection A_μ */
+    double curvature;                          /* Berry curvature F_12 (scalar) */
+    double phase;                              /* Accumulated Berry phase */
+    double holonomy;                           /* Phase mod 2π */
+    double prev_state[GEOMETRIC_MAX_DIM];      /* Previous state vector */
+    double prev_connection[GEOMETRIC_MAX_DIM]; /* Previous connection */
+    bool has_previous;                         /* Has a previous state */
+    uint32_t step_count;                       /* Number of updates */
 } berry_state_t;
 
 /**
  * Chiral anomaly detection result
  */
 typedef struct {
-    int32_t anomaly_index;          /* N_right - N_left */
-    double spectral_asymmetry;      /* η = Σ sign(λ_n) */
-    double topological_charge;      /* Q = (1/2)(N_right - N_left) */
-    bool is_anomalous;              /* Exceeds detection threshold */
-    double left_energy;             /* Total left-mode energy */
-    double right_energy;            /* Total right-mode energy */
-    double asymmetry_ratio;         /* |E_R - E_L| / (E_R + E_L) */
+    int32_t anomaly_index;     /* N_right - N_left */
+    double spectral_asymmetry; /* η = Σ sign(λ_n) */
+    double topological_charge; /* Q = (1/2)(N_right - N_left) */
+    bool is_anomalous;         /* Exceeds detection threshold */
+    double left_energy;        /* Total left-mode energy */
+    double right_energy;       /* Total right-mode energy */
+    double asymmetry_ratio;    /* |E_R - E_L| / (E_R + E_L) */
 } chiral_anomaly_t;
 
 /**
@@ -102,7 +102,7 @@ typedef struct {
     chiral_anomaly_t last_anomaly;
 
     /* Curvature scalars */
-    double ricci_scalar;            /* R = g^ij R_ij */
+    double ricci_scalar;                                       /* R = g^ij R_ij */
     double ricci_tensor[GEOMETRIC_MAX_DIM][GEOMETRIC_MAX_DIM]; /* R_ij */
 
     /* BFGS state for metric update */
@@ -163,11 +163,8 @@ void geometric_shutdown(geometric_state_t *state);
  * @param point Current oscillator phases (dimension values)
  * @param gradient Current gradient (dimension values)
  */
-geometric_result_t geometric_update_metric(
-    geometric_state_t *state,
-    const double *point,
-    const double *gradient
-);
+geometric_result_t geometric_update_metric(geometric_state_t *state, const double *point,
+                                           const double *gradient);
 
 /**
  * Compute inverse metric via Gauss-Jordan elimination.
@@ -185,11 +182,8 @@ geometric_result_t geometric_invert_metric(geometric_state_t *state);
  * @param b Second point (dimension values)
  * @return Geodesic distance (negative on error)
  */
-double geometric_geodesic_distance(
-    const geometric_state_t *state,
-    const double *a,
-    const double *b
-);
+double geometric_geodesic_distance(const geometric_state_t *state, const double *a,
+                                   const double *b);
 
 /* ============================================================================
  * Curvature
@@ -229,10 +223,8 @@ double geometric_get_ricci_scalar(const geometric_state_t *state);
  * @param state Geometric state
  * @param oscillator_phases Current oscillator phases (dimension values)
  */
-geometric_result_t geometric_update_berry_phase(
-    geometric_state_t *state,
-    const double *oscillator_phases
-);
+geometric_result_t geometric_update_berry_phase(geometric_state_t *state,
+                                                const double *oscillator_phases);
 
 /**
  * Compute Berry phase around a closed loop of states.
@@ -245,11 +237,8 @@ geometric_result_t geometric_update_berry_phase(
  * @param dimension State vector dimension
  * @return Berry phase in radians
  */
-double geometric_compute_berry_phase_loop(
-    const double loop[][GEOMETRIC_MAX_DIM],
-    uint32_t loop_size,
-    uint32_t dimension
-);
+double geometric_compute_berry_phase_loop(const double loop[][GEOMETRIC_MAX_DIM],
+                                          uint32_t loop_size, uint32_t dimension);
 
 /**
  * Get current Berry phase value.
@@ -279,14 +268,10 @@ double geometric_get_berry_curvature(const geometric_state_t *state);
  * @param right_count Number of right modes
  * @param threshold Asymmetry ratio threshold (e.g., 0.1)
  */
-geometric_result_t geometric_detect_chiral_anomaly(
-    geometric_state_t *state,
-    const double *left_modes,
-    uint32_t left_count,
-    const double *right_modes,
-    uint32_t right_count,
-    double threshold
-);
+geometric_result_t geometric_detect_chiral_anomaly(geometric_state_t *state,
+                                                   const double *left_modes, uint32_t left_count,
+                                                   const double *right_modes, uint32_t right_count,
+                                                   double threshold);
 
 /**
  * Check if system has sustained chiral anomaly.
@@ -312,11 +297,10 @@ void geometric_dump_state(const geometric_state_t *state);
  * Utility Macros
  * ============================================================================ */
 
-#define GEOMETRIC_IS_VALID(state) \
+#define GEOMETRIC_IS_VALID(state)                                                                  \
     ((state) != NULL && (state)->magic == GEOMETRIC_MAGIC && (state)->initialized)
 
-#define GEOMETRIC_IS_CURVED(state) \
-    (GEOMETRIC_IS_VALID(state) && \
-     ((state)->ricci_scalar > 0.01 || (state)->ricci_scalar < -0.01))
+#define GEOMETRIC_IS_CURVED(state)                                                                 \
+    (GEOMETRIC_IS_VALID(state) && ((state)->ricci_scalar > 0.01 || (state)->ricci_scalar < -0.01))
 
 #endif /* GEOMETRIC_CONTROL_H */

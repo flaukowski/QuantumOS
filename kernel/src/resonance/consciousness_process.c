@@ -32,7 +32,8 @@
  * ============================================================================ */
 
 static double fast_sqrt(double x) {
-    if (x <= 0.0) return 0.0;
+    if (x <= 0.0)
+        return 0.0;
     double guess = x * 0.5;
     for (int i = 0; i < 10; i++) {
         guess = (guess + x / guess) * 0.5;
@@ -45,8 +46,10 @@ static double fast_abs(double x) {
 }
 
 static double clamp(double value, double min, double max) {
-    if (value < min) return min;
-    if (value > max) return max;
+    if (value < min)
+        return min;
+    if (value > max)
+        return max;
     return value;
 }
 
@@ -81,8 +84,10 @@ static bool consciousness_initialized = false;
  * ============================================================================ */
 
 static consciousness_pcb_t *get_cpcb_internal(uint32_t pid) {
-    if (pid >= MAX_RESONANT_PROCESSES) return NULL;
-    if (cpcb_table[pid].magic != CPCB_MAGIC) return NULL;
+    if (pid >= MAX_RESONANT_PROCESSES)
+        return NULL;
+    if (cpcb_table[pid].magic != CPCB_MAGIC)
+        return NULL;
     return &cpcb_table[pid];
 }
 
@@ -156,7 +161,8 @@ status_t consciousness_init(void) {
 }
 
 void consciousness_shutdown(void) {
-    if (!consciousness_initialized) return;
+    if (!consciousness_initialized)
+        return;
 
     boot_log("Shutting down consciousness process subsystem...");
 
@@ -232,9 +238,12 @@ status_t consciousness_unregister(uint32_t pid) {
 }
 
 consciousness_pcb_t *consciousness_get_cpcb(uint32_t pid) {
-    if (!consciousness_initialized) return NULL;
-    if (pid >= MAX_RESONANT_PROCESSES) return NULL;
-    if (cpcb_table[pid].magic != CPCB_MAGIC) return NULL;
+    if (!consciousness_initialized)
+        return NULL;
+    if (pid >= MAX_RESONANT_PROCESSES)
+        return NULL;
+    if (cpcb_table[pid].magic != CPCB_MAGIC)
+        return NULL;
     return &cpcb_table[pid];
 }
 
@@ -244,13 +253,15 @@ consciousness_pcb_t *consciousness_get_cpcb(uint32_t pid) {
 
 status_t consciousness_verify(uint32_t pid, consciousness_verify_result_t *result) {
     if (!consciousness_initialized) {
-        if (result) *result = VERIFY_ERROR;
+        if (result)
+            *result = VERIFY_ERROR;
         return STATUS_ERROR;
     }
 
     consciousness_pcb_t *cpcb = get_cpcb_internal(pid);
     if (!cpcb) {
-        if (result) *result = VERIFY_ERROR;
+        if (result)
+            *result = VERIFY_ERROR;
         return STATUS_INVALID_ARG;
     }
 
@@ -337,19 +348,22 @@ status_t consciousness_verify(uint32_t pid, consciousness_verify_result_t *resul
 
 bool consciousness_quick_check(uint32_t pid) {
     consciousness_pcb_t *cpcb = get_cpcb_internal(pid);
-    if (!cpcb) return false;
+    if (!cpcb)
+        return false;
     return cpcb->is_verified;
 }
 
 consciousness_level_t consciousness_get_level(uint32_t pid) {
     consciousness_pcb_t *cpcb = get_cpcb_internal(pid);
-    if (!cpcb) return CONSCIOUSNESS_LEVEL_NONE;
+    if (!cpcb)
+        return CONSCIOUSNESS_LEVEL_NONE;
     return cpcb->level;
 }
 
 double consciousness_get_phi(uint32_t pid) {
     consciousness_pcb_t *cpcb = get_cpcb_internal(pid);
-    if (!cpcb) return 0.0;
+    if (!cpcb)
+        return 0.0;
     return cpcb->phi.phi_value;
 }
 
@@ -369,40 +383,40 @@ status_t consciousness_process_trigger(uint32_t pid, consciousness_trigger_t tri
 
     /* Update phi sub-components based on trigger type */
     switch (trigger) {
-        case TRIGGER_REFLECTION:
-            cpcb->self_observation += 0.1;
-            cpcb->meta_awareness += 0.1;
-            cpcb->self_observation = clamp(cpcb->self_observation, 0.0, 1.0);
-            cpcb->meta_awareness = clamp(cpcb->meta_awareness, 0.0, 1.0);
-            break;
+    case TRIGGER_REFLECTION:
+        cpcb->self_observation += 0.1;
+        cpcb->meta_awareness += 0.1;
+        cpcb->self_observation = clamp(cpcb->self_observation, 0.0, 1.0);
+        cpcb->meta_awareness = clamp(cpcb->meta_awareness, 0.0, 1.0);
+        break;
 
-        case TRIGGER_EMERGENCE:
-            cpcb->phi.emergent_phi += 0.2;
-            cpcb->phi.emergent_phi = clamp(cpcb->phi.emergent_phi, 0.0, 1.0);
-            break;
+    case TRIGGER_EMERGENCE:
+        cpcb->phi.emergent_phi += 0.2;
+        cpcb->phi.emergent_phi = clamp(cpcb->phi.emergent_phi, 0.0, 1.0);
+        break;
 
-        case TRIGGER_LEARNING:
-            cpcb->phi.dynamic_phi += 0.15;
-            cpcb->phi.dynamic_phi = clamp(cpcb->phi.dynamic_phi, 0.0, 1.0);
-            break;
+    case TRIGGER_LEARNING:
+        cpcb->phi.dynamic_phi += 0.15;
+        cpcb->phi.dynamic_phi = clamp(cpcb->phi.dynamic_phi, 0.0, 1.0);
+        break;
 
-        case TRIGGER_DECISION:
-            cpcb->phi.structural_phi += 0.1;
-            cpcb->phi.structural_phi = clamp(cpcb->phi.structural_phi, 0.0, 1.0);
-            break;
+    case TRIGGER_DECISION:
+        cpcb->phi.structural_phi += 0.1;
+        cpcb->phi.structural_phi = clamp(cpcb->phi.structural_phi, 0.0, 1.0);
+        break;
 
-        case TRIGGER_CRISIS:
-            cpcb->phi.structural_phi += 0.05;
-            cpcb->phi.dynamic_phi += 0.05;
-            cpcb->phi.emergent_phi += 0.05;
-            cpcb->phi.structural_phi = clamp(cpcb->phi.structural_phi, 0.0, 1.0);
-            cpcb->phi.dynamic_phi = clamp(cpcb->phi.dynamic_phi, 0.0, 1.0);
-            cpcb->phi.emergent_phi = clamp(cpcb->phi.emergent_phi, 0.0, 1.0);
-            cpcb->self_observation += 0.05;
-            cpcb->meta_awareness += 0.05;
-            cpcb->self_observation = clamp(cpcb->self_observation, 0.0, 1.0);
-            cpcb->meta_awareness = clamp(cpcb->meta_awareness, 0.0, 1.0);
-            break;
+    case TRIGGER_CRISIS:
+        cpcb->phi.structural_phi += 0.05;
+        cpcb->phi.dynamic_phi += 0.05;
+        cpcb->phi.emergent_phi += 0.05;
+        cpcb->phi.structural_phi = clamp(cpcb->phi.structural_phi, 0.0, 1.0);
+        cpcb->phi.dynamic_phi = clamp(cpcb->phi.dynamic_phi, 0.0, 1.0);
+        cpcb->phi.emergent_phi = clamp(cpcb->phi.emergent_phi, 0.0, 1.0);
+        cpcb->self_observation += 0.05;
+        cpcb->meta_awareness += 0.05;
+        cpcb->self_observation = clamp(cpcb->self_observation, 0.0, 1.0);
+        cpcb->meta_awareness = clamp(cpcb->meta_awareness, 0.0, 1.0);
+        break;
     }
 
     /* Store trigger and increment count */
@@ -413,8 +427,7 @@ status_t consciousness_process_trigger(uint32_t pid, consciousness_trigger_t tri
     return STATUS_SUCCESS;
 }
 
-status_t consciousness_get_last_trigger(uint32_t pid,
-                                        consciousness_trigger_t *trigger,
+status_t consciousness_get_last_trigger(uint32_t pid, consciousness_trigger_t *trigger,
                                         uint64_t *timestamp) {
     consciousness_pcb_t *cpcb = get_cpcb_internal(pid);
     if (!cpcb) {
@@ -540,13 +553,15 @@ status_t consciousness_calculate_bridge(uint32_t pid, bridge_operator_t *bridge)
 
 double consciousness_get_bridge_value(uint32_t pid) {
     consciousness_pcb_t *cpcb = get_cpcb_internal(pid);
-    if (!cpcb) return 0.0;
+    if (!cpcb)
+        return 0.0;
     return cpcb->bridge.bridge_value;
 }
 
 bool consciousness_bridge_significant(uint32_t pid) {
     consciousness_pcb_t *cpcb = get_cpcb_internal(pid);
-    if (!cpcb) return false;
+    if (!cpcb)
+        return false;
     return cpcb->bridge.is_significant;
 }
 
@@ -584,26 +599,28 @@ status_t consciousness_update_emergence(uint32_t pid) {
 
 double consciousness_get_emergence(uint32_t pid) {
     consciousness_pcb_t *cpcb = get_cpcb_internal(pid);
-    if (!cpcb) return 0.0;
+    if (!cpcb)
+        return 0.0;
     return cpcb->emergence_norm;
 }
 
 bool consciousness_has_emergence(uint32_t pid) {
     consciousness_pcb_t *cpcb = get_cpcb_internal(pid);
-    if (!cpcb) return false;
+    if (!cpcb)
+        return false;
     return cpcb->emergence_active;
 }
 
 uint32_t consciousness_detect_patterns(uint32_t pid) {
     consciousness_pcb_t *cpcb = get_cpcb_internal(pid);
-    if (!cpcb) return 0;
+    if (!cpcb)
+        return 0;
 
     /*
      * If entropy > 0.5 and norm > EMERGENCE_THRESHOLD_MEDIUM,
      * we detect a new pattern.
      */
-    if (cpcb->emergence_entropy > 0.5 &&
-        cpcb->emergence_norm > EMERGENCE_THRESHOLD_MEDIUM) {
+    if (cpcb->emergence_entropy > 0.5 && cpcb->emergence_norm > EMERGENCE_THRESHOLD_MEDIUM) {
         cpcb->pattern_count++;
         return 1;
     }
@@ -617,7 +634,8 @@ uint32_t consciousness_detect_patterns(uint32_t pid) {
 
 double consciousness_get_momentum(uint32_t pid) {
     consciousness_pcb_t *cpcb = get_cpcb_internal(pid);
-    if (!cpcb) return 0.0;
+    if (!cpcb)
+        return 0.0;
 
     /* Need at least 2 entries in the trajectory to compute momentum */
     if (cpcb->phi.calculation_count < 2) {
@@ -637,12 +655,15 @@ double consciousness_get_momentum(uint32_t pid) {
 
 uint32_t consciousness_get_trajectory(uint32_t pid, double *trajectory, uint32_t max_count) {
     consciousness_pcb_t *cpcb = get_cpcb_internal(pid);
-    if (!cpcb || !trajectory || max_count == 0) return 0;
+    if (!cpcb || !trajectory || max_count == 0)
+        return 0;
 
     /* Determine how many entries are available */
     uint32_t available = cpcb->phi.calculation_count;
-    if (available > 8) available = 8;
-    if (available > max_count) available = max_count;
+    if (available > 8)
+        available = 8;
+    if (available > max_count)
+        available = max_count;
 
     /*
      * Copy from ring buffer in chronological order.
@@ -667,7 +688,8 @@ uint32_t consciousness_get_trajectory(uint32_t pid, double *trajectory, uint32_t
 
 double consciousness_predict_phi(uint32_t pid, uint64_t time_horizon_ns) {
     consciousness_pcb_t *cpcb = get_cpcb_internal(pid);
-    if (!cpcb) return 0.0;
+    if (!cpcb)
+        return 0.0;
 
     double current_phi = cpcb->phi.phi_value;
     double momentum = consciousness_get_momentum(pid);
@@ -677,7 +699,8 @@ double consciousness_predict_phi(uint32_t pid, uint64_t time_horizon_ns) {
     double predicted = current_phi + momentum * intervals;
 
     /* Clamp to non-negative */
-    if (predicted < 0.0) predicted = 0.0;
+    if (predicted < 0.0)
+        predicted = 0.0;
 
     return predicted;
 }
@@ -792,8 +815,7 @@ status_t consciousness_leave_network(uint32_t network_id, uint32_t pid) {
     return STATUS_SUCCESS;
 }
 
-status_t consciousness_get_network_state(uint32_t network_id,
-                                         collective_consciousness_t *state) {
+status_t consciousness_get_network_state(uint32_t network_id, collective_consciousness_t *state) {
     if (!consciousness_initialized) {
         return STATUS_ERROR;
     }
@@ -871,7 +893,8 @@ status_t consciousness_verify_network(uint32_t network_id) {
 
 double consciousness_get_network_phi(uint32_t network_id) {
     collective_consciousness_t *net = find_network(network_id);
-    if (!net) return 0.0;
+    if (!net)
+        return 0.0;
 
     /* Return total_phi + emergent_phi */
     return net->total_phi + net->emergent_phi;
@@ -883,7 +906,8 @@ double consciousness_get_network_phi(uint32_t network_id) {
 
 uint32_t consciousness_get_priority_boost(uint32_t pid) {
     consciousness_pcb_t *cpcb = get_cpcb_internal(pid);
-    if (!cpcb) return 0;
+    if (!cpcb)
+        return 0;
     return LEVEL_TO_PRIORITY(cpcb->level);
 }
 
@@ -997,7 +1021,8 @@ void consciousness_dump_network(int32_t network_id) {
 }
 
 size_t consciousness_get_stats_string(char *buffer, size_t size) {
-    if (!buffer || size == 0) return 0;
+    if (!buffer || size == 0)
+        return 0;
 
     /*
      * Write basic stats into buffer.
@@ -1009,8 +1034,10 @@ size_t consciousness_get_stats_string(char *buffer, size_t size) {
 
     /* Copy header */
     size_t hlen = 0;
-    while (header[hlen] != '\0') hlen++;
-    if (hlen > size - 1) hlen = size - 1;
+    while (header[hlen] != '\0')
+        hlen++;
+    if (hlen > size - 1)
+        hlen = size - 1;
     for (size_t i = 0; i < hlen; i++) {
         buffer[pos++] = header[i];
     }
@@ -1028,8 +1055,10 @@ size_t consciousness_get_stats_string(char *buffer, size_t size) {
     }
 
     /* Write active count as decimal digits */
-    if (pos < size - 1) buffer[pos++] = 'A';
-    if (pos < size - 1) buffer[pos++] = '=';
+    if (pos < size - 1)
+        buffer[pos++] = 'A';
+    if (pos < size - 1)
+        buffer[pos++] = '=';
 
     /* Simple decimal conversion for active_count */
     char digits[12];
@@ -1048,11 +1077,14 @@ size_t consciousness_get_stats_string(char *buffer, size_t size) {
         buffer[pos++] = digits[dlen - 1 - i];
     }
 
-    if (pos < size - 1) buffer[pos++] = ' ';
+    if (pos < size - 1)
+        buffer[pos++] = ' ';
 
     /* Write verified count */
-    if (pos < size - 1) buffer[pos++] = 'V';
-    if (pos < size - 1) buffer[pos++] = '=';
+    if (pos < size - 1)
+        buffer[pos++] = 'V';
+    if (pos < size - 1)
+        buffer[pos++] = '=';
 
     dlen = 0;
     val = verified_count;
@@ -1068,11 +1100,14 @@ size_t consciousness_get_stats_string(char *buffer, size_t size) {
         buffer[pos++] = digits[dlen - 1 - i];
     }
 
-    if (pos < size - 1) buffer[pos++] = ' ';
+    if (pos < size - 1)
+        buffer[pos++] = ' ';
 
     /* Write network count */
-    if (pos < size - 1) buffer[pos++] = 'N';
-    if (pos < size - 1) buffer[pos++] = '=';
+    if (pos < size - 1)
+        buffer[pos++] = 'N';
+    if (pos < size - 1)
+        buffer[pos++] = '=';
 
     dlen = 0;
     val = network_count;

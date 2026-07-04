@@ -32,19 +32,19 @@
  * ============================================================================ */
 
 /* CISS enhancement factors */
-#define CISS_COHERENCE_FACTOR       1.30    /* 30% coherence boost */
-#define CISS_FIDELITY_FACTOR        1.15    /* 15% fidelity improvement */
-#define CISS_SPIN_SELECTIVITY       0.85    /* 85% spin polarization */
+#define CISS_COHERENCE_FACTOR 1.30 /* 30% coherence boost */
+#define CISS_FIDELITY_FACTOR 1.15  /* 15% fidelity improvement */
+#define CISS_SPIN_SELECTIVITY 0.85 /* 85% spin polarization */
 
 /* Topological protection thresholds */
-#define TOPOLOGICAL_CHARGE_MIN      0.1     /* Minimum viable charge */
-#define TOPOLOGICAL_CHARGE_MAX      2.0     /* Maximum stable charge */
-#define TOPOLOGICAL_ENERGY_GAP      0.05    /* Energy gap for protection */
+#define TOPOLOGICAL_CHARGE_MIN 0.1  /* Minimum viable charge */
+#define TOPOLOGICAL_CHARGE_MAX 2.0  /* Maximum stable charge */
+#define TOPOLOGICAL_ENERGY_GAP 0.05 /* Energy gap for protection */
 
 /* Stability classification */
-#define STABILITY_EXCELLENT         0.3     /* |η/Γ| < 0.3 */
-#define STABILITY_GOOD              0.6     /* |η/Γ| < 0.6 */
-#define STABILITY_MARGINAL          1.0     /* |η/Γ| < 1.0 */
+#define STABILITY_EXCELLENT 0.3 /* |η/Γ| < 0.3 */
+#define STABILITY_GOOD 0.6      /* |η/Γ| < 0.6 */
+#define STABILITY_MARGINAL 1.0  /* |η/Γ| < 1.0 */
 /* |η/Γ| >= 1.0 is unstable */
 
 /* ============================================================================
@@ -67,32 +67,32 @@ typedef enum {
  * Extends standard qubit_handle_t with chiral protection metrics.
  */
 typedef struct {
-    qubit_handle_t base;            /* Standard qubit handle */
+    qubit_handle_t base; /* Standard qubit handle */
 
     /* Chiral enhancement */
-    double chiral_eta;              /* Local chirality strength */
-    double chiral_gamma;            /* Local damping coefficient */
-    double asymmetry;               /* |η/Γ| ratio */
+    double chiral_eta;   /* Local chirality strength */
+    double chiral_gamma; /* Local damping coefficient */
+    double asymmetry;    /* |η/Γ| ratio */
     chiral_stability_class_t stability_class;
 
     /* Topological protection */
-    double topological_charge;      /* Conserved topological charge Q */
-    double energy_gap;              /* Protection energy gap */
-    bool topologically_protected;   /* Has topological protection */
+    double topological_charge;    /* Conserved topological charge Q */
+    double energy_gap;            /* Protection energy gap */
+    bool topologically_protected; /* Has topological protection */
 
     /* CISS enhancement */
-    double ciss_polarization;       /* Spin polarization (0-1) */
-    double ciss_coherence_boost;    /* Coherence enhancement factor */
-    bool ciss_active;               /* CISS enhancement enabled */
+    double ciss_polarization;    /* Spin polarization (0-1) */
+    double ciss_coherence_boost; /* Coherence enhancement factor */
+    bool ciss_active;            /* CISS enhancement enabled */
 
     /* Enhanced metrics */
-    uint64_t enhanced_coherence_time;/* CISS-enhanced coherence window */
-    uint32_t enhanced_fidelity;     /* CISS-enhanced fidelity */
+    uint64_t enhanced_coherence_time; /* CISS-enhanced coherence window */
+    uint32_t enhanced_fidelity;       /* CISS-enhanced fidelity */
 
     /* Coupling state */
-    handedness_t handedness;        /* Qubit coupling handedness */
-    uint32_t coupled_qubits[4];     /* Chirally coupled qubit IDs */
-    uint8_t coupling_count;         /* Number of couplings */
+    handedness_t handedness;    /* Qubit coupling handedness */
+    uint32_t coupled_qubits[4]; /* Chirally coupled qubit IDs */
+    uint8_t coupling_count;     /* Number of couplings */
 } chiral_qubit_t;
 
 /**
@@ -107,10 +107,10 @@ typedef struct {
     uint32_t allocated_qubits;
 
     /* By stability class */
-    uint32_t excellent_qubits;      /* Highest stability */
+    uint32_t excellent_qubits; /* Highest stability */
     uint32_t good_qubits;
     uint32_t marginal_qubits;
-    uint32_t unstable_qubits;       /* Need rebalancing */
+    uint32_t unstable_qubits; /* Need rebalancing */
 
     /* By handedness */
     uint32_t left_handed_qubits;
@@ -118,15 +118,15 @@ typedef struct {
     uint32_t neutral_qubits;
 
     /* CISS metrics */
-    uint32_t ciss_enabled_qubits;   /* Qubits with CISS active */
-    double average_ciss_boost;       /* Average coherence enhancement */
+    uint32_t ciss_enabled_qubits; /* Qubits with CISS active */
+    double average_ciss_boost;    /* Average coherence enhancement */
 
     /* Topological metrics */
-    uint32_t protected_qubits;      /* Topologically protected */
-    double total_topological_charge;/* Sum of charges */
+    uint32_t protected_qubits;       /* Topologically protected */
+    double total_topological_charge; /* Sum of charges */
 
     /* Global stability */
-    double average_asymmetry;       /* Average |η/Γ| */
+    double average_asymmetry; /* Average |η/Γ| */
     chiral_stability_class_t pool_stability;
 } chiral_pool_t;
 
@@ -136,25 +136,25 @@ typedef struct {
  * Request for chirally-enhanced qubit allocation.
  */
 typedef struct {
-    uint32_t pid;                   /* Requesting process */
-    uint32_t qubits_requested;      /* Number of qubits needed */
+    uint32_t pid;              /* Requesting process */
+    uint32_t qubits_requested; /* Number of qubits needed */
 
     /* Stability requirements */
     chiral_stability_class_t min_stability;
-    double max_asymmetry;           /* Maximum acceptable |η/Γ| */
+    double max_asymmetry; /* Maximum acceptable |η/Γ| */
 
     /* Enhancement preferences */
-    bool require_ciss;              /* Require CISS enhancement */
-    bool require_topological;       /* Require topological protection */
+    bool require_ciss;        /* Require CISS enhancement */
+    bool require_topological; /* Require topological protection */
     handedness_t preferred_handedness;
 
     /* Coupling requirements */
-    bool require_coupling;          /* Qubits must be coupleable */
-    uint32_t couple_with_pid;       /* PID to couple with */
+    bool require_coupling;    /* Qubits must be coupleable */
+    uint32_t couple_with_pid; /* PID to couple with */
 
     /* Coherence requirements */
-    uint64_t min_coherence_time;    /* Minimum coherence window (ns) */
-    uint32_t min_fidelity;          /* Minimum fidelity (0-10000) */
+    uint64_t min_coherence_time; /* Minimum coherence window (ns) */
+    uint32_t min_fidelity;       /* Minimum fidelity (0-10000) */
 } chiral_alloc_request_t;
 
 /**
@@ -176,8 +176,8 @@ typedef struct {
     double ciss_boost;
 
     /* Warnings */
-    bool stability_compromised;     /* Couldn't meet stability requirement */
-    bool coherence_reduced;         /* Coherence less than requested */
+    bool stability_compromised; /* Couldn't meet stability requirement */
+    bool coherence_reduced;     /* Coherence less than requested */
 } chiral_alloc_result_t;
 
 /* ============================================================================
@@ -218,8 +218,7 @@ status_t chiral_get_pool_state(chiral_pool_t *pool);
  * @param result Output: allocation result
  * @return STATUS_SUCCESS or error
  */
-status_t chiral_allocate(const chiral_alloc_request_t *request,
-                         chiral_alloc_result_t *result);
+status_t chiral_allocate(const chiral_alloc_request_t *request, chiral_alloc_result_t *result);
 
 /**
  * Deallocate chirally-enhanced qubits

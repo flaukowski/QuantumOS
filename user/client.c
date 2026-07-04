@@ -34,5 +34,6 @@ void _start(void) {
 
     write_str("ipc-client: done");
     exit_(0);
-    for (;;) { }
+    for (;;) {
+    }
 }

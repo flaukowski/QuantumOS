@@ -18,15 +18,15 @@
 
 #include <kernel/types.h>
 
-#define GDT_KERNEL_CS  0x08
-#define GDT_KERNEL_DS  0x10
-#define GDT_USER_DS    0x18
-#define GDT_USER_CS    0x20
-#define GDT_TSS_SEL    0x28
+#define GDT_KERNEL_CS 0x08
+#define GDT_KERNEL_DS 0x10
+#define GDT_USER_DS 0x18
+#define GDT_USER_CS 0x20
+#define GDT_TSS_SEL 0x28
 
 /* Ring-3 selectors as loaded into segment registers (RPL = 3) */
-#define USER_CS        (GDT_USER_CS | 3)   /* 0x23 */
-#define USER_DS        (GDT_USER_DS | 3)   /* 0x1B */
+#define USER_CS (GDT_USER_CS | 3) /* 0x23 */
+#define USER_DS (GDT_USER_DS | 3) /* 0x1B */
 
 /* Install the full GDT + TSS and load TR. Call once during kernel
  * init, before any ring-3 code can run. */

@@ -20,10 +20,10 @@ extern uint64_t get_cr3(void);
 extern void set_cr3(uint64_t cr3);
 
 /* Paging entry flags */
-#define PG_PRESENT  0x001
-#define PG_RW       0x002
-#define PG_USER     0x004
-#define PG_ADDR     0x000FFFFFFFFFF000ULL
+#define PG_PRESENT 0x001
+#define PG_RW 0x002
+#define PG_USER 0x004
+#define PG_ADDR 0x000FFFFFFFFFF000ULL
 
 static uint64_t *alloc_table(void) {
     void *frame = pmm_alloc_frame();
@@ -40,7 +40,7 @@ uint64_t vmspace_kernel_cr3(void) {
 }
 
 address_space_t vmspace_create(void) {
-    address_space_t as = { NULL, 0 };
+    address_space_t as = {NULL, 0};
 
     uint64_t *pml4 = alloc_table();
     if (!pml4) {
@@ -66,8 +66,7 @@ address_space_t vmspace_create(void) {
     return as;
 }
 
-bool vmspace_map_page(address_space_t *as, uint64_t uvaddr,
-                      uint64_t paddr, bool writable) {
+bool vmspace_map_page(address_space_t *as, uint64_t uvaddr, uint64_t paddr, bool writable) {
     if (!as || !as->pml4) {
         return false;
     }
@@ -133,11 +132,11 @@ void vmspace_destroy(uint64_t *pml4) {
                         pmm_free_frame((void *)(pt[ti] & PG_ADDR)); /* user page */
                     }
                 }
-                pmm_free_frame(pt);   /* page table */
+                pmm_free_frame(pt); /* page table */
             }
-            pmm_free_frame(pd);       /* page directory */
+            pmm_free_frame(pd); /* page directory */
         }
-        pmm_free_frame(pdpt);         /* PDPT */
+        pmm_free_frame(pdpt); /* PDPT */
     }
-    pmm_free_frame(pml4);             /* PML4 */
+    pmm_free_frame(pml4); /* PML4 */
 }

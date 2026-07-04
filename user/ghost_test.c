@@ -71,17 +71,19 @@ void _start(void) {
         }
     }
 
-    const uint32_t seeds[3] = { GHOST_SEED_0, GHOST_SEED_1, GHOST_SEED_2 };
+    const uint32_t seeds[3] = {GHOST_SEED_0, GHOST_SEED_1, GHOST_SEED_2};
     uint32_t pats[3][GHOST_PW];
 
     /* Imprint */
     for (int p = 0; p < 3; p++) {
         ghost_gen_pattern(pats[p], seeds[p]);
         ghost_req_t req;
-        for (unsigned i = 0; i < sizeof(req); i++) ((uint8_t *)&req)[i] = 0;
+        for (unsigned i = 0; i < sizeof(req); i++)
+            ((uint8_t *)&req)[i] = 0;
         req.op = GHOST_REMEMBER;
         req.slot = (uint8_t)p;
-        for (int w = 0; w < GHOST_PW; w++) req.bits[w] = pats[p][w];
+        for (int w = 0; w < GHOST_PW; w++)
+            req.bits[w] = pats[p][w];
         ghost_rep_t rep;
         if (!request(&req, &rep)) {
             write_str("ghost-test: imprint FAILED (no reply)");
@@ -94,13 +96,16 @@ void _start(void) {
     uint64_t r_sum = 0;
     for (int p = 0; p < 3; p++) {
         uint32_t probe[GHOST_PW];
-        for (int w = 0; w < GHOST_PW; w++) probe[w] = pats[p][w];
+        for (int w = 0; w < GHOST_PW; w++)
+            probe[w] = pats[p][w];
         corrupt(probe);
 
         ghost_req_t req;
-        for (unsigned i = 0; i < sizeof(req); i++) ((uint8_t *)&req)[i] = 0;
+        for (unsigned i = 0; i < sizeof(req); i++)
+            ((uint8_t *)&req)[i] = 0;
         req.op = GHOST_RECALL;
-        for (int w = 0; w < GHOST_PW; w++) req.bits[w] = probe[w];
+        for (int w = 0; w < GHOST_PW; w++)
+            req.bits[w] = probe[w];
 
         ghost_rep_t rep;
         if (request(&req, &rep) && rep.match == (int8_t)p) {
@@ -120,5 +125,6 @@ void _start(void) {
     write_str(line);
 
     exit_(0);
-    for (;;) { }
+    for (;;) {
+    }
 }

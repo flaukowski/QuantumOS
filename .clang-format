@@ -1,0 +1,19 @@
+# QuantumOS code style — codifies the de facto style of the existing codebase
+# (4-space indent, attached K&R braces, right-aligned pointers, no include
+# sorting: include order is load-bearing in a freestanding kernel).
+BasedOnStyle: LLVM
+IndentWidth: 4
+TabWidth: 4
+UseTab: Never
+ColumnLimit: 100
+BreakBeforeBraces: Attach
+PointerAlignment: Right
+SortIncludes: Never
+ReflowComments: false
+AllowShortFunctionsOnASingleLine: None
+AllowShortIfStatementsOnASingleLine: Never
+AllowShortLoopsOnASingleLine: false
+IndentCaseLabels: false
+AlignTrailingComments: true
+KeepEmptyLinesAtTheStartOfBlocks: true
+LineEnding: DeriveLF

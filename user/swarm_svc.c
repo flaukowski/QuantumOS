@@ -27,22 +27,27 @@
 
 #include "swarm.h"
 #include "sha256.h"
-#include "ghost.h"   /* ghost_req_t/ghost_rep_t, GHOST_*, usys.h, string builders */
+#include "ghost.h" /* ghost_req_t/ghost_rep_t, GHOST_*, usys.h, string builders */
 
 /* ---- state (zeroed .bss) ---- */
-static uint8_t  master_seed[LAMPORT_SEED_LEN];
-static uint8_t  framebuf[SWARM_HDR_LEN + SWARM_MAX_PAYLOAD + 1];
-static long     ghostd_pid = 0;
+static uint8_t master_seed[LAMPORT_SEED_LEN];
+static uint8_t framebuf[SWARM_HDR_LEN + SWARM_MAX_PAYLOAD + 1];
+static long ghostd_pid = 0;
 
 /* COM2 receive accumulator for the inbound frame parser. */
-static uint8_t  rxbuf[SWARM_HDR_LEN + SWARM_MAX_PAYLOAD + 1];
+static uint8_t rxbuf[SWARM_HDR_LEN + SWARM_MAX_PAYLOAD + 1];
 static uint32_t rxlen = 0;
 
-static void logline(const char *s) { write_str(s); }
+static void logline(const char *s) {
+    write_str(s);
+}
 
 /* ---- little formatting helpers (no libc) ---- */
 static int put_hex_u64(char *b, int o, uint64_t v) {
-    if (v == 0) { b[o++] = '0'; return o; }
+    if (v == 0) {
+        b[o++] = '0';
+        return o;
+    }
     char t[16];
     int n = 0;
     while (v) {
@@ -50,7 +55,8 @@ static int put_hex_u64(char *b, int o, uint64_t v) {
         t[n++] = (char)(d < 10 ? ('0' + d) : ('A' + d - 10));
         v >>= 4;
     }
-    while (n) b[o++] = t[--n];
+    while (n)
+        b[o++] = t[--n];
     return o;
 }
 
@@ -60,21 +66,25 @@ static void com2_send_all(const uint8_t *buf, long len) {
     long off = 0;
     while (off < len) {
         long chunk = len - off;
-        if (chunk > 256) chunk = 256;
+        if (chunk > 256)
+            chunk = 256;
         long w = com2_write_bytes(buf + off, chunk);
-        if (w <= 0) return;   /* no cap / error — nothing more we can do */
+        if (w <= 0)
+            return; /* no cap / error — nothing more we can do */
         off += w;
     }
 }
 
 /* Build one framed message and push it out COM2. */
 static void emit_frame(uint8_t type, const uint8_t *payload, uint32_t len) {
-    if (len > SWARM_MAX_PAYLOAD) len = SWARM_MAX_PAYLOAD;
+    if (len > SWARM_MAX_PAYLOAD)
+        len = SWARM_MAX_PAYLOAD;
     framebuf[0] = SWARM_MAGIC;
     framebuf[1] = type;
     framebuf[2] = (uint8_t)(len & 0xFFu);
     framebuf[3] = (uint8_t)((len >> 8) & 0xFFu);
-    for (uint32_t i = 0; i < len; i++) framebuf[SWARM_HDR_LEN + i] = payload[i];
+    for (uint32_t i = 0; i < len; i++)
+        framebuf[SWARM_HDR_LEN + i] = payload[i];
     /* crc8 covers type + length + payload (everything but magic and crc) */
     framebuf[SWARM_HDR_LEN + len] = swarm_crc8(&framebuf[1], 3 + len);
     com2_send_all(framebuf, (long)(SWARM_HDR_LEN + len + 1));
@@ -87,8 +97,11 @@ static void expand_sk(uint32_t i, uint8_t b, uint8_t out[LAMPORT_HASH_LEN]) {
     sha256_init(&c);
     sha256_update(&c, master_seed, LAMPORT_SEED_LEN);
     uint8_t ib[5];
-    ib[0] = (uint8_t)(i >> 24); ib[1] = (uint8_t)(i >> 16);
-    ib[2] = (uint8_t)(i >> 8);  ib[3] = (uint8_t)i; ib[4] = b;
+    ib[0] = (uint8_t)(i >> 24);
+    ib[1] = (uint8_t)(i >> 16);
+    ib[2] = (uint8_t)(i >> 8);
+    ib[3] = (uint8_t)i;
+    ib[4] = b;
     sha256_update(&c, ib, 5);
     sha256_final(&c, out);
 }
@@ -114,31 +127,36 @@ static void compute_pubkey_digest(uint8_t out[LAMPORT_HASH_LEN]) {
  * public-key hash pk[i][1-b_i], so the verifier can rebuild the whole public
  * key and match it to the committed digest. */
 static void emit_signature(const uint8_t md[LAMPORT_HASH_LEN]) {
-    uint8_t chunk[SWARM_MAX_PAYLOAD];   /* 512 = 8 elements of 64 bytes */
+    uint8_t chunk[SWARM_MAX_PAYLOAD]; /* 512 = 8 elements of 64 bytes */
     uint32_t cpos = 0;
     for (uint32_t i = 0; i < LAMPORT_BITS; i++) {
         uint8_t bit = (uint8_t)((md[i >> 3] >> (i & 7u)) & 1u);
         uint8_t sk[LAMPORT_HASH_LEN], sko[LAMPORT_HASH_LEN], pko[LAMPORT_HASH_LEN];
-        expand_sk(i, bit, sk);                 /* revealed preimage */
+        expand_sk(i, bit, sk); /* revealed preimage */
         expand_sk(i, (uint8_t)(1u - bit), sko);
-        sha256(sko, LAMPORT_HASH_LEN, pko);     /* complementary pk hash */
-        for (int j = 0; j < LAMPORT_HASH_LEN; j++) chunk[cpos + j] = sk[j];
-        for (int j = 0; j < LAMPORT_HASH_LEN; j++) chunk[cpos + LAMPORT_HASH_LEN + j] = pko[j];
+        sha256(sko, LAMPORT_HASH_LEN, pko); /* complementary pk hash */
+        for (int j = 0; j < LAMPORT_HASH_LEN; j++)
+            chunk[cpos + j] = sk[j];
+        for (int j = 0; j < LAMPORT_HASH_LEN; j++)
+            chunk[cpos + LAMPORT_HASH_LEN + j] = pko[j];
         cpos += LAMPORT_SIG_ELEM;
         if (cpos == SWARM_MAX_PAYLOAD) {
             emit_frame(FRAME_SIG, chunk, cpos);
             cpos = 0;
         }
     }
-    if (cpos > 0) emit_frame(FRAME_SIG, chunk, cpos);
+    if (cpos > 0)
+        emit_frame(FRAME_SIG, chunk, cpos);
 }
 
 /* Compose the attestation string into `msg`, returning its length. */
 static int build_attestation(char *msg, int seed_present, uint64_t qseed, uint64_t tk) {
     int o = 0;
     o = ghost_put(msg, o, "QOS-BOOT|qseed=");
-    if (seed_present) o = put_hex_u64(msg, o, qseed);
-    else              o = ghost_put(msg, o, "none");
+    if (seed_present)
+        o = put_hex_u64(msg, o, qseed);
+    else
+        o = ghost_put(msg, o, "none");
     o = ghost_put(msg, o, "|ticks=");
     o = ghost_put_u(msg, o, (unsigned)tk);
     return o;
@@ -156,13 +174,15 @@ static void emit_boot_attestation(void) {
          * records qseed provenance separately below. */
         uint32_t x = (uint32_t)ticks() ^ 0x9E3779B9u;
         for (int i = (got > 0 ? (int)got : 0); i < LAMPORT_SEED_LEN; i++) {
-            x ^= x << 13; x ^= x >> 17; x ^= x << 5;
+            x ^= x << 13;
+            x ^= x >> 17;
+            x ^= x << 5;
             master_seed[i] = (uint8_t)(x & 0xFFu);
         }
     }
 
-    long sp = qrand_seed_present();          /* 1 present, 0 absent, <0 no cap */
-    long qs = qseed_value();                  /* seed value, or <0 no cap */
+    long sp = qrand_seed_present(); /* 1 present, 0 absent, <0 no cap */
+    long qs = qseed_value();        /* seed value, or <0 no cap */
     int seed_present = (sp == 1);
     uint64_t qseed = seed_present ? (uint64_t)qs : 0;
     uint64_t tk = (uint64_t)ticks();
@@ -186,8 +206,10 @@ static void emit_boot_attestation(void) {
     /* COM1 console gate line (CI greps "SWARM: boot attestation emitted"). */
     char line[96];
     int o = ghost_put(line, 0, "SWARM: boot attestation emitted (lamport-signed, qseed=");
-    if (seed_present) o = put_hex_u64(line, o, qseed);
-    else              o = ghost_put(line, o, "none");
+    if (seed_present)
+        o = put_hex_u64(line, o, qseed);
+    else
+        o = ghost_put(line, o, "none");
     o = ghost_put(line, o, ")");
     line[o] = 0;
     logline(line);
@@ -199,14 +221,19 @@ static void emit_boot_attestation(void) {
  * match is unambiguous) and record the replying pid for targeted sends. */
 static int discover_ghostd(void) {
     ghost_req_t req;
-    for (unsigned i = 0; i < sizeof(req); i++) ((uint8_t *)&req)[i] = 0;
+    for (unsigned i = 0; i < sizeof(req); i++)
+        ((uint8_t *)&req)[i] = 0;
     req.op = GHOST_STATUS;
-    if (send_msg((const char *)&req, (long)sizeof(req)) != 0) return 0;
+    if (send_msg((const char *)&req, (long)sizeof(req)) != 0)
+        return 0;
 
     char buf[sizeof(ghost_rep_t) + 8];
     for (long spins = 0; spins < 4000000; spins++) {
         long snd = recv_msg(buf, sizeof(buf));
-        if (snd != 0) { ghostd_pid = snd; return 1; }
+        if (snd != 0) {
+            ghostd_pid = snd;
+            return 1;
+        }
         yield();
     }
     return 0;
@@ -215,13 +242,16 @@ static int discover_ghostd(void) {
 /* Forward a request to ghostd (targeted send) and block, bounded, for the
  * reply. Returns 1 on success. */
 static int ghost_query(const ghost_req_t *req, ghost_rep_t *rep) {
-    if (ghostd_pid == 0) return 0;
-    if (send_to(ghostd_pid, (const char *)req, (long)sizeof(*req)) != 0) return 0;
+    if (ghostd_pid == 0)
+        return 0;
+    if (send_to(ghostd_pid, (const char *)req, (long)sizeof(*req)) != 0)
+        return 0;
     char buf[sizeof(ghost_rep_t) + 8];
     for (long spins = 0; spins < 2000000; spins++) {
         long snd = recv_msg(buf, sizeof(buf));
         if (snd != 0) {
-            for (unsigned i = 0; i < sizeof(*rep); i++) ((uint8_t *)rep)[i] = (uint8_t)buf[i];
+            for (unsigned i = 0; i < sizeof(*rep); i++)
+                ((uint8_t *)rep)[i] = (uint8_t)buf[i];
             return 1;
         }
         yield();
@@ -232,16 +262,19 @@ static int ghost_query(const ghost_req_t *req, ghost_rep_t *rep) {
 /* ---- inbound frame dispatch ---- */
 
 static void handle_data(const uint8_t *payload, uint32_t len) {
-    if (len < 1) return;
+    if (len < 1)
+        return;
     uint8_t op = payload[0];
 
     ghost_req_t req;
-    for (unsigned i = 0; i < sizeof(req); i++) ((uint8_t *)&req)[i] = 0;
+    for (unsigned i = 0; i < sizeof(req); i++)
+        ((uint8_t *)&req)[i] = 0;
     ghost_rep_t rep;
 
     if (op == SWARM_OP_STATUS) {
         req.op = GHOST_STATUS;
-        if (!ghost_query(&req, &rep)) return;
+        if (!ghost_query(&req, &rep))
+            return;
         /* reply: op, r_q16 (LE u32), live (u8) */
         uint8_t out[6];
         out[0] = SWARM_OP_STATUS;
@@ -252,15 +285,16 @@ static void handle_data(const uint8_t *payload, uint32_t len) {
         out[5] = rep.live;
         emit_frame(FRAME_DATA, out, sizeof(out));
     } else if (op == SWARM_OP_RECALL) {
-        if (len < 1 + GHOST_PW * 4) return;
+        if (len < 1 + GHOST_PW * 4)
+            return;
         req.op = GHOST_RECALL;
         for (int w = 0; w < GHOST_PW; w++) {
-            req.bits[w] = (uint32_t)payload[1 + w * 4] |
-                          ((uint32_t)payload[1 + w * 4 + 1] << 8) |
+            req.bits[w] = (uint32_t)payload[1 + w * 4] | ((uint32_t)payload[1 + w * 4 + 1] << 8) |
                           ((uint32_t)payload[1 + w * 4 + 2] << 16) |
                           ((uint32_t)payload[1 + w * 4 + 3] << 24);
         }
-        if (!ghost_query(&req, &rep)) return;
+        if (!ghost_query(&req, &rep))
+            return;
         /* reply: op, match (s8), r_q16 (LE u32) */
         uint8_t out[6];
         out[0] = SWARM_OP_RECALL;
@@ -276,7 +310,7 @@ static void handle_data(const uint8_t *payload, uint32_t len) {
 static void dispatch_frame(uint8_t type, const uint8_t *payload, uint32_t len) {
     switch (type) {
     case FRAME_PING:
-        emit_frame(FRAME_PONG, payload, len);   /* echo payload back as PONG */
+        emit_frame(FRAME_PONG, payload, len); /* echo payload back as PONG */
         break;
     case FRAME_DATA:
         handle_data(payload, len);
@@ -284,7 +318,7 @@ static void dispatch_frame(uint8_t type, const uint8_t *payload, uint32_t len) {
     case FRAME_DISCONNECT:
     case FRAME_HANDSHAKE:
     default:
-        break;                                  /* nothing to do */
+        break; /* nothing to do */
     }
 }
 
@@ -294,34 +328,41 @@ static void poll_com2(void) {
     uint8_t in[128];
     long got = com2_read_bytes(in, (long)sizeof(in));
     for (long i = 0; i < got; i++) {
-        if (rxlen < sizeof(rxbuf)) rxbuf[rxlen++] = in[i];
+        if (rxlen < sizeof(rxbuf))
+            rxbuf[rxlen++] = in[i];
     }
 
     for (;;) {
         /* resync: drop leading bytes until the buffer starts with the magic */
         uint32_t start = 0;
-        while (start < rxlen && rxbuf[start] != SWARM_MAGIC) start++;
+        while (start < rxlen && rxbuf[start] != SWARM_MAGIC)
+            start++;
         if (start > 0) {
-            for (uint32_t k = start; k < rxlen; k++) rxbuf[k - start] = rxbuf[k];
+            for (uint32_t k = start; k < rxlen; k++)
+                rxbuf[k - start] = rxbuf[k];
             rxlen -= start;
         }
-        if (rxlen < SWARM_HDR_LEN) return;      /* need a full header */
+        if (rxlen < SWARM_HDR_LEN)
+            return; /* need a full header */
 
         uint32_t len = (uint32_t)rxbuf[2] | ((uint32_t)rxbuf[3] << 8);
-        if (len > SWARM_MAX_PAYLOAD) {          /* bogus length: drop the magic, resync */
-            for (uint32_t k = 1; k < rxlen; k++) rxbuf[k - 1] = rxbuf[k];
+        if (len > SWARM_MAX_PAYLOAD) { /* bogus length: drop the magic, resync */
+            for (uint32_t k = 1; k < rxlen; k++)
+                rxbuf[k - 1] = rxbuf[k];
             rxlen -= 1;
             continue;
         }
         uint32_t total = SWARM_HDR_LEN + len + 1;
-        if (rxlen < total) return;              /* frame not fully arrived yet */
+        if (rxlen < total)
+            return; /* frame not fully arrived yet */
 
         uint8_t crc = swarm_crc8(&rxbuf[1], 3 + len);
         if (crc == rxbuf[SWARM_HDR_LEN + len]) {
             dispatch_frame(rxbuf[1], &rxbuf[SWARM_HDR_LEN], len);
         }
         /* consume the frame (valid or crc-bad — either way it is complete) */
-        for (uint32_t k = total; k < rxlen; k++) rxbuf[k - total] = rxbuf[k];
+        for (uint32_t k = total; k < rxlen; k++)
+            rxbuf[k - total] = rxbuf[k];
         rxlen -= total;
     }
 }

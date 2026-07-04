@@ -19,15 +19,15 @@
 #include <kernel/types.h>
 
 /* User virtual layout (per process, in the 1–2 GB PDPT slot) */
-#define USER_VBASE        0x40000000UL   /* code copied here; entry point */
-#define USER_DATA_VADDR   0x40080000UL   /* zeroed writable page (isolation canary) */
-#define USER_STACK_TOP    0x40100000UL   /* stack grows down from here */
-#define USER_STACK_PAGES  4              /* 16 KB user stack */
-#define USER_CODE_PAGES   8              /* 32 KB code window */
+#define USER_VBASE 0x40000000UL      /* code copied here; entry point */
+#define USER_DATA_VADDR 0x40080000UL /* zeroed writable page (isolation canary) */
+#define USER_STACK_TOP 0x40100000UL  /* stack grows down from here */
+#define USER_STACK_PAGES 4           /* 16 KB user stack */
+#define USER_CODE_PAGES 8            /* 32 KB code window */
 
 typedef struct {
-    uint64_t *pml4;   /* kernel-VA (identity-mapped) of the PML4 */
-    uint64_t cr3;     /* physical address to load into CR3 */
+    uint64_t *pml4; /* kernel-VA (identity-mapped) of the PML4 */
+    uint64_t cr3;   /* physical address to load into CR3 */
 } address_space_t;
 
 /* Create a fresh address space: private PML4 + PDPT, kernel half
@@ -37,8 +37,7 @@ address_space_t vmspace_create(void);
 /* Map one 4 KB user page (present|user, writable optional) at uvaddr
  * to physical frame paddr, allocating intermediate tables as needed.
  * Returns false on allocation failure. */
-bool vmspace_map_page(address_space_t *as, uint64_t uvaddr,
-                      uint64_t paddr, bool writable);
+bool vmspace_map_page(address_space_t *as, uint64_t uvaddr, uint64_t paddr, bool writable);
 
 /* Load an address space into CR3 (no-op if already active) */
 void vmspace_switch(uint64_t cr3);

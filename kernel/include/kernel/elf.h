@@ -17,7 +17,7 @@
 
 /* Minimal ELF64 definitions (little-endian, x86-64) */
 typedef struct {
-    uint8_t  e_ident[16];
+    uint8_t e_ident[16];
     uint16_t e_type;
     uint16_t e_machine;
     uint32_t e_version;
@@ -44,10 +44,10 @@ typedef struct {
     uint64_t p_align;
 } __attribute__((packed)) elf64_phdr_t;
 
-#define ELF_PT_LOAD   1
-#define ELF_PF_X      0x1
-#define ELF_PF_W      0x2
-#define ELF_PF_R      0x4
+#define ELF_PT_LOAD 1
+#define ELF_PF_X 0x1
+#define ELF_PF_W 0x2
+#define ELF_PF_R 0x4
 
 typedef enum {
     ELF_OK = 0,
@@ -62,7 +62,6 @@ typedef enum {
  * address space `as`, mapping/populating every PT_LOAD segment. Writes
  * the entry point to *entry_out. Segments are mapped user-accessible;
  * writable per PF_W. */
-elf_result_t elf_load(address_space_t *as, const uint8_t *img, size_t size,
-                      uint64_t *entry_out);
+elf_result_t elf_load(address_space_t *as, const uint8_t *img, size_t size, uint64_t *entry_out);
 
 #endif /* ELF_H */

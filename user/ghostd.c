@@ -34,64 +34,54 @@
 #include "ghost.h"
 
 /* ---- relaxation constants (validated against a host harness) ---- */
-#define GHOST_DSHIFT     3              /* torque -> phase-increment shift */
-#define GHOST_TSTEPS     48             /* relaxation steps per RECALL */
-#define GHOST_TILT       0x08000000u    /* 1/32-turn symmetry-breaking bias */
-#define GHOST_MATCH_HAM  16             /* max Hamming to accept a basin */
+#define GHOST_DSHIFT 3         /* torque -> phase-increment shift */
+#define GHOST_TSTEPS 48        /* relaxation steps per RECALL */
+#define GHOST_TILT 0x08000000u /* 1/32-turn symmetry-breaking bias */
+#define GHOST_MATCH_HAM 16     /* max Hamming to accept a basin */
 
 /* ---- honest forgetting ---- */
-#define GHOST_FID_FULL   65536u         /* fidelity 1.0 in Q16 */
-#define GHOST_FID_FLOOR  32768u         /* recall gate: fidelity >= 0.5 */
-#define GHOST_FID_SHIFT  6              /* fidelity -= age >> this (slow) */
-#define GHOST_COHERENCE  (1u << 30)     /* slot lifetime in ticks (long) */
+#define GHOST_FID_FULL 65536u      /* fidelity 1.0 in Q16 */
+#define GHOST_FID_FLOOR 32768u     /* recall gate: fidelity >= 0.5 */
+#define GHOST_FID_SHIFT 6          /* fidelity -= age >> this (slow) */
+#define GHOST_COHERENCE (1u << 30) /* slot lifetime in ticks (long) */
 
 /* ---- lambda damping band (Resonant Constraint Law) ---- */
-#define GHOST_R_HI       64225u         /* ~0.98 in Q16 */
-#define GHOST_R_LO       52429u         /* ~0.80 in Q16 */
+#define GHOST_R_HI 64225u /* ~0.98 in Q16 */
+#define GHOST_R_LO 52429u /* ~0.80 in Q16 */
 #define GHOST_LAMBDA_STEP 512u
-#define GHOST_LOG_INTERVAL 128          /* min ticks between lambda logs */
+#define GHOST_LOG_INTERVAL 128 /* min ticks between lambda logs */
 
 /* ---- phase-2: load-normalised relaxation + quantum perturbation noise ---- */
-#define GHOST_DREF        3             /* live-pattern load DSHIFT was tuned at (PR #53) */
-#define GHOST_QBUF        32            /* quantum bytes fetched per SYS_QRAND refill */
-#define GHOST_DITHER_SHIFT 20           /* noise byte -> per-oscillator phase dither */
-#define GHOST_SHED_BIAS  (GHOST_TILT >> 3) /* uniform drift accompanying the dither */
+#define GHOST_DREF 3                      /* live-pattern load DSHIFT was tuned at (PR #53) */
+#define GHOST_QBUF 32                     /* quantum bytes fetched per SYS_QRAND refill */
+#define GHOST_DITHER_SHIFT 20             /* noise byte -> per-oscillator phase dither */
+#define GHOST_SHED_BIAS (GHOST_TILT >> 3) /* uniform drift accompanying the dither */
 
 /* Q15 sine over a full turn, indexed by the top 8 phase bits. Generated
  * offline (no runtime float math is permitted in the field). */
 static const int16_t ghost_sin_q15[256] = {
-         0,    804,   1608,   2410,   3212,   4011,   4808,   5602,
-      6393,   7179,   7962,   8739,   9512,  10278,  11039,  11793,
-     12539,  13279,  14010,  14732,  15446,  16151,  16846,  17530,
-     18204,  18868,  19519,  20159,  20787,  21403,  22005,  22594,
-     23170,  23731,  24279,  24811,  25329,  25832,  26319,  26790,
-     27245,  27683,  28105,  28510,  28898,  29268,  29621,  29956,
-     30273,  30571,  30852,  31113,  31356,  31580,  31785,  31971,
-     32137,  32285,  32412,  32521,  32609,  32678,  32728,  32757,
-     32767,  32757,  32728,  32678,  32609,  32521,  32412,  32285,
-     32137,  31971,  31785,  31580,  31356,  31113,  30852,  30571,
-     30273,  29956,  29621,  29268,  28898,  28510,  28105,  27683,
-     27245,  26790,  26319,  25832,  25329,  24811,  24279,  23731,
-     23170,  22594,  22005,  21403,  20787,  20159,  19519,  18868,
-     18204,  17530,  16846,  16151,  15446,  14732,  14010,  13279,
-     12539,  11793,  11039,  10278,   9512,   8739,   7962,   7179,
-      6393,   5602,   4808,   4011,   3212,   2410,   1608,    804,
-         0,   -804,  -1608,  -2410,  -3212,  -4011,  -4808,  -5602,
-     -6393,  -7179,  -7962,  -8739,  -9512, -10278, -11039, -11793,
-    -12539, -13279, -14010, -14732, -15446, -16151, -16846, -17530,
-    -18204, -18868, -19519, -20159, -20787, -21403, -22005, -22594,
-    -23170, -23731, -24279, -24811, -25329, -25832, -26319, -26790,
-    -27245, -27683, -28105, -28510, -28898, -29268, -29621, -29956,
-    -30273, -30571, -30852, -31113, -31356, -31580, -31785, -31971,
-    -32137, -32285, -32412, -32521, -32609, -32678, -32728, -32757,
-    -32767, -32757, -32728, -32678, -32609, -32521, -32412, -32285,
-    -32137, -31971, -31785, -31580, -31356, -31113, -30852, -30571,
-    -30273, -29956, -29621, -29268, -28898, -28510, -28105, -27683,
-    -27245, -26790, -26319, -25832, -25329, -24811, -24279, -23731,
-    -23170, -22594, -22005, -21403, -20787, -20159, -19519, -18868,
-    -18204, -17530, -16846, -16151, -15446, -14732, -14010, -13279,
-    -12539, -11793, -11039, -10278,  -9512,  -8739,  -7962,  -7179,
-     -6393,  -5602,  -4808,  -4011,  -3212,  -2410,  -1608,   -804,
+    0,      804,    1608,   2410,   3212,   4011,   4808,   5602,   6393,   7179,   7962,   8739,
+    9512,   10278,  11039,  11793,  12539,  13279,  14010,  14732,  15446,  16151,  16846,  17530,
+    18204,  18868,  19519,  20159,  20787,  21403,  22005,  22594,  23170,  23731,  24279,  24811,
+    25329,  25832,  26319,  26790,  27245,  27683,  28105,  28510,  28898,  29268,  29621,  29956,
+    30273,  30571,  30852,  31113,  31356,  31580,  31785,  31971,  32137,  32285,  32412,  32521,
+    32609,  32678,  32728,  32757,  32767,  32757,  32728,  32678,  32609,  32521,  32412,  32285,
+    32137,  31971,  31785,  31580,  31356,  31113,  30852,  30571,  30273,  29956,  29621,  29268,
+    28898,  28510,  28105,  27683,  27245,  26790,  26319,  25832,  25329,  24811,  24279,  23731,
+    23170,  22594,  22005,  21403,  20787,  20159,  19519,  18868,  18204,  17530,  16846,  16151,
+    15446,  14732,  14010,  13279,  12539,  11793,  11039,  10278,  9512,   8739,   7962,   7179,
+    6393,   5602,   4808,   4011,   3212,   2410,   1608,   804,    0,      -804,   -1608,  -2410,
+    -3212,  -4011,  -4808,  -5602,  -6393,  -7179,  -7962,  -8739,  -9512,  -10278, -11039, -11793,
+    -12539, -13279, -14010, -14732, -15446, -16151, -16846, -17530, -18204, -18868, -19519, -20159,
+    -20787, -21403, -22005, -22594, -23170, -23731, -24279, -24811, -25329, -25832, -26319, -26790,
+    -27245, -27683, -28105, -28510, -28898, -29268, -29621, -29956, -30273, -30571, -30852, -31113,
+    -31356, -31580, -31785, -31971, -32137, -32285, -32412, -32521, -32609, -32678, -32728, -32757,
+    -32767, -32757, -32728, -32678, -32609, -32521, -32412, -32285, -32137, -31971, -31785, -31580,
+    -31356, -31113, -30852, -30571, -30273, -29956, -29621, -29268, -28898, -28510, -28105, -27683,
+    -27245, -26790, -26319, -25832, -25329, -24811, -24279, -23731, -23170, -22594, -22005, -21403,
+    -20787, -20159, -19519, -18868, -18204, -17530, -16846, -16151, -15446, -14732, -14010, -13279,
+    -12539, -11793, -11039, -10278, -9512,  -8739,  -7962,  -7179,  -6393,  -5602,  -4808,  -4011,
+    -3212,  -2410,  -1608,  -804,
 };
 
 static inline int ghost_cos_q15(uint32_t th) {
@@ -104,33 +94,37 @@ static inline int ghost_sinq(uint32_t th) {
 /* ---- field + slot state (zeroed .bss) ---- */
 static uint32_t theta[GHOST_N];
 static uint32_t slot_bits[GHOST_M][GHOST_PW];
-static uint8_t  slot_live[GHOST_M];
+static uint8_t slot_live[GHOST_M];
 static uint64_t slot_imprint_tick[GHOST_M];
 static uint64_t slot_deadline[GHOST_M];
 
 static uint32_t lambda_q16 = 0;
 static uint64_t last_lambda_log = 0;
-static int      live_count = 0;
+static int live_count = 0;
 
 /* ---- perturbation-noise provenance (decided once at startup) ---- */
 enum {
-    NOISE_QSEED = 0,       /* qseed present + draw works: real quantum-pool bytes */
-    NOISE_PRNG_NOSEED,     /* no qseed: honest internal PRNG, labelled as such */
-    NOISE_PRNG_FALLBACK    /* draw unavailable (no cap): internal PRNG, said plainly */
+    NOISE_QSEED = 0,    /* qseed present + draw works: real quantum-pool bytes */
+    NOISE_PRNG_NOSEED,  /* no qseed: honest internal PRNG, labelled as such */
+    NOISE_PRNG_FALLBACK /* draw unavailable (no cap): internal PRNG, said plainly */
 };
-static int      noise_mode = NOISE_PRNG_FALLBACK;
-static uint32_t prng_state32 = 0x9E3779B9u;  /* internal fallback PRNG state */
-static uint8_t  qbuf[GHOST_QBUF];            /* quantum byte reservoir (QSEED mode) */
-static int      qbuf_pos = GHOST_QBUF;       /* next unread byte (== size => empty) */
+static int noise_mode = NOISE_PRNG_FALLBACK;
+static uint32_t prng_state32 = 0x9E3779B9u; /* internal fallback PRNG state */
+static uint8_t qbuf[GHOST_QBUF];            /* quantum byte reservoir (QSEED mode) */
+static int qbuf_pos = GHOST_QBUF;           /* next unread byte (== size => empty) */
 
 /* ---- small serial helpers ---- */
-static void logline(const char *s) { write_str(s); }
+static void logline(const char *s) {
+    write_str(s);
+}
 
 /* Internal xorshift32 — the fallback noise when the quantum pool is not the
  * source (or a draw fails mid-run). Never labelled as quantum provenance. */
 static uint32_t prng32(void) {
     uint32_t x = prng_state32;
-    x ^= x << 13; x ^= x >> 17; x ^= x << 5;
+    x ^= x << 13;
+    x ^= x >> 17;
+    x ^= x << 5;
     prng_state32 = x ? x : 0x1u;
     return prng_state32;
 }
@@ -161,22 +155,24 @@ static uint8_t noise_byte(void) {
 static void detect_noise_source(void) {
     /* Seed the fallback PRNG deterministically but nonzero. */
     prng_state32 = (uint32_t)ticks() ^ 0x9E3779B9u;
-    if (prng_state32 == 0) prng_state32 = 1u;
+    if (prng_state32 == 0)
+        prng_state32 = 1u;
 
-    long seedp = qrand_seed_present();      /* 1/0 if we hold the quantum cap, <0 if not */
+    long seedp = qrand_seed_present(); /* 1/0 if we hold the quantum cap, <0 if not */
     uint8_t probe[8];
     long got = qrand_fill(probe, (long)sizeof(probe));
 
     if (got > 0 && seedp == 1) {
         noise_mode = NOISE_QSEED;
-        qbuf_pos = GHOST_QBUF;              /* force a fresh reservoir refill on first use */
+        qbuf_pos = GHOST_QBUF; /* force a fresh reservoir refill on first use */
         logline("GHOSTD: noise source = qseed-derived quantum pool");
     } else if (seedp == 0) {
         noise_mode = NOISE_PRNG_NOSEED;
         /* Stir any bytes we did get into the fallback seed — still a PRNG. */
         for (long i = 0; i < got && i < (long)sizeof(probe); i++)
             prng_state32 = prng_state32 * 31u + probe[i];
-        if (prng_state32 == 0) prng_state32 = 1u;
+        if (prng_state32 == 0)
+            prng_state32 = 1u;
         logline("GHOSTD: noise source = prng (no qseed)");
     } else {
         /* No quantum capability (or a seed exists but the draw failed): we
@@ -201,10 +197,12 @@ static uint32_t overlap_q16(int p) {
         int c = ghost_cos_q15(theta[i]);
         acc += ghost_bit(slot_bits[p], i) ? -c : c;
     }
-    int m_q15 = acc >> 8;               /* /N (N = 256) */
-    int r = m_q15 << 1;                 /* Q15 -> Q16 */
-    if (r < 0) r = 0;
-    if (r > 65536) r = 65536;
+    int m_q15 = acc >> 8; /* /N (N = 256) */
+    int r = m_q15 << 1;   /* Q15 -> Q16 */
+    if (r < 0)
+        r = 0;
+    if (r > 65536)
+        r = 65536;
     return (uint32_t)r;
 }
 
@@ -212,9 +210,11 @@ static uint32_t overlap_q16(int p) {
 static uint32_t field_order_param(void) {
     uint32_t best = 0;
     for (int p = 0; p < GHOST_M; p++) {
-        if (!slot_live[p]) continue;
+        if (!slot_live[p])
+            continue;
         uint32_t r = overlap_q16(p);
-        if (r > best) best = r;
+        if (r > best)
+            best = r;
     }
     return best;
 }
@@ -223,18 +223,23 @@ static uint32_t field_order_param(void) {
 static void relax_step(void) {
     int c[GHOST_N];
     int m[GHOST_M];
-    for (int i = 0; i < GHOST_N; i++) c[i] = ghost_cos_q15(theta[i]);
+    for (int i = 0; i < GHOST_N; i++)
+        c[i] = ghost_cos_q15(theta[i]);
     for (int p = 0; p < GHOST_M; p++) {
-        if (!slot_live[p]) { m[p] = 0; continue; }
+        if (!slot_live[p]) {
+            m[p] = 0;
+            continue;
+        }
         int acc = 0;
         for (int i = 0; i < GHOST_N; i++)
             acc += ghost_bit(slot_bits[p], i) ? -c[i] : c[i];
-        m[p] = acc >> 8;                /* Q15 overlap */
+        m[p] = acc >> 8; /* Q15 overlap */
     }
     for (int i = 0; i < GHOST_N; i++) {
         int g = 0;
         for (int p = 0; p < GHOST_M; p++) {
-            if (!slot_live[p]) continue;
+            if (!slot_live[p])
+                continue;
             g += ghost_bit(slot_bits[p], i) ? -m[p] : m[p];
         }
         /* Phase-2: normalise the summed local field to a reference load so a
@@ -245,15 +250,16 @@ static void relax_step(void) {
         if (live_count > 0)
             g = (int)(((int64_t)g * GHOST_DREF) / (int64_t)live_count);
         int si = ghost_sinq(theta[i]);
-        int64_t f = (int64_t)si * (int64_t)g;       /* Q30 torque */
+        int64_t f = (int64_t)si * (int64_t)g; /* Q30 torque */
         int32_t dth = (int32_t)(f >> GHOST_DSHIFT);
-        theta[i] -= (uint32_t)dth;                  /* descend the energy */
+        theta[i] -= (uint32_t)dth; /* descend the energy */
     }
 }
 
 /* Read the field out to a 256-bit sign pattern (half-circle per phase). */
 static void readout(uint32_t *out) {
-    for (int w = 0; w < GHOST_PW; w++) out[w] = 0;
+    for (int w = 0; w < GHOST_PW; w++)
+        out[w] = 0;
     for (int i = 0; i < GHOST_N; i++)
         ghost_setbit(out, i, ghost_cos_q15(theta[i]) < 0 ? 1 : 0);
 }
@@ -266,7 +272,7 @@ static void readout(uint32_t *out) {
 static void field_publish(void) {
     int8_t snap[GHOST_N];
     for (int i = 0; i < GHOST_N; i++) {
-        int v = ghost_cos_q15(theta[i]) >> 8;   /* -32767..32767 -> -127..127 */
+        int v = ghost_cos_q15(theta[i]) >> 8; /* -32767..32767 -> -127..127 */
         snap[i] = (int8_t)v;
     }
     field_snapshot(snap, GHOST_N);
@@ -276,17 +282,23 @@ static int hamming(const uint32_t *a, const uint32_t *b) {
     int h = 0;
     for (int w = 0; w < GHOST_PW; w++) {
         uint32_t x = a[w] ^ b[w];
-        while (x) { h += (int)(x & 1u); x >>= 1; }
+        while (x) {
+            h += (int)(x & 1u);
+            x >>= 1;
+        }
     }
     return h;
 }
 
 /* Imprint bits into a slot (REMEMBER). */
 static void imprint(int slot, const uint32_t *bits) {
-    if (slot < 0 || slot >= GHOST_M) return;
+    if (slot < 0 || slot >= GHOST_M)
+        return;
     uint64_t now = ticks();
-    for (int w = 0; w < GHOST_PW; w++) slot_bits[slot][w] = bits[w];
-    if (!slot_live[slot]) live_count++;
+    for (int w = 0; w < GHOST_PW; w++)
+        slot_bits[slot][w] = bits[w];
+    if (!slot_live[slot])
+        live_count++;
     slot_live[slot] = 1;
     slot_imprint_tick[slot] = now;
     slot_deadline[slot] = now + GHOST_COHERENCE;
@@ -305,16 +317,21 @@ static int recall(const uint32_t *probe, uint32_t *r_out) {
     for (int i = 0; i < GHOST_N; i++)
         theta[i] = (ghost_bit(probe, i) ? 0x80000000u : 0u) + GHOST_TILT;
 
-    for (int t = 0; t < GHOST_TSTEPS; t++) relax_step();
+    for (int t = 0; t < GHOST_TSTEPS; t++)
+        relax_step();
 
     uint32_t out[GHOST_PW];
     readout(out);
 
     int best = -1, best_ham = GHOST_N + 1;
     for (int p = 0; p < GHOST_M; p++) {
-        if (!slot_live[p]) continue;
+        if (!slot_live[p])
+            continue;
         int h = hamming(out, slot_bits[p]);
-        if (h < best_ham) { best_ham = h; best = p; }
+        if (h < best_ham) {
+            best_ham = h;
+            best = p;
+        }
     }
     if (best < 0 || best_ham > GHOST_MATCH_HAM) {
         *r_out = 0;
@@ -340,10 +357,12 @@ static int recall(const uint32_t *probe, uint32_t *r_out) {
 /* Reclaim any slot whose coherence deadline has passed (honest forget). */
 static void reap_expired(uint64_t now) {
     for (int p = 0; p < GHOST_M; p++) {
-        if (!slot_live[p]) continue;
+        if (!slot_live[p])
+            continue;
         if (now >= slot_deadline[p]) {
             slot_live[p] = 0;
-            if (live_count > 0) live_count--;
+            if (live_count > 0)
+                live_count--;
             char b[72];
             int o = ghost_put(b, 0, "GHOSTD: slot ");
             o = ghost_put_u(b, o, (unsigned)p);
@@ -360,14 +379,16 @@ static void reap_expired(uint64_t now) {
 static void free_tick(void) {
     uint64_t now = ticks();
     reap_expired(now);
-    field_publish();               /* breathe the live view even at idle */
-    if (live_count == 0) return;
+    field_publish(); /* breathe the live view even at idle */
+    if (live_count == 0)
+        return;
 
     uint32_t r = field_order_param();
     int intervened = 0;
     if (r > GHOST_R_HI) {
         lambda_q16 += GHOST_LAMBDA_STEP;
-        if (lambda_q16 > 65536u) lambda_q16 = 65536u;
+        if (lambda_q16 > 65536u)
+            lambda_q16 = 65536u;
         /* over-coherent: shed a little coherence with a small uniform drift
          * plus a per-oscillator dither drawn from the perturbation-noise
          * source (qseed-derived quantum bytes when available). This only ever
@@ -379,8 +400,9 @@ static void free_tick(void) {
         }
         intervened = 1;
     } else if (r < GHOST_R_LO) {
-        if (lambda_q16 >= GHOST_LAMBDA_STEP) lambda_q16 -= GHOST_LAMBDA_STEP;
-        relax_step();                   /* pull back toward the band */
+        if (lambda_q16 >= GHOST_LAMBDA_STEP)
+            lambda_q16 -= GHOST_LAMBDA_STEP;
+        relax_step(); /* pull back toward the band */
         intervened = 1;
     }
     if (intervened && (now - last_lambda_log) >= GHOST_LOG_INTERVAL) {
@@ -403,7 +425,8 @@ static void free_tick(void) {
  * answering one first-match capability. */
 static void handle(const ghost_req_t *req, long sender) {
     ghost_rep_t rep;
-    for (unsigned i = 0; i < sizeof(rep); i++) ((uint8_t *)&rep)[i] = 0;
+    for (unsigned i = 0; i < sizeof(rep); i++)
+        ((uint8_t *)&rep)[i] = 0;
     rep.op = req->op;
     rep.live = (uint8_t)live_count;
     rep.lambda_q16 = lambda_q16;
@@ -455,8 +478,8 @@ void _start(void) {
     while (1) {
         long sender = recv_msg(buf, sizeof(buf));
         if (sender == 0) {
-            free_tick();            /* Resonant Constraint Law + forgetting */
-            heartbeat();            /* stay live for the watchdog */
+            free_tick(); /* Resonant Constraint Law + forgetting */
+            heartbeat(); /* stay live for the watchdog */
             yield();
             continue;
         }

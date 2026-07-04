@@ -90,11 +90,9 @@ cap_result_t cap_init(void) {
     return CAP_SUCCESS;
 }
 
-cap_result_t cap_create(uint32_t owner_pid, cap_resource_type_t resource_type,
-                        uint32_t resource_id, uint32_t permissions,
-                        uint64_t expiration, uint32_t *cap_id_out) {
-    if (!cap_initialized || !cap_id_out ||
-        resource_type >= CAP_RESOURCE_TYPE_COUNT) {
+cap_result_t cap_create(uint32_t owner_pid, cap_resource_type_t resource_type, uint32_t resource_id,
+                        uint32_t permissions, uint64_t expiration, uint32_t *cap_id_out) {
+    if (!cap_initialized || !cap_id_out || resource_type >= CAP_RESOURCE_TYPE_COUNT) {
         return CAP_ERROR_INVALID_ARG;
     }
 
@@ -117,9 +115,8 @@ cap_result_t cap_create(uint32_t owner_pid, cap_resource_type_t resource_type,
     return CAP_SUCCESS;
 }
 
-cap_result_t cap_derive(uint32_t parent_cap_id, uint32_t requester_pid,
-                        uint32_t new_owner_pid, uint32_t permissions,
-                        uint64_t expiration, uint32_t *cap_id_out) {
+cap_result_t cap_derive(uint32_t parent_cap_id, uint32_t requester_pid, uint32_t new_owner_pid,
+                        uint32_t permissions, uint64_t expiration, uint32_t *cap_id_out) {
     if (!cap_id_out) {
         return CAP_ERROR_INVALID_ARG;
     }
@@ -142,8 +139,7 @@ cap_result_t cap_derive(uint32_t parent_cap_id, uint32_t requester_pid,
         return CAP_ERROR_ESCALATION;
     }
     /* A child may never outlive its parent's expiration */
-    if (parent->cap.expiration != 0 &&
-        (expiration == 0 || expiration > parent->cap.expiration)) {
+    if (parent->cap.expiration != 0 && (expiration == 0 || expiration > parent->cap.expiration)) {
         expiration = parent->cap.expiration;
     }
 
@@ -235,8 +231,7 @@ cap_result_t cap_revoke(uint32_t cap_id, uint32_t requester_pid) {
     return CAP_SUCCESS;
 }
 
-cap_result_t cap_check(uint32_t cap_id, uint32_t pid,
-                       cap_resource_type_t resource_type,
+cap_result_t cap_check(uint32_t cap_id, uint32_t pid, cap_resource_type_t resource_type,
                        uint32_t resource_id, uint32_t required_perms) {
     cap_slot_t *slot = resolve(cap_id);
     if (!slot) {
@@ -244,8 +239,7 @@ cap_result_t cap_check(uint32_t cap_id, uint32_t pid,
         return CAP_ERROR_INVALID_ID;
     }
 
-    if (slot->cap.owner_id != pid ||
-        slot->cap.resource_type != resource_type ||
+    if (slot->cap.owner_id != pid || slot->cap.resource_type != resource_type ||
         slot->cap.resource_id != resource_id) {
         stats.checks_denied++;
         return CAP_ERROR_DENIED;
@@ -274,8 +268,8 @@ cap_result_t cap_get(uint32_t cap_id, capability_t *out) {
     return CAP_SUCCESS;
 }
 
-cap_result_t cap_find(uint32_t pid, cap_resource_type_t resource_type,
-                      uint32_t required_perms, uint32_t *resource_id_out) {
+cap_result_t cap_find(uint32_t pid, cap_resource_type_t resource_type, uint32_t required_perms,
+                      uint32_t *resource_id_out) {
     for (uint32_t i = 0; i < MAX_CAPABILITIES; i++) {
         if (!cap_table[i].in_use) {
             continue;
@@ -341,23 +335,22 @@ void cap_get_stats(cap_stats_t *out) {
  * Boot self-test
  * ============================================================================ */
 
-#define ST_ASSERT(cond, msg)                        \
-    do {                                            \
-        if (!(cond)) {                              \
-            boot_log("cap-selftest FAIL: " msg);    \
-            return CAP_ERROR_DENIED;                \
-        }                                           \
+#define ST_ASSERT(cond, msg)                                                                       \
+    do {                                                                                           \
+        if (!(cond)) {                                                                             \
+            boot_log("cap-selftest FAIL: " msg);                                                   \
+            return CAP_ERROR_DENIED;                                                               \
+        }                                                                                          \
     } while (0)
 
 cap_result_t cap_selftest(void) {
     uint32_t root = 0, child = 0, grandchild = 0;
 
     /* Create + check */
-    ST_ASSERT(cap_create(1, CAP_RESOURCE_MEMORY, 42,
-                         CAP_READ | CAP_WRITE | CAP_GRANT | CAP_REVOKE,
-                         0, &root) == CAP_SUCCESS, "create");
-    ST_ASSERT(cap_check(root, 1, CAP_RESOURCE_MEMORY, 42, CAP_READ) == CAP_SUCCESS,
-              "check pass");
+    ST_ASSERT(cap_create(1, CAP_RESOURCE_MEMORY, 42, CAP_READ | CAP_WRITE | CAP_GRANT | CAP_REVOKE,
+                         0, &root) == CAP_SUCCESS,
+              "create");
+    ST_ASSERT(cap_check(root, 1, CAP_RESOURCE_MEMORY, 42, CAP_READ) == CAP_SUCCESS, "check pass");
 
     /* Wrong pid / resource / perms are denied */
     ST_ASSERT(cap_check(root, 2, CAP_RESOURCE_MEMORY, 42, CAP_READ) != CAP_SUCCESS,
@@ -368,8 +361,7 @@ cap_result_t cap_selftest(void) {
               "check missing perm");
 
     /* Derivation narrows; escalation is refused */
-    ST_ASSERT(cap_derive(root, 1, 2, CAP_READ | CAP_GRANT, 0, &child) == CAP_SUCCESS,
-              "derive");
+    ST_ASSERT(cap_derive(root, 1, 2, CAP_READ | CAP_GRANT, 0, &child) == CAP_SUCCESS, "derive");
     ST_ASSERT(cap_check(child, 2, CAP_RESOURCE_MEMORY, 42, CAP_READ) == CAP_SUCCESS,
               "derived check");
     ST_ASSERT(cap_derive(root, 1, 2, CAP_EXECUTE, 0, &grandchild) == CAP_ERROR_ESCALATION,

@@ -43,7 +43,8 @@ void _start(void) {
     /* The canned contradiction (deterministic). Routed to paradoxd by our
      * single IPC send-cap (capability-as-address). */
     paradox_req_t req;
-    for (unsigned i = 0; i < sizeof(req); i++) ((uint8_t *)&req)[i] = 0;
+    for (unsigned i = 0; i < sizeof(req); i++)
+        ((uint8_t *)&req)[i] = 0;
     req.op = PARADOX_RESOLVE;
     req.x0 = PARADOX_GATE_X0;
     req.vec[0] = PARADOX_GATE_V0;
@@ -58,5 +59,6 @@ void _start(void) {
 
     write_str("paradox-test: contradiction delivered, exiting");
     exit_(0);
-    for (;;) { }
+    for (;;) {
+    }
 }

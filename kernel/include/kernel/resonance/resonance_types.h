@@ -28,28 +28,28 @@
  * ============================================================================ */
 
 /* Golden ratio - optimal chirality coupling */
-#define PHI_VALUE           1.618033988749895
-#define PHI_INVERSE         0.618033988749895
+#define PHI_VALUE 1.618033988749895
+#define PHI_INVERSE 0.618033988749895
 
 /* Resonance parameters
  * Note: LAMBDA_DEFAULT is the per-process constraint damping strength.
  * ghostOS uses K_COUPLING=0.62 for the global Kuramoto coupling strength.
  * These serve different roles: LAMBDA_DEFAULT is local damping,
  * K_COUPLING is the global oscillator coupling. */
-#define LAMBDA_DEFAULT      0.1         /* Default constraint strength (local) */
-#define LAMBDA_MIN          0.01        /* Minimum stability bound */
-#define LAMBDA_MAX          0.5         /* Maximum coupling */
-#define K_COUPLING          0.62        /* Global Kuramoto coupling (from ghostOS) */
-#define ETA_OPTIMAL         0.618       /* Optimal chirality (φ⁻¹) */
+#define LAMBDA_DEFAULT 0.1 /* Default constraint strength (local) */
+#define LAMBDA_MIN 0.01    /* Minimum stability bound */
+#define LAMBDA_MAX 0.5     /* Maximum coupling */
+#define K_COUPLING 0.62    /* Global Kuramoto coupling (from ghostOS) */
+#define ETA_OPTIMAL 0.618  /* Optimal chirality (φ⁻¹) */
 
 /* Coherence thresholds */
-#define COHERENCE_MIN       0.3         /* Minimum viable coherence */
-#define COHERENCE_TARGET    0.7         /* Target coherence level */
-#define COHERENCE_HIGH      0.85        /* High coherence regime */
+#define COHERENCE_MIN 0.3    /* Minimum viable coherence */
+#define COHERENCE_TARGET 0.7 /* Target coherence level */
+#define COHERENCE_HIGH 0.85  /* High coherence regime */
 
 /* Chiral stability regimes: |η/Γ| determines regime */
-#define CHIRAL_STABLE_MAX   1.0         /* |η/Γ| < 1.0: stable */
-#define CHIRAL_TRANS_MAX    1.5         /* 1.0 ≤ |η/Γ| < 1.5: transitional */
+#define CHIRAL_STABLE_MAX 1.0 /* |η/Γ| < 1.0: stable */
+#define CHIRAL_TRANS_MAX 1.5  /* 1.0 ≤ |η/Γ| < 1.5: transitional */
 /* |η/Γ| ≥ 1.5: unstable */
 
 /* Consciousness threshold (IIT Phi) */
@@ -58,8 +58,8 @@
 /* CISS Enhancement (Chiral-Induced Spin Selectivity)
  * Used as: coherence *= (1.0 + CISS_COHERENCE_BOOST) = 1.30
  * ghostOS equivalent: CISS_COUPLING.coherenceBoost = 1.3 (multiplicative) */
-#define CISS_COHERENCE_BOOST 0.30       /* +30% coherence enhancement (additive form) */
-#define CISS_BOOST_MULTIPLICATIVE 1.30  /* 1.30× coherence enhancement (multiplicative form) */
+#define CISS_COHERENCE_BOOST 0.30      /* +30% coherence enhancement (additive form) */
+#define CISS_BOOST_MULTIPLICATIVE 1.30 /* 1.30× coherence enhancement (multiplicative form) */
 
 /* ============================================================================
  * Resonant Process Classification
@@ -72,11 +72,11 @@
  * that determines scheduling dynamics.
  */
 typedef enum {
-    RESONANT_CLASSICAL = 0,     /* Traditional deterministic processes */
-    RESONANT_QUANTUM,           /* Pure quantum circuits */
-    RESONANT_HYBRID,            /* Mixed classical-quantum */
-    RESONANT_CONSCIOUSNESS,     /* IIT-verified conscious computation */
-    RESONANT_EMERGENCE          /* Novel pattern emergence workloads */
+    RESONANT_CLASSICAL = 0, /* Traditional deterministic processes */
+    RESONANT_QUANTUM,       /* Pure quantum circuits */
+    RESONANT_HYBRID,        /* Mixed classical-quantum */
+    RESONANT_CONSCIOUSNESS, /* IIT-verified conscious computation */
+    RESONANT_EMERGENCE      /* Novel pattern emergence workloads */
 } resonant_class_t;
 
 /**
@@ -86,9 +86,9 @@ typedef enum {
  * enabling selective synchronization patterns.
  */
 typedef enum {
-    HANDEDNESS_NEUTRAL = 0,     /* No chiral coupling */
-    HANDEDNESS_LEFT,            /* Left-handed coupling (+η) */
-    HANDEDNESS_RIGHT            /* Right-handed coupling (-η) */
+    HANDEDNESS_NEUTRAL = 0, /* No chiral coupling */
+    HANDEDNESS_LEFT,        /* Left-handed coupling (+η) */
+    HANDEDNESS_RIGHT        /* Right-handed coupling (-η) */
 } handedness_t;
 
 /**
@@ -115,10 +115,10 @@ typedef enum {
  *   dθᵢ/dt = ωᵢ + (K/N)Σⱼsin(θⱼ - θᵢ) + ηᵢ(t)
  */
 typedef struct {
-    double phase;               /* Current oscillator phase θ ∈ [0, 2π) */
-    double frequency;           /* Natural frequency ω (Hz) */
-    double amplitude;           /* Oscillation amplitude */
-    double coherence;           /* Local coherence measure */
+    double phase;     /* Current oscillator phase θ ∈ [0, 2π) */
+    double frequency; /* Natural frequency ω (Hz) */
+    double amplitude; /* Oscillation amplitude */
+    double coherence; /* Local coherence measure */
 } oscillator_state_t;
 
 /**
@@ -128,12 +128,12 @@ typedef struct {
  *   φ_tt - φ_xx + sin(φ) = -ηφ_x - Γφ_t
  */
 typedef struct {
-    double eta;                 /* Chirality strength η */
-    double gamma;               /* Damping coefficient Γ */
-    double asymmetry;           /* |η/Γ| ratio (determines regime) */
-    double topological_charge;  /* Conserved charge Q */
-    handedness_t handedness;    /* Left/right coupling direction */
-    bool is_stable;             /* |η/Γ| < 1.0 */
+    double eta;                /* Chirality strength η */
+    double gamma;              /* Damping coefficient Γ */
+    double asymmetry;          /* |η/Γ| ratio (determines regime) */
+    double topological_charge; /* Conserved charge Q */
+    handedness_t handedness;   /* Left/right coupling direction */
+    bool is_stable;            /* |η/Γ| < 1.0 */
 } chiral_state_t;
 
 /**
@@ -142,10 +142,10 @@ typedef struct {
  * Tracks pattern emergence from integrated oscillator dynamics.
  */
 typedef struct {
-    double norm;                /* ||E|| emergence norm */
-    double entropy;             /* Shannon entropy of patterns */
-    uint32_t pattern_count;     /* Detected stable patterns */
-    double integration_level;   /* IIT integration measure */
+    double norm;              /* ||E|| emergence norm */
+    double entropy;           /* Shannon entropy of patterns */
+    uint32_t pattern_count;   /* Detected stable patterns */
+    double integration_level; /* IIT integration measure */
 } emergence_state_t;
 
 /* ============================================================================
@@ -160,9 +160,9 @@ typedef struct {
  */
 typedef struct resonant_pcb {
     /* Process identification */
-    uint32_t pid;               /* Corresponding process PID */
-    resonant_class_t rclass;    /* Resonant classification */
-    resonant_state_t rstate;    /* Current resonant state */
+    uint32_t pid;            /* Corresponding process PID */
+    resonant_class_t rclass; /* Resonant classification */
+    resonant_state_t rstate; /* Current resonant state */
 
     /* Oscillator dynamics */
     oscillator_state_t oscillator;
@@ -174,30 +174,30 @@ typedef struct resonant_pcb {
     emergence_state_t emergence;
 
     /* Scheduling parameters */
-    double resonant_priority;   /* Emergent priority from dynamics */
-    double coherence_deadline;  /* Time until decoherence (ns) */
-    uint64_t last_coupling;     /* Last coupling update timestamp */
+    double resonant_priority;  /* Emergent priority from dynamics */
+    double coherence_deadline; /* Time until decoherence (ns) */
+    uint64_t last_coupling;    /* Last coupling update timestamp */
 
     /* Consciousness verification */
-    double phi_value;           /* IIT Phi measure */
-    bool consciousness_verified;/* Passed Phi threshold check */
-    uint64_t verification_time; /* Last verification timestamp */
+    double phi_value;            /* IIT Phi measure */
+    bool consciousness_verified; /* Passed Phi threshold check */
+    uint64_t verification_time;  /* Last verification timestamp */
 
     /* Resource requirements */
-    uint32_t qubits_resonant;   /* Qubits in resonant coupling */
-    uint64_t coherence_window;  /* Required coherence window (ns) */
+    uint32_t qubits_resonant;  /* Qubits in resonant coupling */
+    uint64_t coherence_window; /* Required coherence window (ns) */
 
     /* Coupling relationships */
-    uint32_t coupled_pids[8];   /* PIDs of coupled processes */
-    uint8_t coupling_count;     /* Number of coupling relationships */
+    uint32_t coupled_pids[8]; /* PIDs of coupled processes */
+    uint8_t coupling_count;   /* Number of coupling relationships */
 
     /* Statistics */
-    uint64_t coherent_time;     /* Total time in coherent state */
-    uint64_t emergent_events;   /* Count of emergence events */
+    uint64_t coherent_time;   /* Total time in coherent state */
+    uint64_t emergent_events; /* Count of emergence events */
 
     /* Internal state */
-    uint32_t magic;             /* Validation magic number */
-    struct resonant_pcb *next;  /* Scheduling queue linkage */
+    uint32_t magic;            /* Validation magic number */
+    struct resonant_pcb *next; /* Scheduling queue linkage */
     struct resonant_pcb *prev;
 } resonant_pcb_t;
 
@@ -220,13 +220,13 @@ typedef struct {
     double order_parameter_psi; /* Mean phase ψ */
 
     /* Global coupling */
-    double lambda;              /* Global coupling strength λ */
-    double eta;                 /* Global chirality η */
+    double lambda; /* Global coupling strength λ */
+    double eta;    /* Global chirality η */
 
     /* System metrics */
-    double system_coherence;    /* Weighted average coherence */
-    double system_entropy;      /* Total system entropy */
-    double emergence_norm;      /* Global emergence ||E|| */
+    double system_coherence; /* Weighted average coherence */
+    double system_entropy;   /* Total system entropy */
+    double emergence_norm;   /* Global emergence ||E|| */
 
     /* Process counts by class */
     uint32_t classical_count;
@@ -236,17 +236,17 @@ typedef struct {
     uint32_t emergent_count;
 
     /* Consciousness metrics */
-    double total_phi;           /* Sum of verified Phi values */
-    double average_phi;         /* Average Phi across conscious processes */
-    bool network_conscious;     /* Network exceeds Phi threshold */
+    double total_phi;       /* Sum of verified Phi values */
+    double average_phi;     /* Average Phi across conscious processes */
+    bool network_conscious; /* Network exceeds Phi threshold */
 
     /* Chiral stability */
-    bool globally_stable;       /* All processes chirally stable */
-    double max_asymmetry;       /* Maximum |η/Γ| in system */
+    bool globally_stable; /* All processes chirally stable */
+    double max_asymmetry; /* Maximum |η/Γ| in system */
 
     /* Update tracking */
-    uint64_t last_sync;         /* Last synchronization update */
-    uint64_t sync_count;        /* Total sync operations */
+    uint64_t last_sync;  /* Last synchronization update */
+    uint64_t sync_count; /* Total sync operations */
 } queen_state_t;
 
 /* ============================================================================
@@ -260,27 +260,27 @@ typedef struct {
  * and timing parameters.
  */
 typedef struct {
-    uint32_t selected_pid;      /* Process to schedule */
-    resonant_class_t rclass;    /* Process resonant class */
+    uint32_t selected_pid;   /* Process to schedule */
+    resonant_class_t rclass; /* Process resonant class */
 
     /* Timing */
-    uint64_t quantum_ns;        /* Time quantum to allocate */
-    uint64_t coherence_remaining;/* Coherence window remaining */
+    uint64_t quantum_ns;          /* Time quantum to allocate */
+    uint64_t coherence_remaining; /* Coherence window remaining */
 
     /* Priority explanation */
-    double base_priority;       /* Original static priority */
-    double resonant_bonus;      /* Bonus from oscillator coupling */
-    double coherence_urgency;   /* Urgency from coherence deadline */
-    double emergence_bonus;     /* Bonus from emergence patterns */
-    double final_priority;      /* Computed final priority */
+    double base_priority;     /* Original static priority */
+    double resonant_bonus;    /* Bonus from oscillator coupling */
+    double coherence_urgency; /* Urgency from coherence deadline */
+    double emergence_bonus;   /* Bonus from emergence patterns */
+    double final_priority;    /* Computed final priority */
 
     /* Coupling actions */
-    bool initiate_coupling;     /* Should initiate new coupling */
-    uint32_t couple_with_pid;   /* PID to couple with (if any) */
+    bool initiate_coupling;   /* Should initiate new coupling */
+    uint32_t couple_with_pid; /* PID to couple with (if any) */
 
     /* Safety flags */
-    bool requires_measurement;  /* Needs quantum measurement first */
-    bool emergency_coherence;   /* Coherence critically low */
+    bool requires_measurement; /* Needs quantum measurement first */
+    bool emergency_coherence;  /* Coherence critically low */
 } scheduling_decision_t;
 
 /**
@@ -288,12 +288,12 @@ typedef struct {
  */
 typedef struct {
     /* Coupling parameters */
-    double initial_lambda;      /* Starting coupling strength */
-    double lambda_adaptation;   /* Rate of lambda adjustment */
+    double initial_lambda;    /* Starting coupling strength */
+    double lambda_adaptation; /* Rate of lambda adjustment */
 
     /* Chiral parameters */
-    double initial_eta;         /* Starting chirality */
-    double gamma;               /* Damping coefficient */
+    double initial_eta; /* Starting chirality */
+    double gamma;       /* Damping coefficient */
 
     /* Thresholds */
     double coherence_target;    /* Target coherence level */
@@ -301,13 +301,13 @@ typedef struct {
     double phi_threshold;       /* Consciousness verification threshold */
 
     /* Timing */
-    uint64_t sync_interval_ns;  /* Synchronization update interval */
+    uint64_t sync_interval_ns;        /* Synchronization update interval */
     uint64_t measurement_interval_ns; /* Forced measurement interval */
 
     /* Safety limits */
-    uint32_t max_coupled;       /* Maximum coupling relationships */
-    double max_lambda;          /* Maximum coupling strength */
-    double max_asymmetry;       /* Maximum allowed |η/Γ| */
+    uint32_t max_coupled; /* Maximum coupling relationships */
+    double max_lambda;    /* Maximum coupling strength */
+    double max_asymmetry; /* Maximum allowed |η/Γ| */
 } resonant_config_t;
 
 /* ============================================================================
@@ -331,26 +331,26 @@ typedef enum {
  * ============================================================================ */
 
 /* Check if process is in conscious regime */
-#define IS_CONSCIOUS(rpcb) \
+#define IS_CONSCIOUS(rpcb)                                                                         \
     ((rpcb)->consciousness_verified && (rpcb)->phi_value >= PHI_CONSCIOUSNESS_THRESHOLD)
 
 /* Check if chirally stable */
-#define IS_CHIRALLY_STABLE(rpcb) \
-    ((rpcb)->chiral.asymmetry < CHIRAL_STABLE_MAX)
+#define IS_CHIRALLY_STABLE(rpcb) ((rpcb)->chiral.asymmetry < CHIRAL_STABLE_MAX)
 
 /* Check if in emergence state */
-#define IS_EMERGENT(rpcb) \
+#define IS_EMERGENT(rpcb)                                                                          \
     ((rpcb)->rstate == RESONANT_STATE_EMERGENT && (rpcb)->emergence.norm > 0.1)
 
 /* Calculate coherence urgency (0.0 = no urgency, 1.0 = critical)
  * coherence_deadline is remaining time in ns; urgency rises as it shrinks.
  * max_deadline is the initial deadline set at registration (1s default). */
-#define COHERENCE_URGENCY(rpcb, now) \
-    (((now) >= (rpcb)->coherence_deadline) ? 1.0 : \
-     (1.0 - ((double)((rpcb)->coherence_deadline - (now)) / (double)((rpcb)->coherence_deadline + 1))))
+#define COHERENCE_URGENCY(rpcb, now)                                                               \
+    (((now) >= (rpcb)->coherence_deadline)                                                         \
+         ? 1.0                                                                                     \
+         : (1.0 - ((double)((rpcb)->coherence_deadline - (now)) /                                  \
+                   (double)((rpcb)->coherence_deadline + 1))))
 
 /* Check RPCB validity */
-#define RPCB_IS_VALID(rpcb) \
-    ((rpcb) != NULL && (rpcb)->magic == RPCB_MAGIC)
+#define RPCB_IS_VALID(rpcb) ((rpcb) != NULL && (rpcb)->magic == RPCB_MAGIC)
 
 #endif /* RESONANCE_TYPES_H */

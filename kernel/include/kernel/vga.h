@@ -15,15 +15,27 @@
 
 #include <kernel/types.h>
 
-#define VGA_WIDTH   80
-#define VGA_HEIGHT  25
+#define VGA_WIDTH 80
+#define VGA_HEIGHT 25
 
 /* VGA colour attributes */
 typedef enum {
-    VGA_BLACK = 0, VGA_BLUE, VGA_GREEN, VGA_CYAN,
-    VGA_RED, VGA_MAGENTA, VGA_BROWN, VGA_LIGHT_GREY,
-    VGA_DARK_GREY, VGA_LIGHT_BLUE, VGA_LIGHT_GREEN, VGA_LIGHT_CYAN,
-    VGA_LIGHT_RED, VGA_LIGHT_MAGENTA, VGA_YELLOW, VGA_WHITE
+    VGA_BLACK = 0,
+    VGA_BLUE,
+    VGA_GREEN,
+    VGA_CYAN,
+    VGA_RED,
+    VGA_MAGENTA,
+    VGA_BROWN,
+    VGA_LIGHT_GREY,
+    VGA_DARK_GREY,
+    VGA_LIGHT_BLUE,
+    VGA_LIGHT_GREEN,
+    VGA_LIGHT_CYAN,
+    VGA_LIGHT_RED,
+    VGA_LIGHT_MAGENTA,
+    VGA_YELLOW,
+    VGA_WHITE
 } vga_color_t;
 
 /* Low-level buffer ops */
@@ -34,8 +46,8 @@ void vga_print(int x, int y, const char *s, vga_color_t fg, vga_color_t bg);
 void vga_print_center(int y, const char *s, vga_color_t fg, vga_color_t bg);
 
 /* Boot splash */
-void vga_boot_splash(void);           /* draw the static frame + logo */
+void vga_boot_splash(void);                          /* draw the static frame + logo */
 void vga_boot_stage(const char *label, int percent); /* advance bar, animate */
-void vga_boot_ready(void);            /* final "READY" flourish */
+void vga_boot_ready(void);                           /* final "READY" flourish */
 
 #endif /* VGA_H */

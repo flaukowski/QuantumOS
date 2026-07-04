@@ -17,19 +17,14 @@ typedef enum {
 
 // Process classes for hybrid execution (distinct from the process
 // manager's process_type_t so both headers can coexist in one TU)
-typedef enum {
-    QPROC_CLASSICAL,
-    QPROC_QUANTUM,
-    QPROC_HYBRID,
-    QPROC_AGENT
-} quantum_process_type_t;
+typedef enum { QPROC_CLASSICAL, QPROC_QUANTUM, QPROC_HYBRID, QPROC_AGENT } quantum_process_type_t;
 
 // Physical or simulated qubit reference
 typedef struct {
     uint32_t qubit_id;
     uint32_t simulator_id;
-    uint64_t coherence_time;  // Remaining coherence window (ns)
-    uint32_t fidelity;        // Current fidelity (0-10000 = 0.00-100.00%)
+    uint64_t coherence_time; // Remaining coherence window (ns)
+    uint32_t fidelity;       // Current fidelity (0-10000 = 0.00-100.00%)
     uint8_t is_allocated;
 } qubit_handle_t;
 
@@ -37,7 +32,7 @@ typedef struct {
 typedef struct {
     uint32_t context_id;
     uint32_t priority;
-    uint64_t deadline;        // Coherence deadline (ns)
+    uint64_t deadline; // Coherence deadline (ns)
     uint32_t qubits_required;
     uint32_t *qubit_ids;
     uint32_t circuit_depth;
@@ -77,7 +72,7 @@ typedef struct {
 typedef struct {
     uint32_t measurement_id;
     uint32_t qubit_id;
-    uint8_t result;           // 0 or 1
+    uint8_t result; // 0 or 1
     double probability;
     uint64_t timestamp;
     uint8_t collapsed;
@@ -89,7 +84,7 @@ typedef struct {
     uint32_t cpu_cores_required;
     uint32_t qubits_required;
     uint64_t time_budget;
-    double determinism_req;   // 0.0 = probabilistic, 1.0 = deterministic
+    double determinism_req; // 0.0 = probabilistic, 1.0 = deterministic
     uint64_t uncertainty_bound;
 } process_requirements_t;
 
@@ -105,20 +100,20 @@ typedef struct {
 } qubit_pool_t;
 
 // Gate types
-#define GATE_H        1
-#define GATE_X        2
-#define GATE_Y        3
-#define GATE_Z        4
-#define GATE_CNOT     5
-#define GATE_CZ       6
-#define GATE_RX       7
-#define GATE_RY       8
-#define GATE_RZ       9
-#define GATE_MEASURE  10
+#define GATE_H 1
+#define GATE_X 2
+#define GATE_Y 3
+#define GATE_Z 4
+#define GATE_CNOT 5
+#define GATE_CZ 6
+#define GATE_RX 7
+#define GATE_RY 8
+#define GATE_RZ 9
+#define GATE_MEASURE 10
 
 // Fidelity thresholds
-#define FIDELITY_HIGH    9990  // 99.90%
-#define FIDELITY_STANDARD 9900  // 99.00%
-#define FIDELITY_LOW      9500  // 95.00%
+#define FIDELITY_HIGH 9990     // 99.90%
+#define FIDELITY_STANDARD 9900 // 99.00%
+#define FIDELITY_LOW 9500      // 95.00%
 
 #endif // QUANTUM_TYPES_H

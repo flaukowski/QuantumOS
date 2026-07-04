@@ -18,10 +18,10 @@
  * Internal Constants
  * ============================================================================ */
 
-#define MAX_PROCESSES       256
-#define MAX_PORTS           128
-#define MAX_SHARED_REGIONS  64
-#define MAX_CHANNELS        64
+#define MAX_PROCESSES 256
+#define MAX_PORTS 128
+#define MAX_SHARED_REGIONS 64
+#define MAX_CHANNELS 64
 #define MAX_GRANTS_PER_REGION 16
 
 /* ============================================================================
@@ -103,7 +103,8 @@ static uint64_t get_timestamp_ns(void) {
  */
 static int str_equal(const char *a, const char *b) {
     while (*a && *b) {
-        if (*a != *b) return 0;
+        if (*a != *b)
+            return 0;
         a++;
         b++;
     }
@@ -153,7 +154,8 @@ static ipc_queue_entry_t *queue_alloc_entry(void) {
 }
 
 static void queue_free_entry(ipc_queue_entry_t *entry) {
-    if (!entry) return;
+    if (!entry)
+        return;
 
     entry->prev = NULL;
     entry->next = entry_free_list;
@@ -495,8 +497,8 @@ ipc_result_t ipc_reply(const ipc_message_t *original_msg, const ipc_message_t *r
     return ipc_send(original_msg->sender_id, &reply_msg, IPC_NO_TIMEOUT);
 }
 
-ipc_result_t ipc_call(uint32_t receiver_id, const ipc_message_t *request,
-                      ipc_message_t *reply, uint64_t timeout_ns) {
+ipc_result_t ipc_call(uint32_t receiver_id, const ipc_message_t *request, ipc_message_t *reply,
+                      uint64_t timeout_ns) {
     if (!request || !reply) {
         return IPC_ERROR_INVALID_ARG;
     }
@@ -727,8 +729,8 @@ ipc_result_t ipc_share_destroy(uint32_t region_id) {
     return IPC_SUCCESS;
 }
 
-ipc_result_t ipc_share_grant(uint32_t region_id, uint32_t grantee_id,
-                             uint32_t permissions, ipc_region_grant_t *grant) {
+ipc_result_t ipc_share_grant(uint32_t region_id, uint32_t grantee_id, uint32_t permissions,
+                             ipc_region_grant_t *grant) {
     ipc_shared_region_t *reg = find_region(region_id);
     if (!reg) {
         return IPC_ERROR_NOT_FOUND;
@@ -762,7 +764,7 @@ ipc_result_t ipc_share_grant(uint32_t region_id, uint32_t grantee_id,
     g->region_id = region_id;
     g->grantee_id = grantee_id;
     g->permissions = permissions & reg->permissions; /* Can't exceed owner perms */
-    g->mapped_addr = NULL; /* Mapped on ipc_share_map */
+    g->mapped_addr = NULL;                           /* Mapped on ipc_share_map */
     g->is_active = 1;
 
     reg->ref_count++;
@@ -788,8 +790,7 @@ ipc_result_t ipc_share_revoke(uint32_t region_id, uint32_t grantee_id) {
     uint32_t slot = (uint32_t)(reg - shared_regions);
 
     for (uint32_t i = 0; i < MAX_GRANTS_PER_REGION; i++) {
-        if (region_grants[slot][i].is_active &&
-            region_grants[slot][i].grantee_id == grantee_id) {
+        if (region_grants[slot][i].is_active && region_grants[slot][i].grantee_id == grantee_id) {
 
             /* Unmap from grantee's address space */
             /* TODO: vmm_unmap(grantee_id, region_grants[slot][i].mapped_addr, reg->size); */
@@ -824,8 +825,7 @@ ipc_result_t ipc_share_map(uint32_t region_id, void **addr) {
     /* Check for grant */
     uint32_t slot = (uint32_t)(reg - shared_regions);
     for (uint32_t i = 0; i < MAX_GRANTS_PER_REGION; i++) {
-        if (region_grants[slot][i].is_active &&
-            region_grants[slot][i].grantee_id == pid) {
+        if (region_grants[slot][i].is_active && region_grants[slot][i].grantee_id == pid) {
 
             /* Map into grantee's address space */
             /* TODO: void *mapped = vmm_map(pid, reg->physical_addr, reg->size, perms); */
@@ -857,8 +857,7 @@ ipc_result_t ipc_share_unmap(uint32_t region_id) {
     /* Grantee unmapping */
     uint32_t slot = (uint32_t)(reg - shared_regions);
     for (uint32_t i = 0; i < MAX_GRANTS_PER_REGION; i++) {
-        if (region_grants[slot][i].is_active &&
-            region_grants[slot][i].grantee_id == pid) {
+        if (region_grants[slot][i].is_active && region_grants[slot][i].grantee_id == pid) {
 
             /* TODO: vmm_unmap(pid, region_grants[slot][i].mapped_addr, reg->size); */
             region_grants[slot][i].mapped_addr = NULL;
@@ -873,8 +872,7 @@ ipc_result_t ipc_share_unmap(uint32_t region_id) {
  * Channel Operations
  * ============================================================================ */
 
-ipc_result_t ipc_channel_create(uint32_t endpoint_a, uint32_t endpoint_b,
-                                uint32_t *channel_id) {
+ipc_result_t ipc_channel_create(uint32_t endpoint_a, uint32_t endpoint_b, uint32_t *channel_id) {
     if (!ipc_initialized) {
         return IPC_ERROR_NOT_SUPPORTED;
     }
@@ -983,8 +981,7 @@ ipc_result_t ipc_channel_send(uint32_t channel_id, const ipc_message_t *msg) {
     return result;
 }
 
-ipc_result_t ipc_channel_receive(uint32_t channel_id, ipc_message_t *msg,
-                                 uint64_t timeout_ns) {
+ipc_result_t ipc_channel_receive(uint32_t channel_id, ipc_message_t *msg, uint64_t timeout_ns) {
     (void)timeout_ns;
 
     ipc_channel_t *ch = find_channel(channel_id);
@@ -1026,14 +1023,13 @@ ipc_result_t ipc_quantum_circuit_handoff(uint32_t receiver_id, uint32_t circuit_
     msg.deadline = coherence_deadline;
 
     /* Pack circuit ID into message data */
-    *(uint32_t*)msg.data = circuit_id;
+    *(uint32_t *)msg.data = circuit_id;
     msg.length = sizeof(uint32_t);
 
     return ipc_send(receiver_id, &msg, IPC_NO_TIMEOUT);
 }
 
-ipc_result_t ipc_quantum_measurement_result(uint32_t receiver_id,
-                                            uint32_t measurement_id,
+ipc_result_t ipc_quantum_measurement_result(uint32_t receiver_id, uint32_t measurement_id,
                                             uint8_t result, double probability) {
     ipc_message_t msg;
     memset(&msg, 0, sizeof(msg));
@@ -1074,27 +1070,45 @@ int ipc_has_messages(void) {
 }
 
 void ipc_get_stats(uint32_t *sent, uint32_t *received, uint32_t *dropped) {
-    if (sent) *sent = (uint32_t)ipc_global_stats.total_sent;
-    if (received) *received = (uint32_t)ipc_global_stats.total_received;
-    if (dropped) *dropped = (uint32_t)ipc_global_stats.total_dropped;
+    if (sent)
+        *sent = (uint32_t)ipc_global_stats.total_sent;
+    if (received)
+        *received = (uint32_t)ipc_global_stats.total_received;
+    if (dropped)
+        *dropped = (uint32_t)ipc_global_stats.total_dropped;
 }
 
 const char *ipc_result_string(ipc_result_t result) {
     switch (result) {
-        case IPC_SUCCESS:               return "Success";
-        case IPC_ERROR_INVALID_RECEIVER: return "Invalid receiver";
-        case IPC_ERROR_INVALID_SENDER:   return "Invalid sender";
-        case IPC_ERROR_MESSAGE_TOO_LARGE: return "Message too large";
-        case IPC_ERROR_PERMISSION_DENIED: return "Permission denied";
-        case IPC_ERROR_BUFFER_FULL:      return "Buffer full";
-        case IPC_ERROR_TIMEOUT:          return "Timeout";
-        case IPC_ERROR_NO_MESSAGE:       return "No message";
-        case IPC_ERROR_INVALID_PORT:     return "Invalid port";
-        case IPC_ERROR_PORT_CLOSED:      return "Port closed";
-        case IPC_ERROR_OUT_OF_MEMORY:    return "Out of memory";
-        case IPC_ERROR_INVALID_ARG:      return "Invalid argument";
-        case IPC_ERROR_ALREADY_EXISTS:   return "Already exists";
-        case IPC_ERROR_NOT_SUPPORTED:    return "Not supported";
-        default:                         return "Unknown error";
+    case IPC_SUCCESS:
+        return "Success";
+    case IPC_ERROR_INVALID_RECEIVER:
+        return "Invalid receiver";
+    case IPC_ERROR_INVALID_SENDER:
+        return "Invalid sender";
+    case IPC_ERROR_MESSAGE_TOO_LARGE:
+        return "Message too large";
+    case IPC_ERROR_PERMISSION_DENIED:
+        return "Permission denied";
+    case IPC_ERROR_BUFFER_FULL:
+        return "Buffer full";
+    case IPC_ERROR_TIMEOUT:
+        return "Timeout";
+    case IPC_ERROR_NO_MESSAGE:
+        return "No message";
+    case IPC_ERROR_INVALID_PORT:
+        return "Invalid port";
+    case IPC_ERROR_PORT_CLOSED:
+        return "Port closed";
+    case IPC_ERROR_OUT_OF_MEMORY:
+        return "Out of memory";
+    case IPC_ERROR_INVALID_ARG:
+        return "Invalid argument";
+    case IPC_ERROR_ALREADY_EXISTS:
+        return "Already exists";
+    case IPC_ERROR_NOT_SUPPORTED:
+        return "Not supported";
+    default:
+        return "Unknown error";
     }
 }

@@ -19,11 +19,11 @@ void _start(void) {
 
     while (1) {
         long now = ticks();
-        if (now - start < 120) {        /* ~1.2s of healthy heartbeats */
+        if (now - start < 120) { /* ~1.2s of healthy heartbeats */
             heartbeat();
         } else if (!went_silent) {
             write_str("watched-svc: going silent (simulated hang)");
-            went_silent = 1;             /* stop heartbeating; keep running */
+            went_silent = 1; /* stop heartbeating; keep running */
         }
         yield();
     }

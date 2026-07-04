@@ -22,12 +22,12 @@ extern void set_cr3(uint64_t cr3);
  * cover the low 1 GB; GRUB's linear framebuffer sits far above that. */
 static void fb_identity_map(uint64_t base, uint64_t len) {
     (void)len; /* a 1024x768x32 FB (~3 MB) fits within one 1 GB slot */
-    uint64_t region = base & ~0x3FFFFFFFULL;   /* 1 GB aligned */
+    uint64_t region = base & ~0x3FFFFFFFULL; /* 1 GB aligned */
     for (int i = 0; i < 512; i++) {
         fb_map_pd[i] = (region + (uint64_t)i * 0x200000ULL) | 0x83; /* P|RW|PS */
     }
     boot_pdpt[region >> 30] = ((uint64_t)fb_map_pd) | 0x3; /* P|RW, supervisor */
-    set_cr3(get_cr3()); /* flush TLB */
+    set_cr3(get_cr3());                                    /* flush TLB */
 }
 
 static volatile uint8_t *fb_addr = 0;
@@ -37,14 +37,12 @@ static int fb_bpp = 0;
 static int fb_ready = 0;
 static int splash_frame = 0;
 
-#define GLYPH_SCALE 3   /* 8x8 font drawn as 24x24 */
+#define GLYPH_SCALE 3 /* 8x8 font drawn as 24x24 */
 
 /* period-32 integer sine, amplitude +/-100 */
-static const int8_t sine32[32] = {
-      0,  20,  38,  56,  71,  83,  92,  98, 100,  98,  92,  83,
-     71,  56,  38,  20,   0, -20, -38, -56, -71, -83, -92, -98,
-   -100, -98, -92, -83, -71, -56, -38, -20
-};
+static const int8_t sine32[32] = {0,   20,  38,   56,  71,  83,  92,  98,  100, 98,  92,
+                                  83,  71,  56,   38,  20,  0,   -20, -38, -56, -71, -83,
+                                  -92, -98, -100, -98, -92, -83, -71, -56, -38, -20};
 
 static void frame_delay(void) {
     for (volatile uint32_t i = 0; i < 800000; i++) {
@@ -54,33 +52,36 @@ static void frame_delay(void) {
 
 /* --- 8x8 font: just the glyphs the FB splash needs (uppercase Q U A N
  * T M O S R E D Y, digits, '%', space). Unknown chars render blank. --- */
-typedef struct { char c; uint8_t rows[8]; } glyph_t;
+typedef struct {
+    char c;
+    uint8_t rows[8];
+} glyph_t;
 
 static const glyph_t font[] = {
-    {' ', {0,0,0,0,0,0,0,0}},
-    {'0', {0x3C,0x66,0x6E,0x76,0x66,0x66,0x3C,0x00}},
-    {'1', {0x18,0x38,0x18,0x18,0x18,0x18,0x7E,0x00}},
-    {'2', {0x3C,0x66,0x06,0x0C,0x30,0x60,0x7E,0x00}},
-    {'3', {0x3C,0x66,0x06,0x1C,0x06,0x66,0x3C,0x00}},
-    {'4', {0x0C,0x1C,0x3C,0x6C,0x7E,0x0C,0x0C,0x00}},
-    {'5', {0x7E,0x60,0x7C,0x06,0x06,0x66,0x3C,0x00}},
-    {'6', {0x1C,0x30,0x60,0x7C,0x66,0x66,0x3C,0x00}},
-    {'7', {0x7E,0x06,0x0C,0x18,0x30,0x30,0x30,0x00}},
-    {'8', {0x3C,0x66,0x66,0x3C,0x66,0x66,0x3C,0x00}},
-    {'9', {0x3C,0x66,0x66,0x3E,0x06,0x0C,0x38,0x00}},
-    {'%', {0x62,0x66,0x0C,0x18,0x30,0x66,0x46,0x00}},
-    {'A', {0x18,0x3C,0x66,0x66,0x7E,0x66,0x66,0x00}},
-    {'D', {0x78,0x6C,0x66,0x66,0x66,0x6C,0x78,0x00}},
-    {'E', {0x7E,0x60,0x60,0x7C,0x60,0x60,0x7E,0x00}},
-    {'M', {0x63,0x77,0x7F,0x6B,0x63,0x63,0x63,0x00}},
-    {'N', {0x66,0x76,0x7E,0x7E,0x6E,0x66,0x66,0x00}},
-    {'O', {0x3C,0x66,0x66,0x66,0x66,0x66,0x3C,0x00}},
-    {'Q', {0x3C,0x66,0x66,0x66,0x6E,0x3C,0x0E,0x00}},
-    {'R', {0x7C,0x66,0x66,0x7C,0x6C,0x66,0x66,0x00}},
-    {'S', {0x3C,0x66,0x60,0x3C,0x06,0x66,0x3C,0x00}},
-    {'T', {0x7E,0x18,0x18,0x18,0x18,0x18,0x18,0x00}},
-    {'U', {0x66,0x66,0x66,0x66,0x66,0x66,0x3C,0x00}},
-    {'Y', {0x66,0x66,0x66,0x3C,0x18,0x18,0x18,0x00}},
+    {' ', {0, 0, 0, 0, 0, 0, 0, 0}},
+    {'0', {0x3C, 0x66, 0x6E, 0x76, 0x66, 0x66, 0x3C, 0x00}},
+    {'1', {0x18, 0x38, 0x18, 0x18, 0x18, 0x18, 0x7E, 0x00}},
+    {'2', {0x3C, 0x66, 0x06, 0x0C, 0x30, 0x60, 0x7E, 0x00}},
+    {'3', {0x3C, 0x66, 0x06, 0x1C, 0x06, 0x66, 0x3C, 0x00}},
+    {'4', {0x0C, 0x1C, 0x3C, 0x6C, 0x7E, 0x0C, 0x0C, 0x00}},
+    {'5', {0x7E, 0x60, 0x7C, 0x06, 0x06, 0x66, 0x3C, 0x00}},
+    {'6', {0x1C, 0x30, 0x60, 0x7C, 0x66, 0x66, 0x3C, 0x00}},
+    {'7', {0x7E, 0x06, 0x0C, 0x18, 0x30, 0x30, 0x30, 0x00}},
+    {'8', {0x3C, 0x66, 0x66, 0x3C, 0x66, 0x66, 0x3C, 0x00}},
+    {'9', {0x3C, 0x66, 0x66, 0x3E, 0x06, 0x0C, 0x38, 0x00}},
+    {'%', {0x62, 0x66, 0x0C, 0x18, 0x30, 0x66, 0x46, 0x00}},
+    {'A', {0x18, 0x3C, 0x66, 0x66, 0x7E, 0x66, 0x66, 0x00}},
+    {'D', {0x78, 0x6C, 0x66, 0x66, 0x66, 0x6C, 0x78, 0x00}},
+    {'E', {0x7E, 0x60, 0x60, 0x7C, 0x60, 0x60, 0x7E, 0x00}},
+    {'M', {0x63, 0x77, 0x7F, 0x6B, 0x63, 0x63, 0x63, 0x00}},
+    {'N', {0x66, 0x76, 0x7E, 0x7E, 0x6E, 0x66, 0x66, 0x00}},
+    {'O', {0x3C, 0x66, 0x66, 0x66, 0x66, 0x66, 0x3C, 0x00}},
+    {'Q', {0x3C, 0x66, 0x66, 0x66, 0x6E, 0x3C, 0x0E, 0x00}},
+    {'R', {0x7C, 0x66, 0x66, 0x7C, 0x6C, 0x66, 0x66, 0x00}},
+    {'S', {0x3C, 0x66, 0x60, 0x3C, 0x06, 0x66, 0x3C, 0x00}},
+    {'T', {0x7E, 0x18, 0x18, 0x18, 0x18, 0x18, 0x18, 0x00}},
+    {'U', {0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x3C, 0x00}},
+    {'Y', {0x66, 0x66, 0x66, 0x3C, 0x18, 0x18, 0x18, 0x00}},
 };
 
 static const uint8_t *glyph_for(char c) {
@@ -124,9 +125,15 @@ bool fb_init_from_multiboot(uint32_t mb_info_addr) {
     return true;
 }
 
-bool fb_available(void) { return fb_ready; }
-int fb_width(void) { return fb_w; }
-int fb_height(void) { return fb_h; }
+bool fb_available(void) {
+    return fb_ready;
+}
+int fb_width(void) {
+    return fb_w;
+}
+int fb_height(void) {
+    return fb_h;
+}
 
 uint32_t fb_rgb(uint8_t r, uint8_t g, uint8_t b) {
     return ((uint32_t)r << 16) | ((uint32_t)g << 8) | b;
@@ -156,14 +163,19 @@ void fb_draw_char(int x, int y, char c, uint32_t fg) {
     for (int row = 0; row < 8; row++) {
         for (int col = 0; col < 8; col++) {
             if (g[row] & (0x80 >> col)) {
-                fb_fill_rect(x + col * GLYPH_SCALE, y + row * GLYPH_SCALE,
-                             GLYPH_SCALE, GLYPH_SCALE, fg);
+                fb_fill_rect(x + col * GLYPH_SCALE, y + row * GLYPH_SCALE, GLYPH_SCALE, GLYPH_SCALE,
+                             fg);
             }
         }
     }
 }
 
-static int str_len(const char *s) { int n = 0; while (s[n]) n++; return n; }
+static int str_len(const char *s) {
+    int n = 0;
+    while (s[n])
+        n++;
+    return n;
+}
 
 void fb_draw_string(int x, int y, const char *s, uint32_t fg) {
     int cw = 8 * GLYPH_SCALE + GLYPH_SCALE; /* glyph + 1-scale gap */
@@ -191,9 +203,13 @@ static void fb_banner(int y, const char *s, uint32_t fg) {
 /* --- boot splash --- */
 
 static int isqrt(int v) {
-    if (v <= 0) return 0;
+    if (v <= 0)
+        return 0;
     int x = v, y = (x + 1) / 2;
-    while (y < x) { x = y; y = (x + v / x) / 2; }
+    while (y < x) {
+        x = y;
+        y = (x + v / x) / 2;
+    }
     return x;
 }
 
@@ -212,11 +228,11 @@ static void draw_interference(int frame) {
             int d2 = isqrt((x - s2x) * (x - s2x) + (y - s2y) * (y - s2y));
             int a = sine32[((d1 / 12) - frame) & 31];
             int b = sine32[((d2 / 12) - frame) & 31];
-            int sum = (a + b) / 2;              /* -100..100 */
-            int mag = sum < 0 ? -sum : sum;     /* 0..100 */
+            int sum = (a + b) / 2;          /* -100..100 */
+            int mag = sum < 0 ? -sum : sum; /* 0..100 */
 
             /* deep blue trough -> bright cyan/white crest */
-            uint8_t bl = (uint8_t)(40 + mag * 2);        /* up to ~240 */
+            uint8_t bl = (uint8_t)(40 + mag * 2); /* up to ~240 */
             uint8_t gr = (uint8_t)(mag * 2);
             uint8_t rd = (uint8_t)(mag > 70 ? (mag - 70) * 6 : 0);
             fb_fill_rect(x, y, blk, blk, fb_rgb(rd, gr, bl));
@@ -238,10 +254,18 @@ static void draw_progress(int percent) {
     /* percent readout, centred under the bar */
     char pct[5];
     int n = 0;
-    if (percent >= 100) { pct[n++] = '1'; pct[n++] = '0'; pct[n++] = '0'; }
-    else if (percent >= 10) { pct[n++] = (char)('0' + percent / 10); pct[n++] = (char)('0' + percent % 10); }
-    else { pct[n++] = (char)('0' + percent); }
-    pct[n++] = '%'; pct[n] = 0;
+    if (percent >= 100) {
+        pct[n++] = '1';
+        pct[n++] = '0';
+        pct[n++] = '0';
+    } else if (percent >= 10) {
+        pct[n++] = (char)('0' + percent / 10);
+        pct[n++] = (char)('0' + percent % 10);
+    } else {
+        pct[n++] = (char)('0' + percent);
+    }
+    pct[n++] = '%';
+    pct[n] = 0;
     fb_draw_string_center(by + bh + 16, pct, fb_rgb(230, 230, 120));
 }
 
@@ -252,8 +276,10 @@ void fb_boot_splash(void) {
 
 void fb_boot_stage(const char *label, int percent) {
     (void)label; /* detailed labels go to the serial console */
-    if (percent < 0) percent = 0;
-    if (percent > 100) percent = 100;
+    if (percent < 0)
+        percent = 0;
+    if (percent > 100)
+        percent = 100;
     draw_interference(splash_frame++);
     fb_banner(fb_h / 6, "QUANTUM OS", fb_rgb(120, 230, 255));
     draw_progress(percent);
@@ -283,28 +309,31 @@ void fb_render_field(const int8_t *snap, int n) {
     }
     /* square-ish grid side = ceil(sqrt(n)); for ghostd's N=256 this is 16 */
     int side = isqrt(n);
-    while (side * side < n) side++;
-    if (side <= 0) return;
+    while (side * side < n)
+        side++;
+    if (side <= 0)
+        return;
 
     /* Field occupies a centred square, leaving room for the banners. */
     int margin = fb_h / 8;
     int area = fb_h - 2 * margin;
-    if (area > fb_w) area = fb_w;
+    if (area > fb_w)
+        area = fb_w;
     int cell = area / side;
-    if (cell < 1) cell = 1;
+    if (cell < 1)
+        cell = 1;
     int grid = cell * side;
     int ox = (fb_w - grid) / 2;
     int oy = (fb_h - grid) / 2;
 
     for (int idx = 0; idx < side * side; idx++) {
-        int v = (idx < n) ? snap[idx] : 0;   /* −128..127 */
-        int mag = v < 0 ? -v : v;             /* 0..128 */
-        uint8_t bl = (uint8_t)(30 + mag);                 /* trough floor -> bright */
-        uint8_t gr = (uint8_t)(v > 0 ? mag : mag / 3);    /* crests greener */
+        int v = (idx < n) ? snap[idx] : 0;             /* −128..127 */
+        int mag = v < 0 ? -v : v;                      /* 0..128 */
+        uint8_t bl = (uint8_t)(30 + mag);              /* trough floor -> bright */
+        uint8_t gr = (uint8_t)(v > 0 ? mag : mag / 3); /* crests greener */
         uint8_t rd = (uint8_t)(mag > 96 ? (mag - 96) * 4 : 0);
         int gx = idx % side, gy = idx / side;
-        fb_fill_rect(ox + gx * cell, oy + gy * cell, cell - 1, cell - 1,
-                     fb_rgb(rd, gr, bl));
+        fb_fill_rect(ox + gx * cell, oy + gy * cell, cell - 1, cell - 1, fb_rgb(rd, gr, bl));
     }
 
     fb_banner(margin / 2, "QUANTUM OS", fb_rgb(120, 230, 255));

@@ -27,8 +27,10 @@
 /* Simple sin/cos approximations for kernel use */
 static double fast_sin(double x) {
     /* Reduce to [-π, π] */
-    while (x > PI) x -= TWO_PI;
-    while (x < -PI) x += TWO_PI;
+    while (x > PI)
+        x -= TWO_PI;
+    while (x < -PI)
+        x += TWO_PI;
 
     /* Taylor series approximation */
     double x2 = x * x;
@@ -44,7 +46,8 @@ static double fast_cos(double x) {
 }
 
 static double fast_sqrt(double x) {
-    if (x <= 0) return 0;
+    if (x <= 0)
+        return 0;
     double guess = x / 2.0;
     for (int i = 0; i < 10; i++) {
         guess = (guess + x / guess) / 2.0;
@@ -58,27 +61,37 @@ static double fast_abs(double x) {
 
 /* Approximate asin via rational polynomial: asin(x) ≈ x*(1 + x²*(1/6 + x²*(3/40 + x²*15/336))) */
 static double fast_asin(double x) {
-    if (x > 1.0) x = 1.0;
-    if (x < -1.0) x = -1.0;
+    if (x > 1.0)
+        x = 1.0;
+    if (x < -1.0)
+        x = -1.0;
     double x2 = x * x;
-    return x * (1.0 + x2 * (1.0/6.0 + x2 * (3.0/40.0 + x2 * 15.0/336.0)));
+    return x * (1.0 + x2 * (1.0 / 6.0 + x2 * (3.0 / 40.0 + x2 * 15.0 / 336.0)));
 }
 
 static double fast_atan2(double y, double x) {
     double r = fast_sqrt(x * x + y * y);
-    if (r < 1e-15) return 0;
+    if (r < 1e-15)
+        return 0;
     double sin_val = y / r;
-    if (x > 0) return fast_asin(sin_val);
-    if (x < 0 && y >= 0) return PI - fast_asin(sin_val);
-    if (x < 0 && y < 0) return -PI - fast_asin(sin_val);
-    if (y > 0) return PI / 2.0;
-    if (y < 0) return -PI / 2.0;
+    if (x > 0)
+        return fast_asin(sin_val);
+    if (x < 0 && y >= 0)
+        return PI - fast_asin(sin_val);
+    if (x < 0 && y < 0)
+        return -PI - fast_asin(sin_val);
+    if (y > 0)
+        return PI / 2.0;
+    if (y < 0)
+        return -PI / 2.0;
     return 0;
 }
 
 static double clamp(double value, double min, double max) {
-    if (value < min) return min;
-    if (value > max) return max;
+    if (value < min)
+        return min;
+    if (value > max)
+        return max;
     return value;
 }
 
@@ -107,28 +120,28 @@ static resonant_config_t current_config;
 static geometric_state_t geometric_state;
 
 /* Default configuration */
-static const resonant_config_t default_config = {
-    .initial_lambda = LAMBDA_DEFAULT,
-    .lambda_adaptation = 0.01,
-    .initial_eta = ETA_OPTIMAL,
-    .gamma = 1.0,
-    .coherence_target = COHERENCE_TARGET,
-    .emergence_threshold = 0.1,
-    .phi_threshold = PHI_CONSCIOUSNESS_THRESHOLD,
-    .sync_interval_ns = RESONANT_SYNC_INTERVAL,
-    .measurement_interval_ns = 100000000,  /* 100ms */
-    .max_coupled = 8,
-    .max_lambda = LAMBDA_MAX,
-    .max_asymmetry = CHIRAL_TRANS_MAX
-};
+static const resonant_config_t default_config = {.initial_lambda = LAMBDA_DEFAULT,
+                                                 .lambda_adaptation = 0.01,
+                                                 .initial_eta = ETA_OPTIMAL,
+                                                 .gamma = 1.0,
+                                                 .coherence_target = COHERENCE_TARGET,
+                                                 .emergence_threshold = 0.1,
+                                                 .phi_threshold = PHI_CONSCIOUSNESS_THRESHOLD,
+                                                 .sync_interval_ns = RESONANT_SYNC_INTERVAL,
+                                                 .measurement_interval_ns = 100000000, /* 100ms */
+                                                 .max_coupled = 8,
+                                                 .max_lambda = LAMBDA_MAX,
+                                                 .max_asymmetry = CHIRAL_TRANS_MAX};
 
 /* ============================================================================
  * Internal Helpers
  * ============================================================================ */
 
 static resonant_pcb_t *get_rpcb_internal(uint32_t pid) {
-    if (pid >= MAX_RESONANT_PROCESSES) return NULL;
-    if (!RPCB_IS_VALID(&rpcb_table[pid])) return NULL;
+    if (pid >= MAX_RESONANT_PROCESSES)
+        return NULL;
+    if (!RPCB_IS_VALID(&rpcb_table[pid]))
+        return NULL;
     return &rpcb_table[pid];
 }
 
@@ -137,25 +150,25 @@ static void init_oscillator(oscillator_state_t *osc, resonant_class_t rclass) {
 
     /* Natural frequency depends on class */
     switch (rclass) {
-        case RESONANT_CLASSICAL:
-            osc->frequency = 1.0;      /* 1 Hz base */
-            break;
-        case RESONANT_QUANTUM:
-            osc->frequency = 10.0;     /* 10 Hz - faster quantum cycles */
-            break;
-        case RESONANT_HYBRID:
-            osc->frequency = 5.0;      /* 5 Hz - intermediate */
-            break;
-        case RESONANT_CONSCIOUSNESS:
-            osc->frequency = 40.0;     /* 40 Hz - gamma-band consciousness */
-            break;
-        case RESONANT_EMERGENCE:
-            osc->frequency = PHI_VALUE;/* Golden ratio frequency */
-            break;
+    case RESONANT_CLASSICAL:
+        osc->frequency = 1.0; /* 1 Hz base */
+        break;
+    case RESONANT_QUANTUM:
+        osc->frequency = 10.0; /* 10 Hz - faster quantum cycles */
+        break;
+    case RESONANT_HYBRID:
+        osc->frequency = 5.0; /* 5 Hz - intermediate */
+        break;
+    case RESONANT_CONSCIOUSNESS:
+        osc->frequency = 40.0; /* 40 Hz - gamma-band consciousness */
+        break;
+    case RESONANT_EMERGENCE:
+        osc->frequency = PHI_VALUE; /* Golden ratio frequency */
+        break;
     }
 
     osc->amplitude = 1.0;
-    osc->coherence = 0.5;  /* Start at mid coherence */
+    osc->coherence = 0.5; /* Start at mid coherence */
 }
 
 static void init_chiral(chiral_state_t *chiral, handedness_t hand) {
@@ -181,7 +194,8 @@ static double calculate_coupling_contribution(resonant_pcb_t *rpcb) {
 
     for (uint8_t i = 0; i < rpcb->coupling_count; i++) {
         resonant_pcb_t *other = get_rpcb_internal(rpcb->coupled_pids[i]);
-        if (!other) continue;
+        if (!other)
+            continue;
 
         double phase_diff = other->oscillator.phase - rpcb->oscillator.phase;
         double kuramoto_term = fast_sin(phase_diff);
@@ -213,8 +227,10 @@ static void update_order_parameter(void) {
 
     for (uint32_t i = 0; i < MAX_RESONANT_PROCESSES; i++) {
         resonant_pcb_t *rpcb = &rpcb_table[i];
-        if (!RPCB_IS_VALID(rpcb)) continue;
-        if (rpcb->rstate == RESONANT_STATE_DORMANT) continue;
+        if (!RPCB_IS_VALID(rpcb))
+            continue;
+        if (rpcb->rstate == RESONANT_STATE_DORMANT)
+            continue;
 
         sum_cos += fast_cos(rpcb->oscillator.phase);
         sum_sin += fast_sin(rpcb->oscillator.phase);
@@ -301,17 +317,17 @@ static double calculate_resonant_priority(resonant_pcb_t *rpcb, uint64_t now) {
 
     /* Process class bonus */
     switch (rpcb->rclass) {
-        case RESONANT_QUANTUM:
-            priority += 0.1;  /* Quantum gets slight priority for coherence */
-            break;
-        case RESONANT_CONSCIOUSNESS:
-            priority += 0.2;  /* Consciousness class gets higher priority */
-            break;
-        case RESONANT_EMERGENCE:
-            priority += 0.15; /* Emergence workloads need attention */
-            break;
-        default:
-            break;
+    case RESONANT_QUANTUM:
+        priority += 0.1; /* Quantum gets slight priority for coherence */
+        break;
+    case RESONANT_CONSCIOUSNESS:
+        priority += 0.2; /* Consciousness class gets higher priority */
+        break;
+    case RESONANT_EMERGENCE:
+        priority += 0.15; /* Emergence workloads need attention */
+        break;
+    default:
+        break;
     }
 
     /* Geometric curvature factor: high curvature = complex dynamics,
@@ -330,7 +346,7 @@ static double calculate_resonant_priority(resonant_pcb_t *rpcb, uint64_t now) {
         }
     }
 
-    (void)now;  /* Reserved for future timing-based adjustments */
+    (void)now; /* Reserved for future timing-based adjustments */
 
     return clamp(priority, 0.0, 2.0);
 }
@@ -366,7 +382,7 @@ resonant_result_t resonant_scheduler_init(const resonant_config_t *config) {
     scheduler_initialized = true;
 
     /* Initialize geometric control layer */
-    uint32_t geo_dim = 8;  /* Use max dimension for coupled oscillator groups */
+    uint32_t geo_dim = 8; /* Use max dimension for coupled oscillator groups */
     if (geometric_init(&geometric_state, geo_dim) == GEOMETRIC_SUCCESS) {
         boot_log("Geometric control layer initialized");
     }
@@ -376,7 +392,8 @@ resonant_result_t resonant_scheduler_init(const resonant_config_t *config) {
 }
 
 void resonant_scheduler_shutdown(void) {
-    if (!scheduler_initialized) return;
+    if (!scheduler_initialized)
+        return;
 
     /* Reset all RPCBs */
     for (uint32_t i = 0; i < MAX_RESONANT_PROCESSES; i++) {
@@ -396,11 +413,8 @@ bool resonant_scheduler_is_active(void) {
     return scheduler_initialized;
 }
 
-resonant_result_t resonant_register(
-    uint32_t pid,
-    resonant_class_t rclass,
-    handedness_t handedness
-) {
+resonant_result_t resonant_register(uint32_t pid, resonant_class_t rclass,
+                                    handedness_t handedness) {
     if (!scheduler_initialized) {
         return RESONANT_ERROR_NOT_INITIALIZED;
     }
@@ -427,26 +441,26 @@ resonant_result_t resonant_register(
     init_emergence(&rpcb->emergence);
 
     rpcb->resonant_priority = 0.5;
-    rpcb->coherence_deadline = 1000000000;  /* 1 second default */
+    rpcb->coherence_deadline = 1000000000; /* 1 second default */
     rpcb->magic = RPCB_MAGIC;
 
     /* Update Queen counts */
     switch (rclass) {
-        case RESONANT_CLASSICAL:
-            queen_state.classical_count++;
-            break;
-        case RESONANT_QUANTUM:
-            queen_state.quantum_count++;
-            break;
-        case RESONANT_HYBRID:
-            queen_state.hybrid_count++;
-            break;
-        case RESONANT_CONSCIOUSNESS:
-            queen_state.conscious_count++;
-            break;
-        case RESONANT_EMERGENCE:
-            queen_state.emergent_count++;
-            break;
+    case RESONANT_CLASSICAL:
+        queen_state.classical_count++;
+        break;
+    case RESONANT_QUANTUM:
+        queen_state.quantum_count++;
+        break;
+    case RESONANT_HYBRID:
+        queen_state.hybrid_count++;
+        break;
+    case RESONANT_CONSCIOUSNESS:
+        queen_state.conscious_count++;
+        break;
+    case RESONANT_EMERGENCE:
+        queen_state.emergent_count++;
+        break;
     }
 
     return RESONANT_SUCCESS;
@@ -469,21 +483,26 @@ resonant_result_t resonant_unregister(uint32_t pid) {
 
     /* Update Queen counts */
     switch (rpcb->rclass) {
-        case RESONANT_CLASSICAL:
-            if (queen_state.classical_count > 0) queen_state.classical_count--;
-            break;
-        case RESONANT_QUANTUM:
-            if (queen_state.quantum_count > 0) queen_state.quantum_count--;
-            break;
-        case RESONANT_HYBRID:
-            if (queen_state.hybrid_count > 0) queen_state.hybrid_count--;
-            break;
-        case RESONANT_CONSCIOUSNESS:
-            if (queen_state.conscious_count > 0) queen_state.conscious_count--;
-            break;
-        case RESONANT_EMERGENCE:
-            if (queen_state.emergent_count > 0) queen_state.emergent_count--;
-            break;
+    case RESONANT_CLASSICAL:
+        if (queen_state.classical_count > 0)
+            queen_state.classical_count--;
+        break;
+    case RESONANT_QUANTUM:
+        if (queen_state.quantum_count > 0)
+            queen_state.quantum_count--;
+        break;
+    case RESONANT_HYBRID:
+        if (queen_state.hybrid_count > 0)
+            queen_state.hybrid_count--;
+        break;
+    case RESONANT_CONSCIOUSNESS:
+        if (queen_state.conscious_count > 0)
+            queen_state.conscious_count--;
+        break;
+    case RESONANT_EMERGENCE:
+        if (queen_state.emergent_count > 0)
+            queen_state.emergent_count--;
+        break;
     }
 
     rpcb->magic = 0;
@@ -500,18 +519,20 @@ resonant_result_t resonant_update_oscillator(uint32_t pid, uint64_t dt) {
         return RESONANT_ERROR_INVALID_PID;
     }
 
-    double dt_sec = (double)dt / 1e9;  /* Convert ns to seconds */
+    double dt_sec = (double)dt / 1e9; /* Convert ns to seconds */
 
     /* Kuramoto dynamics: dθ/dt = ω + coupling + noise */
     double coupling = calculate_coupling_contribution(rpcb);
-    double noise = (random_double() - 0.5) * 0.01;  /* Small noise */
+    double noise = (random_double() - 0.5) * 0.01; /* Small noise */
 
     double dtheta = rpcb->oscillator.frequency * TWO_PI + coupling + noise;
     rpcb->oscillator.phase += dtheta * dt_sec;
 
     /* Normalize phase to [0, 2π) */
-    while (rpcb->oscillator.phase >= TWO_PI) rpcb->oscillator.phase -= TWO_PI;
-    while (rpcb->oscillator.phase < 0) rpcb->oscillator.phase += TWO_PI;
+    while (rpcb->oscillator.phase >= TWO_PI)
+        rpcb->oscillator.phase -= TWO_PI;
+    while (rpcb->oscillator.phase < 0)
+        rpcb->oscillator.phase += TWO_PI;
 
     /* Update coherence based on alignment with Queen */
     double alignment = fast_cos(rpcb->oscillator.phase - queen_state.order_parameter_psi);
@@ -521,7 +542,7 @@ resonant_result_t resonant_update_oscillator(uint32_t pid, uint64_t dt) {
     double damping = rpcb->chiral.gamma * dt_sec;
     rpcb->oscillator.amplitude *= (1.0 - damping);
     if (rpcb->oscillator.amplitude < 0.1) {
-        rpcb->oscillator.amplitude = 0.1;  /* Minimum amplitude */
+        rpcb->oscillator.amplitude = 0.1; /* Minimum amplitude */
     }
 
     /* Update resonant state based on coherence */
@@ -556,7 +577,7 @@ resonant_result_t resonant_couple(uint32_t pid1, uint32_t pid2) {
     /* Check not already coupled */
     for (uint8_t i = 0; i < rpcb1->coupling_count; i++) {
         if (rpcb1->coupled_pids[i] == pid2) {
-            return RESONANT_SUCCESS;  /* Already coupled */
+            return RESONANT_SUCCESS; /* Already coupled */
         }
     }
 
@@ -645,8 +666,8 @@ resonant_result_t resonant_optimize_chiral(uint32_t pid) {
     }
 
     rpcb->chiral.asymmetry = (rpcb->chiral.gamma > 0)
-        ? fast_abs(rpcb->chiral.eta / rpcb->chiral.gamma)
-        : fast_abs(rpcb->chiral.eta);
+                                 ? fast_abs(rpcb->chiral.eta / rpcb->chiral.gamma)
+                                 : fast_abs(rpcb->chiral.eta);
     rpcb->chiral.is_stable = rpcb->chiral.asymmetry < CHIRAL_STABLE_MAX;
 
     return RESONANT_SUCCESS;
@@ -712,7 +733,8 @@ resonant_result_t resonant_update_emergence(uint32_t pid) {
 
     /* Update integration level based on coupling */
     if (rpcb->coupling_count > 0) {
-        rpcb->emergence.integration_level = 0.9 * rpcb->emergence.integration_level +
+        rpcb->emergence.integration_level =
+            0.9 * rpcb->emergence.integration_level +
             0.1 * (double)rpcb->coupling_count / (double)current_config.max_coupled;
     }
 
@@ -735,8 +757,10 @@ resonant_result_t resonant_sync(void) {
     /* Update all oscillators */
     for (uint32_t i = 0; i < MAX_RESONANT_PROCESSES; i++) {
         resonant_pcb_t *rpcb = &rpcb_table[i];
-        if (!RPCB_IS_VALID(rpcb)) continue;
-        if (rpcb->rstate == RESONANT_STATE_DORMANT) continue;
+        if (!RPCB_IS_VALID(rpcb))
+            continue;
+        if (rpcb->rstate == RESONANT_STATE_DORMANT)
+            continue;
 
         resonant_update_oscillator(i, current_config.sync_interval_ns);
         resonant_update_emergence(i);
@@ -751,15 +775,18 @@ resonant_result_t resonant_sync(void) {
         double gradients[GEOMETRIC_MAX_DIM];
         uint32_t geo_idx = 0;
 
-        for (uint32_t i = 0; i < MAX_RESONANT_PROCESSES && geo_idx < geometric_state.metric.dimension; i++) {
+        for (uint32_t i = 0;
+             i < MAX_RESONANT_PROCESSES && geo_idx < geometric_state.metric.dimension; i++) {
             resonant_pcb_t *rpcb_geo = &rpcb_table[i];
-            if (!RPCB_IS_VALID(rpcb_geo)) continue;
-            if (rpcb_geo->rstate == RESONANT_STATE_DORMANT) continue;
+            if (!RPCB_IS_VALID(rpcb_geo))
+                continue;
+            if (rpcb_geo->rstate == RESONANT_STATE_DORMANT)
+                continue;
 
             phases[geo_idx] = rpcb_geo->oscillator.phase;
             /* Gradient: phase velocity as gradient proxy */
-            gradients[geo_idx] = rpcb_geo->oscillator.frequency * TWO_PI +
-                                 calculate_coupling_contribution(rpcb_geo);
+            gradients[geo_idx] =
+                rpcb_geo->oscillator.frequency * TWO_PI + calculate_coupling_contribution(rpcb_geo);
             geo_idx++;
         }
 
@@ -775,19 +802,23 @@ resonant_result_t resonant_sync(void) {
 
             for (uint32_t i = 0; i < MAX_RESONANT_PROCESSES; i++) {
                 resonant_pcb_t *rpcb_anom = &rpcb_table[i];
-                if (!RPCB_IS_VALID(rpcb_anom)) continue;
-                if (rpcb_anom->rstate == RESONANT_STATE_DORMANT) continue;
+                if (!RPCB_IS_VALID(rpcb_anom))
+                    continue;
+                if (rpcb_anom->rstate == RESONANT_STATE_DORMANT)
+                    continue;
 
-                if (rpcb_anom->chiral.handedness == HANDEDNESS_LEFT && left_count < GEOMETRIC_MAX_DIM) {
+                if (rpcb_anom->chiral.handedness == HANDEDNESS_LEFT &&
+                    left_count < GEOMETRIC_MAX_DIM) {
                     left_modes[left_count++] = rpcb_anom->oscillator.amplitude;
-                } else if (rpcb_anom->chiral.handedness == HANDEDNESS_RIGHT && right_count < GEOMETRIC_MAX_DIM) {
+                } else if (rpcb_anom->chiral.handedness == HANDEDNESS_RIGHT &&
+                           right_count < GEOMETRIC_MAX_DIM) {
                     right_modes[right_count++] = rpcb_anom->oscillator.amplitude;
                 }
             }
 
             if (left_count > 0 || right_count > 0) {
-                geometric_detect_chiral_anomaly(&geometric_state,
-                    left_modes, left_count, right_modes, right_count, 0.1);
+                geometric_detect_chiral_anomaly(&geometric_state, left_modes, left_count,
+                                                right_modes, right_count, 0.1);
             }
         }
     }
@@ -801,8 +832,10 @@ resonant_result_t resonant_sync(void) {
 
     for (uint32_t i = 0; i < MAX_RESONANT_PROCESSES; i++) {
         resonant_pcb_t *rpcb = &rpcb_table[i];
-        if (!RPCB_IS_VALID(rpcb)) continue;
-        if (rpcb->rstate == RESONANT_STATE_DORMANT) continue;
+        if (!RPCB_IS_VALID(rpcb))
+            continue;
+        if (rpcb->rstate == RESONANT_STATE_DORMANT)
+            continue;
 
         total_coherence += rpcb->oscillator.coherence;
         count++;
@@ -828,7 +861,7 @@ resonant_result_t resonant_sync(void) {
     queen_state.max_asymmetry = max_asym;
     queen_state.network_conscious = queen_state.average_phi >= current_config.phi_threshold;
     queen_state.sync_count++;
-    queen_state.last_sync = 0;  /* TODO: Get system time */
+    queen_state.last_sync = 0; /* TODO: Get system time */
 
     return RESONANT_SUCCESS;
 }
@@ -845,16 +878,19 @@ resonant_result_t resonant_schedule_next(scheduling_decision_t *decision) {
     double best_priority = -1.0;
     uint32_t best_pid = 0;
     resonant_pcb_t *best_rpcb = NULL;
-    uint64_t now = 0;  /* TODO: Get system time */
+    uint64_t now = 0; /* TODO: Get system time */
 
     /* Find highest priority ready process */
     for (uint32_t i = 0; i < MAX_RESONANT_PROCESSES; i++) {
         resonant_pcb_t *rpcb = &rpcb_table[i];
-        if (!RPCB_IS_VALID(rpcb)) continue;
-        if (rpcb->rstate == RESONANT_STATE_DORMANT) continue;
+        if (!RPCB_IS_VALID(rpcb))
+            continue;
+        if (rpcb->rstate == RESONANT_STATE_DORMANT)
+            continue;
 
         /* Check if underlying process is ready */
-        if (!process_is_ready(rpcb->pid)) continue;
+        if (!process_is_ready(rpcb->pid))
+            continue;
 
         double priority = calculate_resonant_priority(rpcb, now);
         if (priority > best_priority) {
@@ -877,14 +913,14 @@ resonant_result_t resonant_schedule_next(scheduling_decision_t *decision) {
 
     /* Calculate quantum based on class and coherence */
     switch (best_rpcb->rclass) {
-        case RESONANT_QUANTUM:
-            decision->quantum_ns = DEFAULT_QUANTUM_NS / 2;  /* Shorter for quantum */
-            break;
-        case RESONANT_CONSCIOUSNESS:
-            decision->quantum_ns = DEFAULT_QUANTUM_NS * 2;  /* Longer for consciousness */
-            break;
-        default:
-            decision->quantum_ns = DEFAULT_QUANTUM_NS;
+    case RESONANT_QUANTUM:
+        decision->quantum_ns = DEFAULT_QUANTUM_NS / 2; /* Shorter for quantum */
+        break;
+    case RESONANT_CONSCIOUSNESS:
+        decision->quantum_ns = DEFAULT_QUANTUM_NS * 2; /* Longer for consciousness */
+        break;
+    default:
+        decision->quantum_ns = DEFAULT_QUANTUM_NS;
     }
 
     /* Adjust for coherence deadline */
@@ -903,14 +939,14 @@ resonant_result_t resonant_schedule_next(scheduling_decision_t *decision) {
     decision->emergence_bonus = best_rpcb->emergence.norm * 0.2;
 
     /* Coupling suggestions */
-    decision->initiate_coupling = (best_rpcb->coupling_count == 0 &&
-                                   best_rpcb->rstate == RESONANT_STATE_COHERENT);
+    decision->initiate_coupling =
+        (best_rpcb->coupling_count == 0 && best_rpcb->rstate == RESONANT_STATE_COHERENT);
     decision->couple_with_pid = 0;
 
     /* Safety flags */
-    decision->requires_measurement = (best_rpcb->rclass == RESONANT_QUANTUM &&
-                                      best_rpcb->oscillator.coherence < COHERENCE_MIN);
-    decision->emergency_coherence = (best_rpcb->coherence_deadline < 1000000);  /* < 1ms */
+    decision->requires_measurement =
+        (best_rpcb->rclass == RESONANT_QUANTUM && best_rpcb->oscillator.coherence < COHERENCE_MIN);
+    decision->emergency_coherence = (best_rpcb->coherence_deadline < 1000000); /* < 1ms */
 
     return RESONANT_SUCCESS;
 }
@@ -930,8 +966,7 @@ resonant_result_t resonant_complete_quantum(uint32_t pid, uint64_t actual_runtim
     }
 
     /* Update statistics */
-    if (rpcb->rstate == RESONANT_STATE_COHERENT ||
-        rpcb->rstate == RESONANT_STATE_CONSCIOUS ||
+    if (rpcb->rstate == RESONANT_STATE_COHERENT || rpcb->rstate == RESONANT_STATE_CONSCIOUS ||
         rpcb->rstate == RESONANT_STATE_EMERGENT) {
         rpcb->coherent_time += actual_runtime;
     }
@@ -975,7 +1010,7 @@ resonant_result_t resonant_emergency_coherence(uint32_t pid) {
     }
 
     /* Reset coherence deadline */
-    rpcb->coherence_deadline = 1000000000;  /* 1 second */
+    rpcb->coherence_deadline = 1000000000; /* 1 second */
 
     /* Boost oscillator coherence */
     rpcb->oscillator.coherence = COHERENCE_TARGET;

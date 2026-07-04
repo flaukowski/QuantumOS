@@ -42,7 +42,7 @@ static uint64_t prng_state = 0x9E3779B97F4A7C15ULL;
 static uint64_t boot_entropy = 0;
 static uint8_t boot_entropy_present = 0;
 static uint8_t quantum_initialized = 0;
-static uint64_t qrand_bits_served = 0;   /* total bits drawn via QRAND/lottery */
+static uint64_t qrand_bits_served = 0; /* total bits drawn via QRAND/lottery */
 
 /* ============================================================================
  * Helpers
@@ -57,10 +57,8 @@ static uint64_t xorshift64(void) {
     return x;
 }
 
-static cap_result_t check_pool_cap(uint32_t pid, uint32_t cap_id,
-                                   uint32_t required_perms) {
-    return cap_check(cap_id, pid, CAP_RESOURCE_QUANTUM,
-                     QUANTUM_POOL_RESOURCE_ID, required_perms);
+static cap_result_t check_pool_cap(uint32_t pid, uint32_t cap_id, uint32_t required_perms) {
+    return cap_check(cap_id, pid, CAP_RESOURCE_QUANTUM, QUANTUM_POOL_RESOURCE_ID, required_perms);
 }
 
 static int qubit_decohered(const sim_qubit_t *q) {
@@ -112,13 +110,12 @@ quantum_result_t quantum_init(void) {
     return QUANTUM_SUCCESS;
 }
 
-quantum_result_t quantum_grant(uint32_t pid, uint32_t permissions,
-                               uint32_t *cap_id_out) {
+quantum_result_t quantum_grant(uint32_t pid, uint32_t permissions, uint32_t *cap_id_out) {
     if (!quantum_initialized || !cap_id_out) {
         return QUANTUM_ERROR_HARDWARE_FAULT;
     }
-    if (cap_create(pid, CAP_RESOURCE_QUANTUM, QUANTUM_POOL_RESOURCE_ID,
-                   permissions, 0, cap_id_out) != CAP_SUCCESS) {
+    if (cap_create(pid, CAP_RESOURCE_QUANTUM, QUANTUM_POOL_RESOURCE_ID, permissions, 0,
+                   cap_id_out) != CAP_SUCCESS) {
         return QUANTUM_ERROR_HARDWARE_FAULT;
     }
     return QUANTUM_SUCCESS;
@@ -128,8 +125,8 @@ quantum_result_t quantum_grant(uint32_t pid, uint32_t permissions,
  * Qubit allocation
  * ============================================================================ */
 
-quantum_result_t quantum_alloc_qubits(uint32_t pid, uint32_t cap_id,
-                                      uint32_t count, uint32_t *qubit_ids_out) {
+quantum_result_t quantum_alloc_qubits(uint32_t pid, uint32_t cap_id, uint32_t count,
+                                      uint32_t *qubit_ids_out) {
     if (!quantum_initialized || !qubit_ids_out || count == 0) {
         return QUANTUM_ERROR_NO_QUBITS;
     }
@@ -159,8 +156,8 @@ quantum_result_t quantum_alloc_qubits(uint32_t pid, uint32_t cap_id,
     return QUANTUM_SUCCESS;
 }
 
-quantum_result_t quantum_release_qubits(uint32_t pid, uint32_t cap_id,
-                                        const uint32_t *qubit_ids, uint32_t count) {
+quantum_result_t quantum_release_qubits(uint32_t pid, uint32_t cap_id, const uint32_t *qubit_ids,
+                                        uint32_t count) {
     if (!quantum_initialized || !qubit_ids) {
         return QUANTUM_ERROR_NO_QUBITS;
     }
@@ -199,12 +196,10 @@ uint64_t quantum_coherence_remaining(uint32_t qubit_id) {
  * Contexts
  * ============================================================================ */
 
-quantum_result_t quantum_context_create(uint32_t pid, uint32_t cap_id,
-                                        uint32_t qubits_required,
-                                        uint32_t priority,
-                                        uint32_t *context_id_out) {
-    if (!quantum_initialized || !context_id_out ||
-        qubits_required == 0 || qubits_required > QUANTUM_MAX_CTX_QUBITS) {
+quantum_result_t quantum_context_create(uint32_t pid, uint32_t cap_id, uint32_t qubits_required,
+                                        uint32_t priority, uint32_t *context_id_out) {
+    if (!quantum_initialized || !context_id_out || qubits_required == 0 ||
+        qubits_required > QUANTUM_MAX_CTX_QUBITS) {
         return QUANTUM_ERROR_NO_QUBITS;
     }
     if (check_pool_cap(pid, cap_id, CAP_QUANTUM | CAP_WRITE) != CAP_SUCCESS) {
@@ -222,8 +217,7 @@ quantum_result_t quantum_context_create(uint32_t pid, uint32_t cap_id,
         return QUANTUM_ERROR_NO_QUBITS;
     }
 
-    quantum_result_t r = quantum_alloc_qubits(pid, cap_id, qubits_required,
-                                              slot->qubit_ids);
+    quantum_result_t r = quantum_alloc_qubits(pid, cap_id, qubits_required, slot->qubit_ids);
     if (r != QUANTUM_SUCCESS) {
         return r;
     }
@@ -249,8 +243,7 @@ quantum_result_t quantum_context_create(uint32_t pid, uint32_t cap_id,
 
 static sim_context_t *find_context(uint32_t context_id, uint32_t pid) {
     for (uint32_t i = 0; i < QUANTUM_MAX_CONTEXTS; i++) {
-        if (contexts[i].in_use &&
-            contexts[i].ctx.context_id == context_id &&
+        if (contexts[i].in_use && contexts[i].ctx.context_id == context_id &&
             contexts[i].owner_pid == pid) {
             return &contexts[i];
         }
@@ -258,8 +251,7 @@ static sim_context_t *find_context(uint32_t context_id, uint32_t pid) {
     return NULL;
 }
 
-quantum_result_t quantum_context_destroy(uint32_t pid, uint32_t cap_id,
-                                         uint32_t context_id) {
+quantum_result_t quantum_context_destroy(uint32_t pid, uint32_t cap_id, uint32_t context_id) {
     if (check_pool_cap(pid, cap_id, CAP_QUANTUM) != CAP_SUCCESS) {
         return QUANTUM_ERROR_HARDWARE_FAULT;
     }
@@ -269,8 +261,7 @@ quantum_result_t quantum_context_destroy(uint32_t pid, uint32_t cap_id,
         return QUANTUM_ERROR_NO_QUBITS;
     }
 
-    quantum_release_qubits(pid, cap_id, slot->qubit_ids,
-                           slot->ctx.qubits_required);
+    quantum_release_qubits(pid, cap_id, slot->qubit_ids, slot->ctx.qubits_required);
     memset(slot, 0, sizeof(*slot));
     return QUANTUM_SUCCESS;
 }
@@ -279,12 +270,9 @@ quantum_result_t quantum_context_destroy(uint32_t pid, uint32_t cap_id,
  * Circuit execution (simulated)
  * ============================================================================ */
 
-quantum_result_t quantum_execute_circuit(uint32_t pid, uint32_t cap_id,
-                                         uint32_t context_id,
-                                         const quantum_gate_t *gates,
-                                         uint32_t num_gates,
-                                         measurement_event_t *results,
-                                         uint32_t max_results,
+quantum_result_t quantum_execute_circuit(uint32_t pid, uint32_t cap_id, uint32_t context_id,
+                                         const quantum_gate_t *gates, uint32_t num_gates,
+                                         measurement_event_t *results, uint32_t max_results,
                                          uint32_t *num_results_out) {
     if (!quantum_initialized || !gates || !num_results_out) {
         return QUANTUM_ERROR_MEASUREMENT_FAILED;
@@ -335,8 +323,7 @@ quantum_result_t quantum_execute_circuit(uint32_t pid, uint32_t cap_id,
             break;
         case GATE_CNOT: {
             uint32_t ctrl = gate->control_qubit;
-            if (ctrl < slot->ctx.qubits_required &&
-                (slot->qubit_state[ctrl] & 1)) {
+            if (ctrl < slot->ctx.qubits_required && (slot->qubit_state[ctrl] & 1)) {
                 slot->qubit_state[target] ^= 1;
             }
             break;
@@ -435,47 +422,54 @@ uint64_t quantum_boot_seed(void) {
  * Boot self-test
  * ============================================================================ */
 
-#define QT_ASSERT(cond, msg)                          \
-    do {                                              \
-        if (!(cond)) {                                \
-            boot_log("quantum-selftest FAIL: " msg);  \
-            return QUANTUM_ERROR_HARDWARE_FAULT;      \
-        }                                             \
+#define QT_ASSERT(cond, msg)                                                                       \
+    do {                                                                                           \
+        if (!(cond)) {                                                                             \
+            boot_log("quantum-selftest FAIL: " msg);                                               \
+            return QUANTUM_ERROR_HARDWARE_FAULT;                                                   \
+        }                                                                                          \
     } while (0)
 
 quantum_result_t quantum_selftest(void) {
     uint32_t cap = 0, bad_cap = 0, ctx = 0;
     uint32_t ids[4];
 
-    QT_ASSERT(quantum_grant(1, CAP_QUANTUM | CAP_READ | CAP_WRITE | CAP_EXECUTE,
-                            &cap) == QUANTUM_SUCCESS, "grant");
+    QT_ASSERT(quantum_grant(1, CAP_QUANTUM | CAP_READ | CAP_WRITE | CAP_EXECUTE, &cap) ==
+                  QUANTUM_SUCCESS,
+              "grant");
 
     /* No ambient authority: allocation without a capability is denied */
     QT_ASSERT(quantum_alloc_qubits(1, CAP_ID_INVALID, 2, ids) != QUANTUM_SUCCESS,
               "alloc without cap denied");
     /* A read-only capability cannot allocate */
-    QT_ASSERT(quantum_grant(2, CAP_QUANTUM, &bad_cap) == QUANTUM_SUCCESS,
-              "grant read-only");
+    QT_ASSERT(quantum_grant(2, CAP_QUANTUM, &bad_cap) == QUANTUM_SUCCESS, "grant read-only");
     QT_ASSERT(quantum_alloc_qubits(2, bad_cap, 2, ids) != QUANTUM_SUCCESS,
               "alloc without WRITE denied");
 
     /* Context + Bell-style circuit: H(0), CNOT(0->1), measure both */
-    QT_ASSERT(quantum_context_create(1, cap, 2, 1, &ctx) == QUANTUM_SUCCESS,
-              "context create");
+    QT_ASSERT(quantum_context_create(1, cap, 2, 1, &ctx) == QUANTUM_SUCCESS, "context create");
 
     uint32_t t0 = 0, t1 = 1;
     quantum_gate_t circuit[4];
     memset(circuit, 0, sizeof(circuit));
-    circuit[0].gate_type = GATE_H;    circuit[0].target_qubits = &t0; circuit[0].num_targets = 1;
-    circuit[1].gate_type = GATE_CNOT; circuit[1].target_qubits = &t1; circuit[1].num_targets = 1;
+    circuit[0].gate_type = GATE_H;
+    circuit[0].target_qubits = &t0;
+    circuit[0].num_targets = 1;
+    circuit[1].gate_type = GATE_CNOT;
+    circuit[1].target_qubits = &t1;
+    circuit[1].num_targets = 1;
     circuit[1].control_qubit = 0;
-    circuit[2].gate_type = GATE_MEASURE; circuit[2].target_qubits = &t0; circuit[2].num_targets = 1;
-    circuit[3].gate_type = GATE_MEASURE; circuit[3].target_qubits = &t1; circuit[3].num_targets = 1;
+    circuit[2].gate_type = GATE_MEASURE;
+    circuit[2].target_qubits = &t0;
+    circuit[2].num_targets = 1;
+    circuit[3].gate_type = GATE_MEASURE;
+    circuit[3].target_qubits = &t1;
+    circuit[3].num_targets = 1;
 
     measurement_event_t events[4];
     uint32_t n_events = 0;
-    QT_ASSERT(quantum_execute_circuit(1, cap, ctx, circuit, 4,
-                                      events, 4, &n_events) == QUANTUM_SUCCESS,
+    QT_ASSERT(quantum_execute_circuit(1, cap, ctx, circuit, 4, events, 4, &n_events) ==
+                  QUANTUM_SUCCESS,
               "circuit execute");
     QT_ASSERT(n_events == 2, "two measurements");
     QT_ASSERT(events[0].result <= 1 && events[1].result <= 1, "bits are bits");
@@ -492,8 +486,7 @@ quantum_result_t quantum_selftest(void) {
     /* Foreign pid cannot destroy the context */
     QT_ASSERT(quantum_context_destroy(2, bad_cap, ctx) != QUANTUM_SUCCESS,
               "foreign destroy denied");
-    QT_ASSERT(quantum_context_destroy(1, cap, ctx) == QUANTUM_SUCCESS,
-              "context destroy");
+    QT_ASSERT(quantum_context_destroy(1, cap, ctx) == QUANTUM_SUCCESS, "context destroy");
 
     /* Pool back to fully available */
     qubit_pool_t stats;
