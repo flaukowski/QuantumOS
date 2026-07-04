@@ -97,8 +97,34 @@ static uint64_t sys_write(uint32_t pid, uint64_t user_ptr) {
     return i;
 }
 
+/* Exit ledger (epic #62 phase 3): the idle-loop reaper memsets a
+ * terminated PCB long before a shell polls for it, so exit codes are
+ * also recorded in this small ring. SYS_WAITPID consults the ledger
+ * first (newest wins, so a recycled pid still resolves to the exit the
+ * waiter is after) and the live table second. Single CPU, syscalls run
+ * cli'd — no locking needed. */
+#define EXIT_LEDGER_SIZE 16
+static struct {
+    uint32_t pid;
+    int32_t code;
+    bool valid;
+} exit_ledger[EXIT_LEDGER_SIZE];
+static uint32_t exit_ledger_next;
+
+static void exit_ledger_record(uint32_t pid, int32_t code) {
+    exit_ledger[exit_ledger_next].pid = pid;
+    exit_ledger[exit_ledger_next].code = code;
+    exit_ledger[exit_ledger_next].valid = true;
+    exit_ledger_next = (exit_ledger_next + 1) % EXIT_LEDGER_SIZE;
+}
+
 static void sys_exit(uint32_t pid, uint64_t code, cpu_state_t *state) {
-    (void)code;
+    process_t *cur = process_get_by_pid(pid);
+    if (cur) {
+        cur->exit_code = (int32_t)code;
+        cur->has_exited = true;
+    }
+    exit_ledger_record(pid, (int32_t)code);
     boot_log("syscall: user process exited");
     process_set_state(pid, PROCESS_STATE_TERMINATED);
     scheduler_kill_current(state);
@@ -532,6 +558,69 @@ static uint64_t sys_readdir(uint32_t pid, uint64_t path_ptr, uint64_t user_ptr, 
     return n;
 }
 
+/* ---- Program execution off the filesystem (epic #62 phase 3, #65) ----
+ *
+ * SYS_SPAWN loads a named initrd ELF into a fresh address space through
+ * the same proven loader the boot-time services use. Unlike the VFS
+ * reads, spawning is REAL authority — a process that can start programs
+ * can multiply — so it is capability-gated: CAP_RESOURCE_PROCESS with
+ * CAP_EXECUTE over SPAWN_RESOURCE_ID, declaratively granted to qsh
+ * alone. The capless ghost-test proves the denial by attack every boot. */
+
+static uint64_t sys_spawn(uint32_t pid, uint64_t path_ptr) {
+    if (cap_find_resource(pid, CAP_RESOURCE_PROCESS, CAP_EXECUTE, SPAWN_RESOURCE_ID) !=
+        CAP_SUCCESS) {
+        return SYSCALL_EPERM;
+    }
+
+    char path[VFS_PATH_MAX];
+    if (copy_user_path(path_ptr, path, sizeof(path)) != 0) {
+        return SYSCALL_EFAULT;
+    }
+
+    const uint8_t *data = NULL;
+    uint32_t size = 0;
+    if (initrd_lookup(path, &data, &size) != 0) {
+        return SYSCALL_ENOENT;
+    }
+
+    /* Process name = the path's basename. */
+    const char *name = path;
+    for (const char *p = path; *p; p++) {
+        if (*p == '/' && p[1]) {
+            name = p + 1;
+        }
+    }
+
+    uint32_t new_pid = 0;
+    if (user_process_spawn_elf(name, data, data + size, &new_pid) != STATUS_SUCCESS) {
+        return SYSCALL_EIO;
+    }
+    return new_pid;
+}
+
+static uint64_t sys_waitpid(uint32_t pid, uint64_t target) {
+    (void)pid;
+    if (target >= MAX_PROCESSES) {
+        return SYSCALL_EINVAL;
+    }
+
+    /* Ledger first, newest to oldest: a reaped (or recycled) pid still
+     * resolves to the exit the waiter is polling for. */
+    for (uint32_t i = 0; i < EXIT_LEDGER_SIZE; i++) {
+        uint32_t idx = (exit_ledger_next + EXIT_LEDGER_SIZE - 1 - i) % EXIT_LEDGER_SIZE;
+        if (exit_ledger[idx].valid && exit_ledger[idx].pid == (uint32_t)target) {
+            return (uint64_t)(uint8_t)exit_ledger[idx].code;
+        }
+    }
+
+    process_t *p = process_get_by_pid((uint32_t)target);
+    if (p) {
+        return WAITPID_RUNNING;
+    }
+    return SYSCALL_ENOENT;
+}
+
 /* Report the boot qseed (SYS_QSEED). Gated on the same quantum-pool read
  * capability as SYS_QRAND — a capless caller cannot even learn the seed. The
  * value lets a ring-3 attestation service bind its boot record to the exact
@@ -660,6 +749,12 @@ static void syscall_dispatch(cpu_state_t *state) {
         break;
     case SYS_READDIR:
         state->rax = sys_readdir(pid, state->rdi, state->rsi, state->rdx);
+        break;
+    case SYS_SPAWN:
+        state->rax = sys_spawn(pid, state->rdi);
+        break;
+    case SYS_WAITPID:
+        state->rax = sys_waitpid(pid, state->rdi);
         break;
     default:
         state->rax = SYSCALL_ENOSYS;
@@ -1077,6 +1172,10 @@ void user_shell_init(uint32_t ghostd_pid) {
         .max_restarts = 3,
         .grant_quantum_pool = 1,
         .grant_console = 1,
+        /* The shell is the operator surface: it alone may start programs
+         * off the initrd (SYS_SPAWN). Re-minted on every start like the
+         * other declared grants. */
+        .grant_spawn = 1,
     };
 
     uint32_t sid = 0;

@@ -87,7 +87,8 @@ static const char *arg_of(const char *line, const char *cmd) {
  * ------------------------------------------------------------------ */
 
 static void cmd_help(void) {
-    out("qsh: commands: help echo ps free uptime pid ls cat qrand qseed ghost clear exit\r\n");
+    out("qsh: commands: help echo ps free uptime pid ls cat run qrand qseed ghost clear "
+        "exit\r\n");
 }
 
 /* Print an initrd file raw (used for the motd greeting and `cat`).
@@ -248,6 +249,55 @@ static void cmd_ghost(void) {
     out_bytes(b, o);
 }
 
+/* Start an initrd program (SYS_SPAWN — the shell's spawn capability at
+ * work) and poll its fate with SYS_WAITPID, heartbeating so the watchdog
+ * never mistakes the wait for a hang. */
+static void cmd_run(const char *path) {
+    long pid = spawn_(path);
+    if (pid < 0) {
+        char b[LINE_MAX + 48];
+        int o = ghost_put(b, 0, "qsh: run: cannot start '");
+        for (int i = 0; path[i] && o < (int)sizeof(b) - 24; i++) {
+            b[o++] = path[i];
+        }
+        o = ghost_put(b, o, "' (err ");
+        o = ghost_put_u(b, o, (unsigned)(-pid));
+        o = ghost_put(b, o, ")\r\n");
+        out_bytes(b, o);
+        return;
+    }
+
+    char b[80];
+    int o = ghost_put(b, 0, "qsh: spawned pid ");
+    o = ghost_put_u(b, o, (unsigned)pid);
+    o = ghost_put(b, o, "\r\n");
+    out_bytes(b, o);
+
+    long r = WAITPID_RUNNING;
+    for (int tries = 0; tries < 5000 && r == WAITPID_RUNNING; tries++) {
+        heartbeat();
+        r = waitpid_(pid);
+        if (r == WAITPID_RUNNING) {
+            yield();
+        }
+    }
+
+    o = ghost_put(b, 0, "qsh: pid ");
+    o = ghost_put_u(b, o, (unsigned)pid);
+    if (r >= 0 && r < 256) {
+        o = ghost_put(b, o, " exited (code ");
+        o = ghost_put_u(b, o, (unsigned)r);
+        o = ghost_put(b, o, ")\r\n");
+    } else if (r == WAITPID_RUNNING) {
+        o = ghost_put(b, o, " still running (wait timed out)\r\n");
+    } else {
+        o = ghost_put(b, o, " vanished (err ");
+        o = ghost_put_u(b, o, (unsigned)(-r));
+        o = ghost_put(b, o, ")\r\n");
+    }
+    out_bytes(b, o);
+}
+
 static void cmd_unknown(const char *line) {
     char b[LINE_MAX + 48];
     int o = ghost_put(b, 0, "qsh: unknown command '");
@@ -290,6 +340,10 @@ static void execute(const char *line) {
         cmd_cat(a);
     } else if (is_cmd(line, "cat")) {
         out("qsh: cat: usage: cat <path>\r\n");
+    } else if ((a = arg_of(line, "run")) != 0) {
+        cmd_run(a);
+    } else if (is_cmd(line, "run")) {
+        out("qsh: run: usage: run <path>\r\n");
     } else if (is_cmd(line, "free")) {
         cmd_free();
     } else if (is_cmd(line, "uptime")) {

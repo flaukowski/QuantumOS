@@ -86,6 +86,19 @@ void _start(void) {
         }
     }
 
+    /* And for program execution (epic #62 phase 3): spawning is real
+     * authority — a process that can start programs can multiply. Only
+     * qsh holds the CAP_RESOURCE_PROCESS spawn capability, so this
+     * attempt must be denied EPERM before the initrd is even consulted. */
+    {
+        long sr = spawn_("/bin/hello");
+        if (sr == -4) {
+            write_str("SPAWN: capless caller denied (EPERM)");
+        } else {
+            write_str("SPAWN: WARNING — capless caller was NOT denied");
+        }
+    }
+
     const uint32_t seeds[3] = {GHOST_SEED_0, GHOST_SEED_1, GHOST_SEED_2};
     uint32_t pats[3][GHOST_PW];
 

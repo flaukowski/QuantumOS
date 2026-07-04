@@ -112,19 +112,37 @@ void console_com1_irq(void) {
     }
 }
 
+/* Upper bound on how long console_write waits for the transmit holding
+ * register to drain, per byte. The wait runs with interrupts disabled (so a
+ * whole line prints without a timer-tick log splicing into it), which means
+ * an unbounded spin on a wedged UART — e.g. a stopped host-side reader of
+ * QEMU -serial stdio leaving THRE clear forever — would freeze the entire
+ * kernel, not just the writer. Capping it trades a dropped byte on a truly
+ * stuck port for guaranteed liveness. ~2M iterations is far longer than a
+ * real 115200-baud byte time yet still a small bounded stall. */
+#define THR_DRAIN_SPINS 2000000u
+
 uint32_t console_write(const uint8_t *buf, uint32_t len) {
     if (!buf) {
         return 0;
     }
     uint64_t flags = irq_save();
+    uint32_t written = 0;
     for (uint32_t i = 0; i < len; i++) {
+        uint32_t spins = 0;
         while (!(io_inb(COM1_PORT_BASE + UART_LSR) & LSR_THR_EMPTY)) {
-            /* spin until the transmit holding register drains */
+            if (++spins >= THR_DRAIN_SPINS) {
+                /* UART wedged — give up rather than hang the kernel with
+                 * interrupts disabled. Report what actually made it out. */
+                irq_restore(flags);
+                return written;
+            }
         }
         io_outb(COM1_PORT_BASE + UART_THR, buf[i]);
+        written++;
     }
     irq_restore(flags);
-    return len;
+    return written;
 }
 
 /* ============================================================================
