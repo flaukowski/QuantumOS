@@ -922,13 +922,16 @@ static size_t uint_to_hex(uint32_t value, char *buf, size_t buf_size) {
  */
 static size_t str_copy(char *dst, size_t dst_size, const char *src) {
     size_t i = 0;
-    while (src[i] != '\0' && i < dst_size - 1) {
+    if (dst_size == 0) {
+        return 0;
+    }
+    /* bounds check before the index is used; also keeps dst_size - 1 from
+     * underflowing when dst_size == 0 */
+    while (i < dst_size - 1 && src[i] != '\0') {
         dst[i] = src[i];
         i++;
     }
-    if (dst_size > 0) {
-        dst[i] = '\0';
-    }
+    dst[i] = '\0';
     return i;
 }
 
