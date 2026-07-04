@@ -1,4 +1,4 @@
-#Step 1 -- Find GhostMagic.mp3 in repo and vibe
+> **Step 1** — find [`Ghost Magic.mp3`](Ghost%20Magic.mp3) in the repo and vibe. 🎵
 
 # 🚀 QuantumOS
 
@@ -11,6 +11,18 @@
 
 > *"The future of computing is quantum, and the future of operating systems must be quantum-aware."*
 
+## ✅ What runs today
+
+QuantumOS boots on x86-64 under QEMU (`make run`), and every claim below is gated in CI (`make ci-smoke`):
+
+- **Microkernel core** — preemptive scheduler, per-process page tables, ELF loader for compiled C programs, kernel heap with coalescing `kfree`, memory reclaimed on process exit, heartbeat watchdog that restarts dead services
+- **Capability-based security** — ring-3 services reachable only through capability-checked IPC; capless syscall attempts are denied with EPERM, and CI proves it by attack
+- **Real quantum entropy at boot** — a launcher can run a circuit on a real QPU (Rigetti, via qBraid) and hand the measured bits to the kernel (`qseed=<hex>`); `SYS_QRAND` exposes the qseed-mixed pool to capability-holding services only. No seed → services honestly report `prng`, never fake quantum provenance.
+- **Four ring-3 services** — `ghostd` (a 256-oscillator associative memory that recalls patterns from ~15%-corrupted probes), `paradoxd` (a fixed-point paradox resolver whose phase transitions are gated on `ghostd`'s field), `swarm_svc` (a COM2 serial bridge emitting a Lamport-signed, host-verifiable boot attestation), plus a framebuffer mode that renders the live memory field
+- **Honest experiments** — alternate schedulers (quantum-lottery, resonant) live behind build flags and are measured against round-robin at boot; negative results are reported plainly
+
+Everything in the Vision below that is not in this list is aspiration, not implementation — the roadmap tracks the difference.
+
 ## 🌟 Vision
 
 QuantumOS is not just another operating system—it's a bold reimagining of what an OS can be when quantum computing, neuromorphic processing, and AI-native workloads are treated as first-class citizens. Built on a microkernel architecture with capability-based security, QuantumOS bridges the gap between classical computing and the quantum frontier.
@@ -21,7 +33,7 @@ QuantumOS is not just another operating system—it's a bold reimagining of what
 - **First-class quantum resources**: Qubits, coherence windows, and quantum circuits are native OS objects
 - **Resonant scheduler**: Novel scheduling with Kuramoto oscillator dynamics and chiral stability ([ghostmagicOS integration](docs/GHOSTOS_INTEGRATION.md))
 - **Hybrid workloads**: Seamlessly blend classical and quantum computations
-- **Consciousness-verified processes**: IIT Phi verification for advanced computational workloads
+- **Field-coupled services**: services that coordinate through the live order parameter of a shared oscillator field — `ghostd` + `paradoxd` do this today
 
 ### 🛡️ **Capability-Based Security**
 - **No ambient authority**: Every system access requires explicit capabilities
@@ -273,6 +285,8 @@ contract preserved).
 
 ## 🏛️ Architecture
 
+Target architecture — today the HAL is x86-64 only:
+
 ```
 ┌─────────────────────────────────────┐
 │        User Applications             │
@@ -304,22 +318,23 @@ contract preserved).
 
 ## 📚 Roadmap
 
-### ✅ **v0.1 - Bootstrap Foundation** (Current)
+### ✅ **v0.1 - Bootstrap Foundation** (Done)
 - [x] Kernel bootstrap with multiboot support
 - [x] Basic memory management
 - [x] Interrupt system
 - [x] Build system with cross-compilation
 
-### 🔄 **v0.2 - Core Functionality** (In Progress)
-- [ ] Process management system
-- [ ] Capability-based security
-- [ ] Quantum resource management
-- [ ] Inter-process communication
-- [ ] User-space services framework
+### ✅ **v0.2 - Core Functionality** (Done)
+- [x] Process management system (preemptive scheduler, per-process page tables, ELF loader)
+- [x] Capability-based security (unforgeable caps, EPERM-by-default, proven by attack in CI)
+- [x] Quantum resource management (`SYS_QRAND`/`SYS_QSEED` over a capability-guarded quantum pool)
+- [x] Inter-process communication (capability-checked `SYS_SEND_TO`, targeted replies)
+- [x] User-space services framework (four ring-3 services with watchdog restart)
 
-### 🎯 **v0.3 - Quantum Integration** (Planned)
-- [ ] Quantum scheduler service
-- [ ] Hardware quantum integration
+### 🔄 **v0.3 - Quantum Integration** (In Progress)
+- [x] Real-QPU boot-entropy handoff (`qseed=` from Rigetti via qBraid)
+- [x] Experimental quantum-lottery + resonant schedulers (behind build flags, measured against round-robin)
+- [ ] Quantum scheduler service (always-on, workload-aware)
 - [ ] Quantum error correction
 - [ ] Quantum-native applications
 
@@ -349,7 +364,7 @@ We believe the future of computing is collaborative, and we welcome contribution
 
 ### 📖 **Guidelines**
 - Read our [Contributing Guidelines](CONTRIBUTING.md)
-- Check our [Issue Templates](.github/ISSUE_TEMPLATE/) for guidance
+- Check the [issue templates](docs/) (`docs/bug_report.md`, `docs/feature_request.md`) for guidance
 - Join our [Discussions](https://github.com/flaukowski/QuantumOS/discussions)
 
 ### 🌟 **Wanted Skills**
@@ -392,7 +407,7 @@ We have specialized validation for AI-assisted development:
 - [**Microkernel Design**](docs/MICROKERNEL_DESIGN.md) - System design, philosophy, and microkernel architecture
 - [**Kernel Roadmap**](docs/KERNEL_ROADMAP.md) - Implementation roadmap
 - [**Quantum Scheduler**](docs/QUANTUM_SCHEDULER.md) - Quantum resource management
-- [**ghostmagicOS Integration**](docs/GHOSTOS_INTEGRATION.md) - Resonant scheduler and consciousness verification
+- [**ghostmagicOS Integration**](docs/GHOSTOS_INTEGRATION.md) - Resonant scheduler and field dynamics
 - [**Bootstrap Guide**](BOOTSTRAP_GUIDE.md) - Getting started guide
 
 ## 🏆 Acknowledgments
@@ -401,7 +416,7 @@ QuantumOS stands on the shoulders of giants:
 
 - **The Linux Kernel** - For inspiration in system design
 - **MINIX 3** - For microkernel architecture insights
-- **SEVIR** - For capability-based security concepts
+- **seL4 & EROS** - For capability-based security concepts
 - **Qiskit** - For quantum computing frameworks
 - **ghostmagicOS** - For resonant systems architecture and chiral dynamics
 - **The OSDev Community** - For educational resources and tools
