@@ -596,6 +596,7 @@ static void cmd_http(const char *args) {
     char status[80];
     int slen = 0, got_status = 0;
     long total = 0;
+    int reset = 0;
     long tr = ticks();
     for (int guard = 0; guard < 2000000; guard++) {
         heartbeat();
@@ -606,13 +607,14 @@ static void cmd_http(const char *args) {
         req.len = (unsigned short)sizeof(chunk);
         long rr = tcp_(TCP_RECV, &req);
         if (rr == 0) {
-            break; /* EOF */
+            break; /* clean EOF (peer FIN, ring drained) */
         }
         if (rr == UDP_WOULDBLOCK) {
             yield();
             continue;
         }
         if (rr < 0) {
+            reset = 1; /* reset/error mid-stream — the fetch is truncated */
             break;
         }
         if (!got_status) {
@@ -658,7 +660,10 @@ static void cmd_http(const char *args) {
     }
     o = ghost_put(b, o, ": ");
     o = ghost_put_u(b, o, (unsigned)total);
-    o = ghost_put(b, o, " bytes received\r\n");
+    /* Be honest about a truncated transfer: a mid-stream reset drains what
+     * was buffered and then returns an error, which must NOT read as a
+     * clean fetch. */
+    o = ghost_put(b, o, reset ? " bytes then connection reset\r\n" : " bytes received\r\n");
     out_bytes(b, o);
 }
 
