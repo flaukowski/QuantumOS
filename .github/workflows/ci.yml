@@ -500,6 +500,25 @@ jobs:
     - name: Build + boot with the resonant scheduler and print the comparison
       run: make ci-smoke-resonant
 
+  persistence:
+    name: Persistence Test (two boots, one disk — epic #71)
+    runs-on: ubuntu-latest
+    needs: [build]
+    # The storage capstone: boot the SAME ATA disk image twice; boot 1 writes a
+    # file to the RAM overlay and syncs it to disk, boot 2 restores it and reads
+    # the content back. A REQUIRED gate — persistence is a core-OS claim, and the
+    # two-boot design makes a spurious green impossible (fresh image per run,
+    # content checked only in boot 2's log which never types it).
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+    - name: Install dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y build-essential qemu-system-x86 nasm
+    - name: Prove persistence across reboots
+      run: make ci-smoke-disk
+
   integration:
     name: Integration Tests
     runs-on: ubuntu-latest
@@ -684,10 +703,10 @@ jobs:
         # watchdog restarts the shell (reborn banner).
         echo "" >> integration_results.txt
         echo "Test 1h: interactive shell session (qsh)..." >> integration_results.txt
-        ( printf 'help\nps\nfree\nuptime\nghost\nqrand\nls\ncat /docs/hello.txt\nrun /bin/hello\nrun /bin/args alpha quantumos\nexit\n'; sleep 13 ) | \
+        ( printf 'help\nps\nfree\nuptime\nghost\nqrand\nls\ncat /docs/hello.txt\nrun /bin/hello\nrun /bin/args alpha quantumos\nwrite /data/note ramfs-works\nls /data\nrm /data/note\nsync\nexit\n'; sleep 13 ) | \
           timeout 15s qemu-system-x86_64 -kernel "$KERNEL_ELF" \
           -serial stdio -m 128M -display none -no-reboot 2>&1 | tee boot_output_shell.txt || true
-        SHELL_GATES="QSH: QuantumOS interactive shell ready|qsh: commands: help|qsh RUNNING|MEM: heap free=|qsh: uptime |qsh: ghost R=|qsh: qrand |Welcome to QuantumOS|FS: etc/motd|The initrd is real|HELLO: greetings from /bin/hello|exited (code 42)|ARGS: argc=3|ARGS: argv[1]=alpha|ARGS: argv[2]=quantumos|SPAWN: capless caller denied (EPERM)|CONS: capless caller denied (EPERM)|QSH: reborn"
+        SHELL_GATES="QSH: QuantumOS interactive shell ready|qsh: commands: help|qsh RUNNING|MEM: heap free=|qsh: uptime |qsh: ghost R=|qsh: qrand |Welcome to QuantumOS|FS: etc/motd|The initrd is real|HELLO: greetings from /bin/hello|exited (code 42)|ARGS: argc=3|ARGS: argv[1]=alpha|ARGS: argv[2]=quantumos|qsh: wrote |FS: data/note|qsh: removed|FSW: capless caller denied (EPERM)|qsh: sync failed (no disk)|SPAWN: capless caller denied (EPERM)|CONS: capless caller denied (EPERM)|QSH: reborn"
         echo "$SHELL_GATES" | tr '|' '\n' | while IFS= read -r gate; do
           if grep -qF "$gate" boot_output_shell.txt 2>/dev/null; then
             echo "  [PASS] shell gate present: $gate" >> integration_results.txt

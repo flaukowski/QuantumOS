@@ -24,6 +24,8 @@
 #include <kernel/com2_uart.h>
 #include <kernel/console.h>
 #include <kernel/initrd.h>
+#include <kernel/ramfs.h>
+#include <kernel/ata.h>
 #include <kernel/boot.h>
 
 /* Embedded user programs (kernel/src/user_blob.S) */
@@ -472,10 +474,125 @@ static int copy_user_path(uint64_t user_ptr, char *dst, size_t max) {
     return 0;
 }
 
-static uint64_t sys_open(uint32_t pid, uint64_t path_ptr) {
+/* Grab a free fd slot in `cur` and fill it. Returns the fd or EIO. */
+static uint64_t install_fd(process_t *cur, const uint8_t *data, uint32_t size, bool writable,
+                           int16_t ram_idx) {
+    for (uint32_t fd = 0; fd < PROCESS_MAX_FDS; fd++) {
+        if (!cur->fds[fd].used) {
+            cur->fds[fd].data = data;
+            cur->fds[fd].size = size;
+            cur->fds[fd].offset = 0;
+            cur->fds[fd].used = true;
+            cur->fds[fd].writable = writable;
+            cur->fds[fd].ram_idx = ram_idx;
+            return fd;
+        }
+    }
+    return SYSCALL_EIO; /* fd table full */
+}
+
+/* Does the caller hold the volume-level filesystem-write capability?
+ * (CAP_RESOURCE_DEVICE over DEVICE_ID_DISK — writing files is writing
+ * the persistence volume; per-file capabilities remain future work.) */
+static int has_fs_write_cap(uint32_t pid) {
+    return cap_find_resource(pid, CAP_RESOURCE_DEVICE, CAP_WRITE, DEVICE_ID_DISK) == CAP_SUCCESS;
+}
+
+static uint64_t sys_open(uint32_t pid, uint64_t path_ptr, uint64_t flags) {
     process_t *cur = process_get_by_pid(pid);
     if (!cur) {
         return SYSCALL_EINVAL;
+    }
+    if (flags & ~(uint64_t)(O_WRONLY | O_CREAT | O_TRUNC)) {
+        return SYSCALL_EINVAL;
+    }
+
+    char path[VFS_PATH_MAX];
+    if (copy_user_path(path_ptr, path, sizeof(path)) != 0) {
+        return SYSCALL_EFAULT;
+    }
+
+    /* ---- Write path (epic #71): create-or-append on the RAM overlay,
+     * gated on the filesystem-write capability BEFORE any effect. ---- */
+    if (flags & (O_WRONLY | O_CREAT | O_TRUNC)) {
+        if (!(flags & O_WRONLY) || !(flags & O_CREAT)) {
+            return SYSCALL_EINVAL; /* write combos require O_WRONLY|O_CREAT */
+        }
+        if (!has_fs_write_cap(pid)) {
+            return SYSCALL_EPERM;
+        }
+
+        int idx;
+        const uint8_t *rdata = NULL;
+        uint32_t rsize = 0;
+        if (!(flags & O_TRUNC) && ramfs_lookup(path, &rdata, &rsize) >= 0) {
+            /* Existing overlay file, appending. */
+            idx = ramfs_lookup(path, &rdata, &rsize);
+        } else {
+            idx = ramfs_create(path); /* creates, or truncates existing */
+            if (idx < 0) {
+                return SYSCALL_EIO; /* table full / name too long / OOM */
+            }
+        }
+
+        const uint8_t *d = NULL;
+        uint32_t sz = 0;
+        ramfs_get(idx, NULL, &d, &sz);
+        return install_fd(cur, d, sz, true, (int16_t)idx);
+    }
+
+    /* ---- Read path: the overlay shadows the initrd. ---- */
+    const uint8_t *data = NULL;
+    uint32_t size = 0;
+    int ridx = ramfs_lookup(path, &data, &size);
+    if (ridx >= 0) {
+        return install_fd(cur, data, size, false, (int16_t)ridx);
+    }
+    if (initrd_lookup(path, &data, &size) != 0) {
+        return SYSCALL_ENOENT;
+    }
+    return install_fd(cur, data, size, false, -1);
+}
+
+/* Append through a write-opened fd (epic #71). The write authority was
+ * capability-checked at open; the fd carries it. */
+static uint64_t sys_fwrite(uint32_t pid, uint64_t fd, uint64_t user_ptr, uint64_t len) {
+    process_t *cur = process_get_by_pid(pid);
+    if (!cur || fd >= PROCESS_MAX_FDS || !cur->fds[fd].used || !cur->fds[fd].writable ||
+        cur->fds[fd].ram_idx < 0) {
+        return SYSCALL_EINVAL;
+    }
+    if (len == 0) {
+        return 0;
+    }
+    if (!in_user_range(user_ptr)) {
+        return SYSCALL_EFAULT;
+    }
+
+    /* Bounce through a bounded kernel buffer like every other copy-in. */
+    uint8_t tmp[CONS_MAX_BYTES];
+    if (len > sizeof(tmp)) {
+        len = sizeof(tmp);
+    }
+    const uint8_t *src = (const uint8_t *)user_ptr;
+    uint32_t n = 0;
+    while (n < len && in_user_range(user_ptr + n)) {
+        tmp[n] = src[n];
+        n++;
+    }
+
+    int wrote = ramfs_append(cur->fds[fd].ram_idx, tmp, n);
+    if (wrote < 0) {
+        return SYSCALL_EINVAL;
+    }
+    return (uint64_t)wrote;
+}
+
+/* Remove an overlay file (epic #71). Refused while any live process
+ * holds it open — the fd's data snapshot would dangle. */
+static uint64_t sys_unlink(uint32_t pid, uint64_t path_ptr) {
+    if (!has_fs_write_cap(pid)) {
+        return SYSCALL_EPERM;
     }
 
     char path[VFS_PATH_MAX];
@@ -485,20 +602,28 @@ static uint64_t sys_open(uint32_t pid, uint64_t path_ptr) {
 
     const uint8_t *data = NULL;
     uint32_t size = 0;
-    if (initrd_lookup(path, &data, &size) != 0) {
+    if (ramfs_lookup(path, &data, &size) < 0) {
         return SYSCALL_ENOENT;
     }
-
-    for (uint32_t fd = 0; fd < PROCESS_MAX_FDS; fd++) {
-        if (!cur->fds[fd].used) {
-            cur->fds[fd].data = data;
-            cur->fds[fd].size = size;
-            cur->fds[fd].offset = 0;
-            cur->fds[fd].used = true;
-            return fd;
-        }
+    if (process_any_fd_references(data)) {
+        return SYSCALL_EIO; /* still open somewhere — refuse */
     }
-    return SYSCALL_EIO; /* fd table full */
+    if (ramfs_unlink(path) != 0) {
+        return SYSCALL_ENOENT;
+    }
+    return 0;
+}
+
+/* Flush the overlay to disk (epic #71 phase 3). */
+static uint64_t sys_sync_fs(uint32_t pid) {
+    if (!has_fs_write_cap(pid)) {
+        return SYSCALL_EPERM;
+    }
+    int n = persist_sync();
+    if (n < 0) {
+        return SYSCALL_EIO;
+    }
+    return (uint64_t)n;
 }
 
 static uint64_t sys_read(uint32_t pid, uint64_t fd, uint64_t user_ptr, uint64_t len) {
@@ -534,10 +659,15 @@ static uint64_t sys_close(uint32_t pid, uint64_t fd) {
     if (!cur || fd >= PROCESS_MAX_FDS || !cur->fds[fd].used) {
         return SYSCALL_EINVAL;
     }
+    /* Reset EVERY field: a later open into this slot on the RO path sets
+     * only data/size/offset — a lingering writable/ram_idx would make a
+     * read-only reopen wrongly appear writable and target a stale file. */
     cur->fds[fd].used = false;
     cur->fds[fd].data = NULL;
     cur->fds[fd].size = 0;
     cur->fds[fd].offset = 0;
+    cur->fds[fd].writable = false;
+    cur->fds[fd].ram_idx = -1;
     return 0;
 }
 
@@ -556,9 +686,11 @@ static uint64_t sys_readdir(uint32_t pid, uint64_t path_ptr, uint64_t user_ptr, 
     }
 
     /* Static bounce buffer: syscalls run cli'd on one CPU (same
-     * justification as sys_sysinfo). */
+     * justification as sys_sysinfo). Initrd rows first, then the RAM
+     * overlay's (tagged [ram]) appended after them. */
     static char tmp[SYSINFO_MAX_BYTES];
     size_t produced = initrd_format_list(path, tmp, sizeof(tmp));
+    produced = ramfs_format_list(path, tmp, sizeof(tmp), produced);
 
     if (len > produced) {
         len = produced;
@@ -811,7 +943,7 @@ static void syscall_dispatch(cpu_state_t *state) {
         state->rax = sys_sysinfo(pid, state->rdi, state->rsi, state->rdx);
         break;
     case SYS_OPEN:
-        state->rax = sys_open(pid, state->rdi);
+        state->rax = sys_open(pid, state->rdi, state->rsi);
         break;
     case SYS_READ:
         state->rax = sys_read(pid, state->rdi, state->rsi, state->rdx);
@@ -827,6 +959,15 @@ static void syscall_dispatch(cpu_state_t *state) {
         break;
     case SYS_WAITPID:
         state->rax = sys_waitpid(pid, state->rdi);
+        break;
+    case SYS_FWRITE:
+        state->rax = sys_fwrite(pid, state->rdi, state->rsi, state->rdx);
+        break;
+    case SYS_UNLINK:
+        state->rax = sys_unlink(pid, state->rdi);
+        break;
+    case SYS_SYNC:
+        state->rax = sys_sync_fs(pid);
         break;
     default:
         state->rax = SYSCALL_ENOSYS;
@@ -1267,9 +1408,11 @@ void user_shell_init(uint32_t ghostd_pid) {
         .grant_quantum_pool = 1,
         .grant_console = 1,
         /* The shell is the operator surface: it alone may start programs
-         * off the initrd (SYS_SPAWN). Re-minted on every start like the
+         * off the initrd (SYS_SPAWN) and write the filesystem (create/
+         * unlink/sync — epic #71). Re-minted on every start like the
          * other declared grants. */
         .grant_spawn = 1,
+        .grant_fswrite = 1,
     };
 
     uint32_t sid = 0;

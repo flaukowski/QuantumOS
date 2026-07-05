@@ -30,6 +30,9 @@
 #define SYS_READDIR 20
 #define SYS_SPAWN 21
 #define SYS_WAITPID 22
+#define SYS_FWRITE 23
+#define SYS_UNLINK 24
+#define SYS_SYNC 25
 
 /* SYS_WAITPID: the target is still running. */
 #define WAITPID_RUNNING 256
@@ -163,10 +166,23 @@ static inline long sysinfo(long op, void *buf, long len) {
     return usys3(SYS_SYSINFO, op, (long)buf, len);
 }
 
-/* Open a regular file on the read-only embedded initrd. Returns a small
- * non-negative fd, -6 ENOENT if the path names no file. */
+/* SYS_OPEN flags (arg 2). Write flags require the filesystem-write
+ * capability; writes go to the RAM overlay (which shadows the initrd)
+ * and always append — O_TRUNC clears the file first. */
+#define O_RDONLY 0
+#define O_WRONLY 1
+#define O_CREAT 2
+#define O_TRUNC 4
+
+/* Open a file read-only (RAM overlay first, then the embedded initrd).
+ * Returns a small non-negative fd, -6 ENOENT if the path names no file. */
 static inline long open_(const char *path) {
-    return usys1(SYS_OPEN, (long)path);
+    return usys2(SYS_OPEN, (long)path, O_RDONLY);
+}
+/* Open with explicit flags (write combos need O_WRONLY|O_CREAT and the
+ * filesystem-write capability; -4 EPERM without). */
+static inline long openf_(const char *path, long flags) {
+    return usys2(SYS_OPEN, (long)path, flags);
 }
 /* Sequential read from an open initrd file. Returns bytes copied (0 = EOF),
  * -1 EINVAL on a bad fd. */
@@ -177,10 +193,27 @@ static inline long read_(long fd, void *buf, long len) {
 static inline long close_(long fd) {
     return usys1(SYS_CLOSE, fd);
 }
-/* Kernel-formatted initrd listing under `path` ("/" lists everything):
- * one "FS: <name> <size>" line per file. Returns bytes copied. */
+/* Kernel-formatted listing under `path` ("/" lists everything): one
+ * "FS: <name> <size>" line per file — initrd rows first, then RAM
+ * overlay rows tagged [ram]. Returns bytes copied. */
 static inline long readdir_(const char *path, void *buf, long len) {
     return usys3(SYS_READDIR, (long)path, (long)buf, len);
+}
+
+/* Append to a write-opened fd. Returns bytes appended (may be short at
+ * the per-file size cap), -1 EINVAL on a non-writable fd. */
+static inline long fwrite_(long fd, const void *buf, long len) {
+    return usys3(SYS_FWRITE, fd, (long)buf, len);
+}
+/* Remove a RAM-overlay file. -4 EPERM without the write capability,
+ * -6 ENOENT if absent, -5 EIO while some process holds it open. */
+static inline long unlink_(const char *path) {
+    return usys1(SYS_UNLINK, (long)path);
+}
+/* Flush the RAM overlay to the persistence disk. Returns files flushed,
+ * -4 EPERM without the write capability, -5 EIO with no disk. */
+static inline long sync_(void) {
+    return usys0(SYS_SYNC);
 }
 
 /* Start an initrd ELF as a new ring-3 process. `cmd` is a command line:

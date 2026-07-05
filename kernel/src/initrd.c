@@ -12,6 +12,7 @@
  */
 
 #include <kernel/initrd.h>
+#include <kernel/tar.h>
 #include <kernel/boot.h>
 
 /* Embedded archive (build/x86_64/initrd_tar.o via objcopy). objcopy also
@@ -71,16 +72,11 @@ static int str_starts(const char *s, const char *prefix) {
     return prefix[i] == '\0';
 }
 
-/* Walk the archive, invoking cb for each regular file. Returns the
- * number of entries visited (cb may stop the walk by returning 1). */
-typedef int (*tar_visit_t)(const char *name, const uint8_t *data, uint32_t size, void *ctx);
-
-static void tar_walk(tar_visit_t cb, void *ctx) {
-    const uint8_t *base = _binary_initrd_tar_start;
-    /* Work in byte offsets, not pointer comparisons: comparing or subtracting
-     * pointers into "different objects" is undefined and flagged by static
-     * analysis, so the archive length comes from the absolute _size symbol. */
-    size_t total = (size_t)(uintptr_t)_binary_initrd_tar_size;
+/* Walk any in-memory ustar archive, invoking cb for each regular file
+ * (cb may stop the walk by returning 1). Exported via kernel/tar.h:
+ * the disk-restore path (epic #71) walks the persistence archive with
+ * the same rules the embedded initrd gets. */
+void tar_walk_mem(const uint8_t *base, size_t total, tar_visit_t cb, void *ctx) {
     size_t off = 0;
 
     while (off + TAR_BLOCK <= total) {
@@ -91,6 +87,22 @@ static void tar_walk(tar_visit_t cb, void *ctx) {
         /* Header sanity: ustar magic (GNU writes "ustar " too) */
         if (p[TAR_MAGIC_OFF] != 'u') {
             break;
+        }
+
+        /* Header checksum: the sum of all 512 header bytes with the
+         * 8-byte chksum field (148..155) counted as spaces must equal
+         * the octal value stored there. This is what turns a torn sync
+         * (old superblock over half-new data) from "restores garbage
+         * under valid names" into "stops at the first bad block". */
+        {
+            uint32_t stored = tar_octal(p + 148, 8);
+            uint32_t sum = 0;
+            for (int i = 0; i < TAR_BLOCK; i++) {
+                sum += (i >= 148 && i < 156) ? (uint32_t)' ' : (uint32_t)p[i];
+            }
+            if (sum != stored) {
+                break; /* corrupt/torn header — end the walk honestly */
+            }
         }
 
         /* Bounded copy of the name (the header field is not always
@@ -120,6 +132,13 @@ static void tar_walk(tar_visit_t cb, void *ctx) {
         uint32_t blocks = (size + TAR_BLOCK - 1) / TAR_BLOCK;
         off = data_off + (size_t)blocks * TAR_BLOCK;
     }
+}
+
+/* The embedded archive, through the shared walker. Length comes from the
+ * absolute _size symbol (a single symbol — no end-minus-start pointer
+ * subtraction, which static analysis rejects as "different objects"). */
+static void tar_walk(tar_visit_t cb, void *ctx) {
+    tar_walk_mem(_binary_initrd_tar_start, (size_t)(uintptr_t)_binary_initrd_tar_size, cb, ctx);
 }
 
 /* ---- init: count the inventory ---- */

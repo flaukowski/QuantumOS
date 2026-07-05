@@ -418,6 +418,17 @@ status_t process_destroy(uint32_t pid) {
     /* Remove from ready queue */
     remove_from_ready_queue(process);
 
+    /* Release any VFS fds the process still held (epic #71): a dead
+     * process can never issue another read/write, and leaving fds[].used
+     * set would make an overlay file look permanently open, blocking its
+     * unlink until the slot is recycled. */
+    for (uint32_t fd = 0; fd < PROCESS_MAX_FDS; fd++) {
+        process->fds[fd].used = false;
+        process->fds[fd].data = NULL;
+        process->fds[fd].writable = false;
+        process->fds[fd].ram_idx = -1;
+    }
+
     /* Clean up IPC resources */
     ipc_process_cleanup(process->pid);
 
@@ -816,6 +827,27 @@ uint32_t process_get_generation(uint32_t pid) {
         return 0;
     }
     return process_generation[pid];
+}
+
+bool process_any_fd_references(const void *data) {
+    if (!data) {
+        return false;
+    }
+    for (uint32_t pid = 0; pid < MAX_PROCESSES; pid++) {
+        process_t *p = &process_table[pid];
+        /* Only a LIVE process can still act on an fd. A terminated (or
+         * unreaped) process's stale fds must not pin an overlay file —
+         * counting them would refuse the unlink forever. */
+        if (p->magic != PROCESS_MAGIC || !PROCESS_IS_ALIVE(p)) {
+            continue;
+        }
+        for (uint32_t fd = 0; fd < PROCESS_MAX_FDS; fd++) {
+            if (p->fds[fd].used && p->fds[fd].data == data) {
+                return true;
+            }
+        }
+    }
+    return false;
 }
 
 size_t process_format_ps(char *buf, size_t max) {

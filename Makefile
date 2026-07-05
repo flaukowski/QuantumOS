@@ -100,7 +100,7 @@ OBJECTS = $(KERNEL_SOURCES:$(KERNEL_DIR)/src/%.c=$(BUILD_DIR)/%.o) \
 -include $(OBJECTS:.o=.d)
 
 # Targets
-.PHONY: all clean kernel run debug dump test test-list test-coverage ci-smoke ci-smoke-resonant ci-smoke-qseed ci-smoke-swarm swarm-pingpong
+.PHONY: all clean kernel run debug dump test test-list test-coverage ci-smoke ci-smoke-disk ci-smoke-resonant ci-smoke-qseed ci-smoke-swarm swarm-pingpong
 
 all: kernel
 
@@ -353,7 +353,7 @@ ci-smoke: kernel
 	@echo "[1/3] Build verified: $(BUILD_DIR)/kernel.elf exists"
 	@test -f $(BUILD_DIR)/kernel.elf || (echo "ERROR: Kernel not built" && exit 1)
 	@echo "[2/3] Running QEMU boot test (14 second timeout, shell session piped into the console)..."
-	@( printf 'help\nps\nfree\nuptime\nghost\nqrand\nls\ncat /docs/hello.txt\nrun /bin/hello\nrun /bin/args alpha quantumos\nexit\n'; sleep 13 ) | \
+	@( printf 'help\nps\nfree\nuptime\nghost\nqrand\nls\ncat /docs/hello.txt\nrun /bin/hello\nrun /bin/args alpha quantumos\nwrite /data/note ramfs-works\nls /data\nrm /data/note\nsync\nexit\n'; sleep 13 ) | \
 		timeout 14s qemu-system-x86_64 -kernel $(BUILD_DIR)/kernel.elf32 \
 		-serial stdio -m 128M -display none -no-reboot 2>&1 | tee /tmp/qemu-boot.log || true
 	@echo ""
@@ -530,6 +530,49 @@ ci-smoke: kernel
 		echo ""; echo "=== Smoke Test FAILED ==="; exit 1; \
 	fi
 	@echo "SUCCESS: argv delivered to a spawned program (argc + both args read back)"
+	@# epic #71 phase 2: the writable RAM overlay. 'write' must store bytes
+	@# (kernel-reported count, not an echo), 'ls /data' must show the file
+	@# tagged [ram] with the kernel-computed size, and 'rm' must remove it.
+	@if ! grep -q "qsh: wrote " /tmp/qemu-boot.log 2>/dev/null; then \
+		echo "ERROR: 'write' did not store to the overlay (qsh: wrote)"; \
+		echo "Boot log:"; cat /tmp/qemu-boot.log 2>/dev/null || true; \
+		echo ""; echo "=== Smoke Test FAILED ==="; exit 1; \
+	fi
+	@if ! grep -q "FS: data/note .* \[ram\]" /tmp/qemu-boot.log 2>/dev/null; then \
+		echo "ERROR: 'ls /data' did not list the overlay file (FS: data/note ... [ram])"; \
+		echo "Boot log:"; cat /tmp/qemu-boot.log 2>/dev/null || true; \
+		echo ""; echo "=== Smoke Test FAILED ==="; exit 1; \
+	fi
+	@if ! grep -q "qsh: removed" /tmp/qemu-boot.log 2>/dev/null; then \
+		echo "ERROR: 'rm' did not remove the overlay file (qsh: removed)"; \
+		echo "Boot log:"; cat /tmp/qemu-boot.log 2>/dev/null || true; \
+		echo ""; echo "=== Smoke Test FAILED ==="; exit 1; \
+	fi
+	@echo "SUCCESS: writable RAM overlay works (write stored, ls [ram], rm removed)"
+	@# Capability gate: the capless ghost-test must be denied filesystem writes.
+	@if ! grep -q "FSW: capless caller denied (EPERM)" /tmp/qemu-boot.log 2>/dev/null; then \
+		echo "ERROR: capless filesystem-create was not denied (FSW: capless caller denied)"; \
+		echo "Boot log:"; cat /tmp/qemu-boot.log 2>/dev/null || true; \
+		echo ""; echo "=== Smoke Test FAILED ==="; exit 1; \
+	fi
+	@echo "SUCCESS: filesystem-write capability gate proven (capless caller denied EPERM)"
+	@# Honesty gate: this default boot is DISKLESS, so the driver must say so
+	@# and MUST NOT claim a disk, and 'sync' must fail honestly (no disk).
+	@if ! grep -q "ATA: no disk" /tmp/qemu-boot.log 2>/dev/null; then \
+		echo "ERROR: diskless boot did not report 'ATA: no disk'"; \
+		echo "Boot log:"; cat /tmp/qemu-boot.log 2>/dev/null || true; \
+		echo ""; echo "=== Smoke Test FAILED ==="; exit 1; \
+	fi
+	@if grep -q "ATA: disk present" /tmp/qemu-boot.log 2>/dev/null; then \
+		echo "ERROR: diskless boot falsely claimed 'ATA: disk present'"; \
+		echo ""; echo "=== Smoke Test FAILED ==="; exit 1; \
+	fi
+	@if ! grep -q "qsh: sync failed (no disk)" /tmp/qemu-boot.log 2>/dev/null; then \
+		echo "ERROR: diskless 'sync' did not fail honestly (qsh: sync failed (no disk))"; \
+		echo "Boot log:"; cat /tmp/qemu-boot.log 2>/dev/null || true; \
+		echo ""; echo "=== Smoke Test FAILED ==="; exit 1; \
+	fi
+	@echo "SUCCESS: diskless honesty proven (no-disk reported, sync fails cleanly)"
 	@# Capability gate: the capless ghost-test must be denied SYS_SPAWN — only
 	@# qsh holds the spawn capability.
 	@if ! grep -q "SPAWN: capless caller denied (EPERM)" /tmp/qemu-boot.log 2>/dev/null; then \
@@ -556,6 +599,73 @@ ci-smoke: kernel
 	@echo "SUCCESS: watchdog rebirthed the shell after exit (QSH: reborn)"
 	@echo ""
 	@echo "=== Smoke Test PASSED ==="
+
+# CI Smoke Test (persistence): the epic #71 capstone. Boot the SAME disk image
+# TWICE. Boot 1 attaches a freshly-zeroed image, writes a file to the overlay,
+# and syncs it to disk. Boot 2 attaches the SAME image and must read the file
+# back — proving persistence across reboots.
+#
+# Gate-integrity rules (learned from the design attack):
+#  - The image is recreated fresh INSIDE this recipe every run (never a make
+#    prerequisite), so a stale image from a previous run can never make it pass.
+#  - The two boots tee to DISTINCT logs. qsh echoes typed input, so boot 1's log
+#    contains the content string from the 'write' command echo — proving nothing.
+#    The content gate is therefore checked ONLY in boot 2's log, and boot 2 never
+#    types the content (only 'cat'), so its appearance there is genuine readback.
+#  - Boot 1 gates its own 'disk present' + sync-success BEFORE boot 2 runs, so a
+#    broken write/sync fails here (correctly attributed) instead of surfacing as
+#    boot 2's "content missing".
+#  - The two QEMU runs are strictly sequential (QEMU takes a write lock on the
+#    raw image).
+DISK_IMG = $(BUILD_DIR)/disk.img
+ci-smoke-disk: kernel
+	@echo "=== QuantumOS Persistence Smoke Test (two boots, one disk) ==="
+	@rm -f $(DISK_IMG)
+	@dd if=/dev/zero of=$(DISK_IMG) bs=1M count=2 2>/dev/null
+	@echo "[boot 1] write /data/note + sync to a fresh disk..."
+	@( printf 'write /data/note tide-remembers-x91\nsync\n'; sleep 8 ) | \
+		timeout 10s qemu-system-x86_64 -kernel $(BUILD_DIR)/kernel.elf32 \
+		-drive file=$(DISK_IMG),format=raw,if=ide -serial stdio -m 128M \
+		-display none -no-reboot 2>&1 | tee /tmp/qemu-disk-boot1.log || true
+	@if ! grep -q "ATA: disk present" /tmp/qemu-disk-boot1.log 2>/dev/null; then \
+		echo "ERROR: boot 1 did not detect the disk (ATA: disk present)"; \
+		echo "Boot log:"; cat /tmp/qemu-disk-boot1.log 2>/dev/null || true; \
+		echo ""; echo "=== Persistence Test FAILED ==="; exit 1; \
+	fi
+	@echo "SUCCESS: boot 1 detected the ATA disk"
+	@if ! grep -q "ATA: sector RW self-test OK" /tmp/qemu-disk-boot1.log 2>/dev/null; then \
+		echo "ERROR: boot 1 disk RW self-test did not pass"; \
+		echo "Boot log:"; cat /tmp/qemu-disk-boot1.log 2>/dev/null || true; \
+		echo ""; echo "=== Persistence Test FAILED ==="; exit 1; \
+	fi
+	@echo "SUCCESS: boot 1 sector read/write self-test passed"
+	@if ! grep -q "qsh: sync ok" /tmp/qemu-disk-boot1.log 2>/dev/null; then \
+		echo "ERROR: boot 1 sync did not succeed (qsh: sync ok)"; \
+		echo "Boot log:"; cat /tmp/qemu-disk-boot1.log 2>/dev/null || true; \
+		echo ""; echo "=== Persistence Test FAILED ==="; exit 1; \
+	fi
+	@echo "SUCCESS: boot 1 flushed the overlay to disk (qsh: sync ok)"
+	@echo "[boot 2] cat /data/note off the SAME disk (fresh boot, no write)..."
+	@( printf 'cat /data/note\n'; sleep 8 ) | \
+		timeout 10s qemu-system-x86_64 -kernel $(BUILD_DIR)/kernel.elf32 \
+		-drive file=$(DISK_IMG),format=raw,if=ide -serial stdio -m 128M \
+		-display none -no-reboot 2>&1 | tee /tmp/qemu-disk-boot2.log || true
+	@if ! grep -q "FS: restored persisted files from disk" /tmp/qemu-disk-boot2.log 2>/dev/null; then \
+		echo "ERROR: boot 2 did not restore the archive from disk"; \
+		echo "Boot log:"; cat /tmp/qemu-disk-boot2.log 2>/dev/null || true; \
+		echo ""; echo "=== Persistence Test FAILED ==="; exit 1; \
+	fi
+	@echo "SUCCESS: boot 2 restored the persisted archive at boot"
+	@# THE capstone: the content typed in boot 1 is read back in boot 2 — and
+	@# boot 2 never typed it, so this can only be a genuine disk readback.
+	@if ! grep -q "tide-remembers-x91" /tmp/qemu-disk-boot2.log 2>/dev/null; then \
+		echo "ERROR: boot 2 could not read back the file written in boot 1"; \
+		echo "Boot log:"; cat /tmp/qemu-disk-boot2.log 2>/dev/null || true; \
+		echo ""; echo "=== Persistence Test FAILED ==="; exit 1; \
+	fi
+	@echo "SUCCESS: content written in boot 1 read back in boot 2 — PERSISTENCE PROVEN"
+	@echo ""
+	@echo "=== Persistence Test PASSED ==="
 
 # CI Smoke Test (resonant scheduler): rebuild WITH SCHED_RESONANT=1 and prove
 # the alternate policy still boots to ready, still passes the ghostd merge gate

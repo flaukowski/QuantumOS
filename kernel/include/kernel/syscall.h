@@ -113,11 +113,40 @@
                          * with SYS_YIELD. Uncapped introspection, like
                          * SYS_SYSINFO. */
 
+#define SYS_FWRITE                                                                                 \
+    23 /* rdi = fd, rsi = buf, rdx = len; append to a file opened
+                         * with write flags on the RAM overlay (epic #71). The
+                         * write authority was checked at open; the fd carries
+                         * it. Returns bytes appended (may be short at the file
+                         * size cap), EINVAL on a non-writable or bad fd. */
+#define SYS_UNLINK                                                                                 \
+    24 /* rdi = path ptr; remove a RAM-overlay file and free its
+                         * storage. Gated on the filesystem-write capability
+                         * (EPERM without). Refused with EIO while any live
+                         * process holds the file open; ENOENT if absent (the
+                         * initrd is immutable — not unlinkable). */
+#define SYS_SYNC                                                                                   \
+    25 /* no args; serialize the RAM overlay to the ATA disk as a
+                         * ustar archive behind the QDSK superblock (restored at
+                         * next boot). Gated on the filesystem-write capability.
+                         * Returns files flushed, EIO with no disk or on write
+                         * failure. */
+
 /* SYS_WAITPID: the target is still running. */
 #define WAITPID_RUNNING 256
 
 /* Resource id of the spawn right under CAP_RESOURCE_PROCESS. */
 #define SPAWN_RESOURCE_ID 0
+
+/* SYS_OPEN flags (rsi). Write flags require the filesystem-write
+ * capability (CAP_RESOURCE_DEVICE over DEVICE_ID_DISK) — volume-level
+ * write authority granted declaratively to qsh alone. O_WRONLY requires
+ * O_CREAT (overlay files are created-or-appended; the initrd is
+ * immutable). Writes always append; O_TRUNC clears the file first. */
+#define O_RDONLY 0
+#define O_WRONLY 1
+#define O_CREAT 2
+#define O_TRUNC 4
 
 /* Bytes SYS_FIELD_SNAPSHOT stores at most (bounds the kernel viz buffer). */
 #define FIELD_SNAP_BYTES 256
