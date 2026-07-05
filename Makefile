@@ -710,6 +710,18 @@ ci-smoke-net: kernel
 		echo ""; echo "=== Networking Test FAILED ==="; exit 1; \
 	fi
 	@echo "SUCCESS: ARP-resolved 10.0.2.2 — link layer works both directions"
+	@echo "[4/4] DHCP must obtain the SLIRP lease (IPv4 + UDP + checksums)..."
+	@if grep -q "NET: DHCP timed out" /tmp/qemu-net.log 2>/dev/null; then \
+		echo "ERROR: DHCP timed out — no lease from the SLIRP server"; \
+		echo "Boot log:"; cat /tmp/qemu-net.log 2>/dev/null || true; \
+		echo ""; echo "=== Networking Test FAILED ==="; exit 1; \
+	fi
+	@if ! grep -q "NET: DHCP lease 10.0.2.15" /tmp/qemu-net.log 2>/dev/null; then \
+		echo "ERROR: DHCP did not obtain the lease (NET: DHCP lease 10.0.2.15)"; \
+		echo "Boot log:"; cat /tmp/qemu-net.log 2>/dev/null || true; \
+		echo ""; echo "=== Networking Test FAILED ==="; exit 1; \
+	fi
+	@echo "SUCCESS: DHCP lease 10.0.2.15 obtained — IPv4/UDP stack works end to end"
 	@echo ""
 	@echo "=== Networking Test PASSED ==="
 
