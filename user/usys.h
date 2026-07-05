@@ -183,15 +183,48 @@ static inline long readdir_(const char *path, void *buf, long len) {
     return usys3(SYS_READDIR, (long)path, (long)buf, len);
 }
 
-/* Start an initrd ELF as a new ring-3 process. Returns the new pid, or
- * -4 EPERM without the spawn capability, -6 ENOENT if no such file. */
-static inline long spawn_(const char *path) {
-    return usys1(SYS_SPAWN, (long)path);
+/* Start an initrd ELF as a new ring-3 process. `cmd` is a command line:
+ * the first whitespace-separated token names the initrd file to load, and
+ * the whole token list becomes the new process's argv (argv[0] = the path).
+ * Returns the new pid, or -4 EPERM without the spawn capability, -6 ENOENT
+ * if the first token names no file. */
+static inline long spawn_(const char *cmd) {
+    return usys1(SYS_SPAWN, (long)cmd);
 }
 /* Poll a spawned process: exit code (0-255) once exited, WAITPID_RUNNING
  * (256) while it lives, -6 ENOENT for an unknown pid. */
 static inline long waitpid_(long pid) {
     return usys1(SYS_WAITPID, pid);
+}
+
+/* ------------------------------------------------------------------ *
+ * Argument vector ABI (epic #62). The kernel packs a spawned process's
+ * argv into a read-only page at a fixed VA; a program reads it with
+ * get_args(). This layout MUST stay byte-identical to the kernel side in
+ * kernel/src/syscall.c (there is no shared header across the ring
+ * boundary). A process spawned with no arguments sees argc == 0.
+ * ------------------------------------------------------------------ */
+#define USER_ARGS_VADDR 0x40090000UL
+#define USER_ARGS_MAX 8        /* most argv entries carried */
+#define USER_ARGS_STRBYTES 480 /* packed NUL-terminated arg strings */
+
+typedef struct {
+    int argc;
+    unsigned argv_off[USER_ARGS_MAX]; /* byte offset of each arg within strings */
+    char strings[USER_ARGS_STRBYTES];
+} user_args_t;
+
+/* Read this process's argument vector. Stores up to `max` pointers into
+ * argv[] (each valid for the life of the process) and returns the true
+ * argc, which may exceed `max` (only the first `max` are addressable). */
+static inline int get_args(char **argv, int max) {
+    const user_args_t *a = (const user_args_t *)USER_ARGS_VADDR;
+    int argc = a->argc;
+    int n = (argc < max) ? argc : max;
+    for (int i = 0; i < n; i++) {
+        argv[i] = (char *)a->strings + a->argv_off[i];
+    }
+    return argc;
 }
 
 /* Tiny string helpers (no libc) */

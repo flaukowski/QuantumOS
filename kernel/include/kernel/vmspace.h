@@ -21,6 +21,7 @@
 /* User virtual layout (per process, in the 1–2 GB PDPT slot) */
 #define USER_VBASE 0x40000000UL      /* code copied here; entry point */
 #define USER_DATA_VADDR 0x40080000UL /* zeroed writable page (isolation canary) */
+#define USER_ARGS_VADDR 0x40090000UL /* argv page (kernel-filled, RO to user; epic #62) */
 #define USER_STACK_TOP 0x40100000UL  /* stack grows down from here */
 #define USER_STACK_PAGES 4           /* 16 KB user stack */
 #define USER_CODE_PAGES 8            /* 32 KB code window */

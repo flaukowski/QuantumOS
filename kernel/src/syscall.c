@@ -43,8 +43,22 @@ extern const uint8_t _binary_paradox_test_elf_start[], _binary_paradox_test_elf_
 extern const uint8_t _binary_swarm_svc_elf_start[], _binary_swarm_svc_elf_end[];
 extern const uint8_t _binary_qsh_elf_start[], _binary_qsh_elf_end[];
 
+/* Argument vector ABI (epic #62). MUST stay byte-identical to user_args_t
+ * in user/usys.h — there is no shared header across the ring boundary. The
+ * kernel fills a copy of this and maps it read-only at USER_ARGS_VADDR into
+ * the new process; get_args() on the user side reads it. */
+#define KARGS_MAX 8
+#define KARGS_STRBYTES 480
+typedef struct {
+    int argc;
+    unsigned argv_off[KARGS_MAX];
+    char strings[KARGS_STRBYTES];
+} kuser_args_t;
+
 static status_t finalize_user_process(address_space_t *as, const char *name, uint64_t entry,
-                                      uint32_t *pid_out);
+                                      const kuser_args_t *kargs, uint32_t *pid_out);
+static status_t spawn_elf_args(const char *name, const void *elf_start, const void *elf_end,
+                               const kuser_args_t *kargs, uint32_t *pid_out);
 void user_ipc_demo_init(void);
 void user_ghost_demo_init(void);
 void user_paradox_demo_init(uint32_t ghostd_pid);
@@ -567,15 +581,73 @@ static uint64_t sys_readdir(uint32_t pid, uint64_t path_ptr, uint64_t user_ptr, 
  * CAP_EXECUTE over SPAWN_RESOURCE_ID, declaratively granted to qsh
  * alone. The capless ghost-test proves the denial by attack every boot. */
 
-static uint64_t sys_spawn(uint32_t pid, uint64_t path_ptr) {
+/* Longest command line SYS_SPAWN copies from user memory (path + args). */
+#define SPAWN_CMDLINE_MAX 256
+
+/* Split `cmd` on runs of spaces/tabs into argv, packing the tokens into
+ * `ka`. Returns the token count (>= 0). argv[0] is the first token — the
+ * initrd path to load; it is also copied to `path0` (bounded by pmax). */
+static int parse_cmdline(const char *cmd, kuser_args_t *ka, char *path0, size_t pmax) {
+    ka->argc = 0;
+    size_t soff = 0;
+    const char *p = cmd;
+    while (*p && ka->argc < KARGS_MAX) {
+        while (*p == ' ' || *p == '\t') {
+            p++;
+        }
+        if (!*p) {
+            break;
+        }
+        /* Record this token's start offset, copy until the next space. */
+        unsigned start = (unsigned)soff;
+        while (*p && *p != ' ' && *p != '\t' && soff + 1 < KARGS_STRBYTES) {
+            char c = *p++;
+            if (ka->argc == 0 && (size_t)(soff - start) < pmax - 1) {
+                path0[soff - start] = c;
+            }
+            ka->strings[soff++] = c;
+        }
+        ka->strings[soff++] = '\0';
+        if (ka->argc == 0) {
+            size_t plen = (soff - 1) - start;
+            path0[plen < pmax ? plen : pmax - 1] = '\0';
+        }
+        ka->argv_off[ka->argc] = start;
+        ka->argc++;
+        /* Skip any overflow of an over-long token. */
+        while (*p && *p != ' ' && *p != '\t') {
+            p++;
+        }
+    }
+    return ka->argc;
+}
+
+static uint64_t sys_spawn(uint32_t pid, uint64_t cmd_ptr) {
     if (cap_find_resource(pid, CAP_RESOURCE_PROCESS, CAP_EXECUTE, SPAWN_RESOURCE_ID) !=
         CAP_SUCCESS) {
         return SYSCALL_EPERM;
     }
 
-    char path[VFS_PATH_MAX];
-    if (copy_user_path(path_ptr, path, sizeof(path)) != 0) {
+    /* Copy the whole command line (path + args) out of user memory. */
+    char cmd[SPAWN_CMDLINE_MAX];
+    if (!in_user_range(cmd_ptr)) {
         return SYSCALL_EFAULT;
+    }
+    {
+        const char *src = (const char *)cmd_ptr;
+        size_t i = 0;
+        while (i < sizeof(cmd) - 1 && in_user_range(cmd_ptr + i) && src[i]) {
+            cmd[i] = src[i];
+            i++;
+        }
+        cmd[i] = '\0';
+    }
+
+    /* Parse into an argv (argv[0] = the initrd path to load). */
+    static kuser_args_t ka; /* syscalls run cli'd on one CPU — not re-entered */
+    char path[VFS_PATH_MAX];
+    if (parse_cmdline(cmd, &ka, path, sizeof(path)) < 1) {
+        return SYSCALL_EINVAL;
     }
 
     const uint8_t *data = NULL;
@@ -586,14 +658,14 @@ static uint64_t sys_spawn(uint32_t pid, uint64_t path_ptr) {
 
     /* Process name = the path's basename. */
     const char *name = path;
-    for (const char *p = path; *p; p++) {
-        if (*p == '/' && p[1]) {
-            name = p + 1;
+    for (const char *q = path; *q; q++) {
+        if (*q == '/' && q[1]) {
+            name = q + 1;
         }
     }
 
     uint32_t new_pid = 0;
-    if (user_process_spawn_elf(name, data, data + size, &new_pid) != STATUS_SUCCESS) {
+    if (spawn_elf_args(name, data, data + size, &ka, &new_pid) != STATUS_SUCCESS) {
         return SYSCALL_EIO;
     }
     return new_pid;
@@ -822,14 +894,16 @@ status_t user_process_spawn(const char *name, const void *blob_start, const void
         return STATUS_NO_MEMORY;
     }
 
-    /* Stack + process creation shared with the ELF path */
-    return finalize_user_process(&as, name, USER_VBASE, pid_out);
+    /* Stack + process creation shared with the ELF path (no args) */
+    return finalize_user_process(&as, name, USER_VBASE, NULL, pid_out);
 }
 
 /* Map the user stack and create the ring-3 process bound to `as`, with
- * the given entry point. Shared by the flat-blob and ELF spawn paths. */
+ * the given entry point. Shared by the flat-blob and ELF spawn paths.
+ * `kargs` (may be NULL) is the argument vector to expose read-only at
+ * USER_ARGS_VADDR; NULL leaves the process with argc == 0. */
 static status_t finalize_user_process(address_space_t *as, const char *name, uint64_t entry,
-                                      uint32_t *pid_out) {
+                                      const kuser_args_t *kargs, uint32_t *pid_out) {
     /* User stack, mapped just below USER_STACK_TOP */
     for (uint32_t p = 1; p <= USER_STACK_PAGES; p++) {
         uint64_t uvaddr = USER_STACK_TOP - (uint64_t)p * PAGE_SIZE;
@@ -837,6 +911,20 @@ static status_t finalize_user_process(address_space_t *as, const char *name, uin
             return STATUS_NO_MEMORY;
         }
     }
+
+    /* Argument-vector page: mapped read-only to the process (populated here
+     * through the frame's supervisor identity VA). Always present so
+     * get_args() reads a valid page; a spawn without args leaves argc == 0. */
+    uint8_t *argpage = map_fresh_page(as, USER_ARGS_VADDR, false);
+    if (!argpage) {
+        return STATUS_NO_MEMORY;
+    }
+    if (kargs) {
+        const uint8_t *s = (const uint8_t *)kargs;
+        for (size_t b = 0; b < sizeof(kuser_args_t) && b < PAGE_SIZE; b++) {
+            argpage[b] = s[b];
+        }
+    } /* else the page is already zeroed by map_fresh_page -> argc == 0 */
 
     process_create_params_t params = {.name = name,
                                       .type = PROCESS_TYPE_USER,
@@ -867,8 +955,9 @@ static status_t finalize_user_process(address_space_t *as, const char *name, uin
 /* Spawn a user process from an embedded ELF64 image: the loader maps
  * and populates the program's PT_LOAD segments into a private address
  * space, then the process starts at the ELF entry point. */
-status_t user_process_spawn_elf(const char *name, const void *elf_start, const void *elf_end,
-                                uint32_t *pid_out) {
+/* Full ELF spawn with an optional argument vector. `kargs` may be NULL. */
+static status_t spawn_elf_args(const char *name, const void *elf_start, const void *elf_end,
+                               const kuser_args_t *kargs, uint32_t *pid_out) {
     size_t elf_size = (size_t)((const uint8_t *)elf_end - (const uint8_t *)elf_start);
 
     address_space_t as = vmspace_create();
@@ -881,7 +970,12 @@ status_t user_process_spawn_elf(const char *name, const void *elf_start, const v
         return STATUS_ERROR;
     }
 
-    return finalize_user_process(&as, name, entry, pid_out);
+    return finalize_user_process(&as, name, entry, kargs, pid_out);
+}
+
+status_t user_process_spawn_elf(const char *name, const void *elf_start, const void *elf_end,
+                                uint32_t *pid_out) {
+    return spawn_elf_args(name, elf_start, elf_end, NULL, pid_out);
 }
 
 void user_init(void) {

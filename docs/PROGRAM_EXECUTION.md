@@ -19,9 +19,24 @@ symbol; they live in the archive and are found by path at spawn time.
 
 ### `SYS_SPAWN` (21)
 
-`rdi` = path (NUL-terminated, user memory). Looks up the initrd file,
-loads its ELF into a fresh per-process address space through the same
-`user_process_spawn_elf` the boot services use, and returns the new pid.
+`rdi` = command line (NUL-terminated, user memory): the first
+whitespace-separated token names the initrd file to load, and the whole
+token list becomes the new process's argv (`argv[0]` = the path). The
+kernel looks up the file, loads its ELF into a fresh per-process address
+space through the same `user_process_spawn_elf` the boot services use,
+and returns the new pid.
+
+**Argument vector.** The kernel splits the command line into at most
+`KARGS_MAX` (8) tokens totalling `KARGS_STRBYTES` (480) bytes, packs them
+into a `kuser_args_t`, and maps it **read-only** at a fixed VA
+(`USER_ARGS_VADDR` = `0x40090000`) in the new address space. A program
+reads it with `get_args(argv, max)` from `usys.h`, which returns `argc`
+and fills `argv[]` with pointers into the args page. A process spawned
+with no arguments (every boot service, the flat-blob demos) sees
+`argc == 0`. The layout is duplicated between `usys.h` (reader) and
+`syscall.c` (writer) — there is no shared header across the ring
+boundary, so the two must stay byte-identical. `/bin/args a b c` echoes
+its argv and exits with `argc` as its code.
 
 Spawning is **real authority** — a process that can start programs can
 multiply — so unlike the VFS reads, `SYS_SPAWN` is capability-gated:
@@ -83,9 +98,9 @@ spawning recycles pids at runtime). Fixed here:
 
 ## Known limits / follow-ups
 
-- No argv/environment yet — programs start at `_start` with no arguments.
-- No `fork`; spawn always loads a fresh ELF (which suits a
-  no-shared-memory microkernel).
+- argv is delivered (above); no environment strings yet, and no `fork` —
+  spawn always loads a fresh ELF (which suits a no-shared-memory
+  microkernel). argv caps at 8 tokens / 480 bytes.
 - Exit ledger is 16 deep; a program whose exit is never waited on ages
   out of the ledger (harmless — `SYS_WAITPID` then returns ENOENT once
   the PCB is also reaped).
