@@ -100,7 +100,7 @@ OBJECTS = $(KERNEL_SOURCES:$(KERNEL_DIR)/src/%.c=$(BUILD_DIR)/%.o) \
 -include $(OBJECTS:.o=.d)
 
 # Targets
-.PHONY: all clean kernel run debug dump test test-list test-coverage ci-smoke ci-smoke-disk ci-smoke-net ci-smoke-resonant ci-smoke-qseed ci-smoke-swarm swarm-pingpong
+.PHONY: all clean kernel run debug dump test test-list test-coverage ci-smoke ci-smoke-disk ci-smoke-net ci-smoke-http ci-smoke-resonant ci-smoke-qseed ci-smoke-swarm swarm-pingpong
 
 all: kernel
 
@@ -583,6 +583,16 @@ ci-smoke: kernel
 		echo ""; echo "=== Smoke Test FAILED ==="; exit 1; \
 	fi
 	@echo "SUCCESS: SYS_UDP capability gate proven (capless UDP bind denied EPERM)"
+	@# Capability gate (epic #82): the capless ghost-test must be denied a
+	@# SYS_TCP connect. Exact -4 (EPERM), so ENOSYS(-3)/EINVAL(-1) can't fake
+	@# it; the cap check precedes the NIC-present check, so this holds in the
+	@# NIC-less default boot.
+	@if ! grep -q "NETC: capless TCP connect denied (EPERM)" /tmp/qemu-boot.log 2>/dev/null; then \
+		echo "ERROR: capless SYS_TCP connect was not denied (NETC: capless TCP connect denied)"; \
+		echo "Boot log:"; cat /tmp/qemu-boot.log 2>/dev/null || true; \
+		echo ""; echo "=== Smoke Test FAILED ==="; exit 1; \
+	fi
+	@echo "SUCCESS: SYS_TCP capability gate proven (capless TCP connect denied EPERM)"
 	@# Honesty gate: this default boot is DISKLESS, so the driver must say so
 	@# and MUST NOT claim a disk, and 'sync' must fail honestly (no disk).
 	@if ! grep -q "ATA: no disk" /tmp/qemu-boot.log 2>/dev/null; then \
@@ -807,6 +817,62 @@ ci-smoke-net: kernel
 	@echo "SUCCESS: userspace DNS client over ring-3 UDP sockets parsed an A record"
 	@echo ""
 	@echo "=== Networking Test PASSED ==="
+
+# CI Smoke Test (TCP client — epic #82): the shell fetches a web page.
+#
+# The hermetic proof runs a loopback HTTP server on the runner and has the
+# guest fetch from it: SLIRP forwards a guest connection to 10.0.2.2:PORT to
+# the host's 127.0.0.1:PORT, so this exercises a full three-way handshake,
+# bidirectional data, and FIN teardown against a REAL TCP peer with zero
+# external network. The server-start, readiness probe, QEMU boot, and server
+# kill all live in ONE recipe line (a single shell) so the background server
+# is alive for the whole QEMU lifetime and reaped on exit — Make runs each
+# recipe line in its own shell, so a `&` job started on a separate line would
+# orphan and race. `http example.com` follows as the (non-hermetic, same class
+# as the DNS gates) real-world capstone.
+ci-smoke-http: kernel
+	@echo "=== QuantumOS TCP Client Smoke Test (http fetch) ==="
+	@echo "[1/2] Loopback HTTP server up, then boot QEMU to fetch from it..."
+	@set -e; \
+	 mkdir -p /tmp/qos-httproot; \
+	 printf 'quantumos tcp fetch ok\n' > /tmp/qos-httproot/index.html; \
+	 ( cd /tmp/qos-httproot && python3 -m http.server 18080 --bind 127.0.0.1 ) >/tmp/qos-httpd.log 2>&1 & \
+	 HPID=$$!; \
+	 trap 'kill $$HPID 2>/dev/null || true' EXIT; \
+	 ok=0; for i in $$(seq 1 50); do if curl -s -o /dev/null http://127.0.0.1:18080/; then ok=1; break; fi; sleep 0.2; done; \
+	 [ $$ok = 1 ] || { echo "ERROR: loopback httpd never came up"; cat /tmp/qos-httpd.log 2>/dev/null || true; exit 1; }; \
+	 ( printf 'http 10.0.2.2 18080\nhttp example.com\n'; sleep 20 ) | timeout 22s qemu-system-x86_64 \
+		-kernel $(BUILD_DIR)/kernel.elf32 \
+		-netdev user,id=n0 -device rtl8139,netdev=n0 -serial stdio -m 128M \
+		-display none -no-reboot 2>&1 | tee /tmp/qemu-http.log || true
+	@echo ""
+	@echo "[2/2] Validating the fetch..."
+	@# Hermetic hard proof: the three-way handshake + GET + response + FIN
+	@# against the loopback server. Tolerant HTTP/1.[01] so python's
+	@# protocol_version isn't hardcoded; the host label carries no port.
+	@if ! grep -qE "qsh: http 10.0.2.2 -> HTTP/1\.[01] 200" /tmp/qemu-http.log 2>/dev/null; then \
+		echo "ERROR: hermetic TCP fetch did not complete (qsh: http 10.0.2.2 -> HTTP/1.x 200)"; \
+		echo "Boot log:"; cat /tmp/qemu-http.log 2>/dev/null || true; \
+		echo "Server log:"; cat /tmp/qos-httpd.log 2>/dev/null || true; \
+		echo ""; echo "=== TCP Test FAILED ==="; exit 1; \
+	fi
+	@echo "SUCCESS: three-way handshake + GET + response + FIN against a loopback server (hermetic)"
+	@if ! grep -qE "qsh: http 10.0.2.2: [0-9]+ bytes received" /tmp/qemu-http.log 2>/dev/null; then \
+		echo "ERROR: hermetic fetch did not reach EOF (qsh: http 10.0.2.2: N bytes received)"; \
+		echo "Boot log:"; cat /tmp/qemu-http.log 2>/dev/null || true; \
+		echo ""; echo "=== TCP Test FAILED ==="; exit 1; \
+	fi
+	@echo "SUCCESS: bidirectional data + clean teardown (byte count at EOF)"
+	@# Real-world capstone: same non-hermetic runner-egress class as the
+	@# existing example.com DNS gate.
+	@if ! grep -qE "qsh: http example.com -> HTTP/1\.[01] 200" /tmp/qemu-http.log 2>/dev/null; then \
+		echo "ERROR: real-world fetch failed (qsh: http example.com -> HTTP/1.x 200)"; \
+		echo "Boot log:"; cat /tmp/qemu-http.log 2>/dev/null || true; \
+		echo ""; echo "=== TCP Test FAILED ==="; exit 1; \
+	fi
+	@echo "SUCCESS: fetched http://example.com/ over TCP — QuantumOS reads the web"
+	@echo ""
+	@echo "=== TCP Test PASSED ==="
 
 # CI Smoke Test (resonant scheduler): rebuild WITH SCHED_RESONANT=1 and prove
 # the alternate policy still boots to ready, still passes the ghostd merge gate

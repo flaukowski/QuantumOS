@@ -94,4 +94,43 @@ void net_udp_cleanup(uint32_t pid);
  * reserved (>= 224.0.0.0), 255.255.255.255, and our own address. */
 int net_udp_dst_ok(const uint8_t *dip);
 
+/* ---- ring-3 TCP client (epic #82) ----
+ *
+ * Syscall-facing operations on the single connection. All run in cli'd
+ * syscall context and never touch the NIC: the IF=1 net thread owns the
+ * whole state machine, segment TX, timers, and retransmission; syscalls
+ * only read/write shared TCB fields under the publish discipline and
+ * post one-shot request flags the net thread services. */
+
+/* net_tcp_* return codes (mapped to SYSCALL_* by the syscall layer). */
+#define NET_TCP_EINVAL (-1)     /* not the owner / bad state / bad arg */
+#define NET_TCP_EIO (-2)        /* connection refused, reset, or timed out */
+#define NET_TCP_WOULDBLOCK (-3) /* handshake/close in progress, RX empty, TX busy */
+#define NET_TCP_ENONET (-4)     /* no NIC present (hard failure) */
+
+/* Active open to ip:port. WOULDBLOCK while the handshake runs (poll), 0
+ * once ESTABLISHED, EIO on refuse/timeout, ENONET with no NIC, EINVAL if
+ * another owner holds the connection. */
+long net_tcp_connect(uint32_t pid, const uint8_t *ip, uint16_t port);
+
+/* Queue up to MSS bytes (kernel memory) for transmission. Returns bytes
+ * accepted, WOULDBLOCK while a segment is still outstanding, EINVAL if
+ * not ESTABLISHED or not the owner, EIO on a broken connection. */
+long net_tcp_send(uint32_t pid, const uint8_t *buf, uint16_t len);
+
+/* Copy received bytes into `buf` (kernel memory, up to maxlen). Returns
+ * the byte count, 0 at EOF (peer closed and the ring is drained),
+ * WOULDBLOCK when the ring is momentarily empty, EIO on reset. */
+long net_tcp_recv(uint32_t pid, uint8_t *buf, uint16_t maxlen);
+
+/* Graceful close (send FIN). Returns 0 once the connection is fully
+ * closed, WOULDBLOCK while the teardown completes (poll). */
+long net_tcp_close(uint32_t pid);
+
+/* 0 ESTABLISHED, WOULDBLOCK connecting, EIO error, EINVAL if not owner. */
+long net_tcp_status(uint32_t pid);
+
+/* Abort the connection if `pid` owns it (process teardown). */
+void net_tcp_cleanup(uint32_t pid);
+
 #endif /* NET_H */

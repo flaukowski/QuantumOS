@@ -35,6 +35,7 @@
 #define SYS_SYNC 25
 #define SYS_RESOLVE 26
 #define SYS_UDP 27
+#define SYS_TCP 28
 
 /* SYS_RESOLVE / SYS_UDP: still pending (poll again) / ring full. */
 #define RESOLVE_WOULDBLOCK (-11)
@@ -45,6 +46,13 @@
 #define UDP_SENDTO 1
 #define UDP_RECVFROM 2
 #define UDP_CLOSE 3
+
+/* SYS_TCP operations (arg 1) */
+#define TCP_CONNECT 0
+#define TCP_SEND 1
+#define TCP_RECV 2
+#define TCP_CLOSE 3
+#define TCP_STATUS 4
 
 /* SYS_WAITPID: the target is still running. */
 #define WAITPID_RUNNING 256
@@ -256,6 +264,21 @@ typedef struct {
 
 static inline long udp_(long op, udp_req_t *req) {
     return usys2(SYS_UDP, op, (long)req);
+}
+
+/* SYS_TCP request block (epic #82). Reuses the udp_req_t layout (the
+ * single connection means the `sock` field is unused).
+ *   CONNECT:  in ip/port (dst)          -> 0 connected, -11 connecting
+ *   SEND:     in buf, len (<= 1460)      -> bytes accepted, -11 tx busy
+ *   RECV:     in buf, len (buf size)     -> byte count, 0 = EOF, -11 empty
+ *   CLOSE:    (none)                     -> 0 closed, -11 closing
+ *   STATUS:   (none)                     -> 0 established, -11 connecting
+ * Errors: -4 EPERM (no network capability), -1 EINVAL, -2 EFAULT,
+ * -5 EIO (refused/reset/timeout/no NIC). */
+typedef udp_req_t tcp_req_t;
+
+static inline long tcp_(long op, tcp_req_t *req) {
+    return usys2(SYS_TCP, op, (long)req);
 }
 
 /* Start an initrd ELF as a new ring-3 process. `cmd` is a command line:

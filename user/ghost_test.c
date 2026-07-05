@@ -142,6 +142,28 @@ void _start(void) {
         }
     }
 
+    /* And for the TCP client (epic #82): a capless connect must be EPERM
+     * — checked EXACTLY (-4), so an unimplemented syscall (ENOSYS -3) or
+     * a bad-argument path can't satisfy it. The capability check precedes
+     * the NIC-present check, so this holds in the NIC-less default boot. */
+    {
+        tcp_req_t treq;
+        for (unsigned i = 0; i < sizeof(treq); i++) {
+            ((unsigned char *)&treq)[i] = 0;
+        }
+        treq.ip[0] = 10;
+        treq.ip[1] = 0;
+        treq.ip[2] = 2;
+        treq.ip[3] = 2;
+        treq.port = 80;
+        long tr = tcp_(TCP_CONNECT, &treq);
+        if (tr == -4) {
+            write_str("NETC: capless TCP connect denied (EPERM)");
+        } else {
+            write_str("NETC: WARNING — capless TCP connect was NOT denied");
+        }
+    }
+
     const uint32_t seeds[3] = {GHOST_SEED_0, GHOST_SEED_1, GHOST_SEED_2};
     uint32_t pats[3][GHOST_PW];
 

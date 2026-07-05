@@ -167,9 +167,11 @@ for source in $(find "$KERNEL_DIR/src" -name "*.c" 2>/dev/null); do
             func_name="${BASH_REMATCH[1]}"
 
             # Skip common non-functions and keywords (_Static_assert is
-            # the C11 compile-time assert keyword, not a function call)
+            # the C11 compile-time assert keyword, not a function call;
+            # `else`/`do`/`goto` can be left adjacent to a '(' when the
+            # naive removal above strips the preceding `if (`).
             case "$func_name" in
-                if|while|for|switch|return|sizeof|typedef|struct|enum|union|static|extern|const|volatile|inline|__attribute__|ALIGNED|PACKED|_Static_assert)
+                if|else|do|goto|while|for|switch|return|sizeof|typedef|struct|enum|union|static|extern|const|volatile|inline|__attribute__|ALIGNED|PACKED|_Static_assert)
                     ;;
                 *)
                     CALLED_FUNCTIONS["$func_name"]=1
