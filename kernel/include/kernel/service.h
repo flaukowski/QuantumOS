@@ -111,6 +111,11 @@ typedef struct {
      * re-minted on every start. The spawn right: SYS_SPAWN starts initrd
      * programs only for holders. Held only by qsh (epic #62 phase 3). */
     uint8_t grant_spawn;
+    /* Grant a CAP_RESOURCE_DEVICE write cap over DEVICE_ID_DISK, re-minted
+     * on every start. The filesystem-write right: create/append/unlink on
+     * the RAM overlay and SYS_SYNC to the persistence disk. Held only by
+     * qsh (epic #71). */
+    uint8_t grant_fswrite;
 } service_definition_t;
 
 /* ============================================================================

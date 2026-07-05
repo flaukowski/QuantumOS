@@ -13,6 +13,8 @@
 #include <kernel/com2_uart.h>
 #include <kernel/console.h>
 #include <kernel/initrd.h>
+#include <kernel/ata.h>
+#include <kernel/ramfs.h>
 #include <kernel/vga.h>
 #include <kernel/fb.h>
 #ifdef SCHED_RESONANT
@@ -154,6 +156,14 @@ static void kernel_init(void) {
     // archive baked into the kernel image, served to ring 3 through the
     // SYS_OPEN/SYS_READ/SYS_CLOSE/SYS_READDIR VFS calls.
     initrd_init();
+
+    // Probe the ATA disk (epic #71): the persistence substrate. A
+    // diskless boot logs itself honestly and changes nothing else.
+    // With a disk carrying a QDSK archive, the RAM filesystem overlay
+    // is restored from it — files written and synced in a previous
+    // boot come back.
+    ata_init();
+    persist_restore();
 
     // Initialize core services
     splash_stage("capabilities + quantum resources", 60);

@@ -124,15 +124,18 @@ typedef struct process {
         uint32_t quantum_cap;      /* Capability for the shared qubit pool */
     } quantum;
 
-    /* VFS (epic #62 phase 2): per-process open-file table over the
-     * read-only embedded initrd. Cleared with the PCB, so nothing
-     * survives exit; the data pointers reference the embedded archive,
-     * which lives forever. */
+    /* VFS (epic #62 phase 2; writable overlay in epic #71): per-process
+     * open-file table. Cleared with the PCB, so nothing survives exit.
+     * RO fds snapshot {data,size} at open — into the embedded initrd
+     * (lives forever) or a RAM-overlay file (pointer stable until
+     * unlink, which the kernel refuses while any fd references it). */
     struct {
-        const uint8_t *data; /* file bytes inside the embedded image */
+        const uint8_t *data; /* file bytes (initrd or overlay) */
         uint32_t size;
         uint32_t offset;
         bool used;
+        bool writable;   /* opened with write flags (overlay only) */
+        int16_t ram_idx; /* overlay file index, -1 = initrd-backed */
     } fds[PROCESS_MAX_FDS];
 
     /* Internal kernel fields */
@@ -221,6 +224,11 @@ size_t process_format_ps(char *buf, size_t max);
  * tell whether the slot still holds the same process or has been recycled
  * to an unrelated one (epic #62 phase 3 watchdog hardening). */
 uint32_t process_get_generation(uint32_t pid);
+
+/* Does any live process hold an open fd whose data pointer equals `data`?
+ * Backs SYS_UNLINK's refuse-while-open check (epic #71): an overlay file's
+ * storage may not be freed while a reader still snapshots it. */
+bool process_any_fd_references(const void *data);
 
 /* Quantum process support */
 status_t process_set_quantum_aware(uint32_t pid, bool aware);

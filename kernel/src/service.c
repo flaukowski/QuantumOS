@@ -16,6 +16,7 @@
 #include <kernel/quantum.h>
 #include <kernel/com2_uart.h>
 #include <kernel/console.h>
+#include <kernel/ata.h>
 #include <kernel/syscall.h>
 #include <kernel/interrupts.h>
 #include <kernel/boot.h>
@@ -249,6 +250,14 @@ static svc_result_t start_slot(service_slot_t *slot) {
         if (cap_create(pid, CAP_RESOURCE_PROCESS, SPAWN_RESOURCE_ID, CAP_EXECUTE, 0, &scap) !=
             CAP_SUCCESS) {
             boot_log("service: spawn cap grant failed");
+            boot_log(slot->info.name);
+        }
+    }
+    if (slot->def.grant_fswrite) {
+        uint32_t fcap = CAP_ID_INVALID;
+        if (cap_create(pid, CAP_RESOURCE_DEVICE, DEVICE_ID_DISK, CAP_DEVICE | CAP_READ | CAP_WRITE,
+                       0, &fcap) != CAP_SUCCESS) {
+            boot_log("service: fs-write cap grant failed");
             boot_log(slot->info.name);
         }
     }

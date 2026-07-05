@@ -87,8 +87,93 @@ static const char *arg_of(const char *line, const char *cmd) {
  * ------------------------------------------------------------------ */
 
 static void cmd_help(void) {
-    out("qsh: commands: help echo ps free uptime pid ls cat run qrand qseed ghost clear "
-        "exit\r\n");
+    out("qsh: commands: help echo ps free uptime pid ls cat write rm sync run qrand qseed "
+        "ghost clear exit\r\n");
+}
+
+/* write <path> <text>: create/truncate an overlay file with the text
+ * (the shell's filesystem-write capability at work). */
+static void cmd_write(const char *args) {
+    /* Split "<path> <text...>" */
+    char path[64];
+    int p = 0;
+    while (args[p] && args[p] != ' ' && p < (int)sizeof(path) - 1) {
+        path[p] = args[p];
+        p++;
+    }
+    path[p] = '\0';
+    const char *text = args + p;
+    while (*text == ' ') {
+        text++;
+    }
+    if (!path[0] || !*text) {
+        out("qsh: write: usage: write <path> <text>\r\n");
+        return;
+    }
+
+    long fd = openf_(path, O_WRONLY | O_CREAT | O_TRUNC);
+    if (fd < 0) {
+        char b[96];
+        int o = ghost_put(b, 0, "qsh: write: cannot create (err ");
+        o = ghost_put_u(b, o, (unsigned)(-fd));
+        o = ghost_put(b, o, ")\r\n");
+        out_bytes(b, o);
+        return;
+    }
+
+    long total = 0;
+    long len = str_len(text);
+    while (total < len) {
+        long w = fwrite_(fd, text + total, len - total);
+        if (w <= 0) {
+            break;
+        }
+        total += w;
+    }
+    fwrite_(fd, "\n", 1);
+    close_(fd);
+
+    char b[96];
+    int o = ghost_put(b, 0, "qsh: wrote ");
+    o = ghost_put_u(b, o, (unsigned)total);
+    o = ghost_put(b, o, " bytes to ");
+    for (int i = 0; path[i] && o < (int)sizeof(b) - 4; i++) {
+        b[o++] = path[i];
+    }
+    o = ghost_put(b, o, "\r\n");
+    out_bytes(b, o);
+}
+
+static void cmd_rm(const char *path) {
+    long r = unlink_(path);
+    if (r == 0) {
+        out("qsh: removed\r\n");
+    } else {
+        char b[96];
+        int o = ghost_put(b, 0, "qsh: rm: failed (err ");
+        o = ghost_put_u(b, o, (unsigned)(-r));
+        o = ghost_put(b, o, ")\r\n");
+        out_bytes(b, o);
+    }
+}
+
+static void cmd_sync(void) {
+    long r = sync_();
+    if (r >= 0) {
+        char b[64];
+        int o = ghost_put(b, 0, "qsh: sync ok (");
+        o = ghost_put_u(b, o, (unsigned)r);
+        o = ghost_put(b, o, " files flushed)\r\n");
+        out_bytes(b, o);
+    } else if (r == -5) {
+        out("qsh: sync failed (no disk)\r\n");
+    } else {
+        char b[64];
+        int o = ghost_put(b, 0, "qsh: sync failed (err ");
+        o = ghost_put_u(b, o, (unsigned)(-r));
+        o = ghost_put(b, o, ")\r\n");
+        out_bytes(b, o);
+    }
 }
 
 /* Print an initrd file raw (used for the motd greeting and `cat`).
@@ -344,6 +429,14 @@ static void execute(const char *line) {
         cmd_run(a);
     } else if (is_cmd(line, "run")) {
         out("qsh: run: usage: run <path>\r\n");
+    } else if ((a = arg_of(line, "write")) != 0) {
+        cmd_write(a);
+    } else if (is_cmd(line, "write")) {
+        out("qsh: write: usage: write <path> <text>\r\n");
+    } else if ((a = arg_of(line, "rm")) != 0) {
+        cmd_rm(a);
+    } else if (is_cmd(line, "sync")) {
+        cmd_sync();
     } else if (is_cmd(line, "free")) {
         cmd_free();
     } else if (is_cmd(line, "uptime")) {

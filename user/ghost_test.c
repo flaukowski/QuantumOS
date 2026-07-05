@@ -99,6 +99,18 @@ void _start(void) {
         }
     }
 
+    /* And for filesystem writes (epic #71): only qsh holds the
+     * filesystem-write capability, so a capless create must be denied
+     * EPERM before the overlay is even touched. */
+    {
+        long fr = openf_("/data/forged", O_WRONLY | O_CREAT | O_TRUNC);
+        if (fr == -4) {
+            write_str("FSW: capless caller denied (EPERM)");
+        } else {
+            write_str("FSW: WARNING — capless caller was NOT denied");
+        }
+    }
+
     const uint32_t seeds[3] = {GHOST_SEED_0, GHOST_SEED_1, GHOST_SEED_2};
     uint32_t pats[3][GHOST_PW];
 
