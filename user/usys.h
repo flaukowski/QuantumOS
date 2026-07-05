@@ -34,9 +34,17 @@
 #define SYS_UNLINK 24
 #define SYS_SYNC 25
 #define SYS_RESOLVE 26
+#define SYS_UDP 27
 
-/* SYS_RESOLVE: still resolving, poll again. */
+/* SYS_RESOLVE / SYS_UDP: still pending (poll again) / ring full. */
 #define RESOLVE_WOULDBLOCK (-11)
+#define UDP_WOULDBLOCK (-11)
+
+/* SYS_UDP operations (arg 1) */
+#define UDP_BIND 0
+#define UDP_SENDTO 1
+#define UDP_RECVFROM 2
+#define UDP_CLOSE 3
 
 /* SYS_WAITPID: the target is still running. */
 #define WAITPID_RUNNING 256
@@ -227,6 +235,27 @@ static inline long sync_(void) {
  * -5 EIO if there is no network or the lookup failed. */
 static inline long resolve_(const char *host, unsigned char *ip) {
     return usys2(SYS_RESOLVE, (long)host, (long)ip);
+}
+
+/* SYS_UDP request block (epic #80). Layout MUST stay byte-identical to
+ * the kernel's udp_req_k_t: 24 bytes, buf at offset 16, no padding.
+ *   BIND:     in port (0 = ephemeral)          -> returns sock id
+ *   SENDTO:   in sock, ip/port (dst), len, buf -> 0, or UDP_WOULDBLOCK
+ *   RECVFROM: in sock, len (buf size), buf     -> byte count (out ip/
+ *             port = sender, out len = count), or UDP_WOULDBLOCK
+ *   CLOSE:    in sock                          -> 0
+ * Errors: -4 EPERM (no network capability / not the socket's owner),
+ * -1 EINVAL (bad sock/port/dst), -2 EFAULT, -5 EIO (no NIC). */
+typedef struct {
+    long sock;
+    unsigned char ip[4];
+    unsigned short port;
+    unsigned short len;
+    void *buf;
+} udp_req_t;
+
+static inline long udp_(long op, udp_req_t *req) {
+    return usys2(SYS_UDP, op, (long)req);
 }
 
 /* Start an initrd ELF as a new ring-3 process. `cmd` is a command line:

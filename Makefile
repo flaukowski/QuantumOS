@@ -572,6 +572,17 @@ ci-smoke: kernel
 		echo ""; echo "=== Smoke Test FAILED ==="; exit 1; \
 	fi
 	@echo "SUCCESS: SYS_RESOLVE capability gate proven (capless caller denied EPERM)"
+	@# Capability gate (epic #80): the capless ghost-test must be denied a
+	@# SYS_UDP socket bind. The probe checks EXACTLY -4 (EPERM), so an
+	@# unimplemented syscall (ENOSYS -3) or an argument error (EINVAL -1)
+	@# cannot fake a pass; the cap check precedes every network check, so
+	@# this holds in this NIC-less default boot.
+	@if ! grep -q "NETC: capless UDP bind denied (EPERM)" /tmp/qemu-boot.log 2>/dev/null; then \
+		echo "ERROR: capless SYS_UDP bind was not denied (NETC: capless UDP bind denied)"; \
+		echo "Boot log:"; cat /tmp/qemu-boot.log 2>/dev/null || true; \
+		echo ""; echo "=== Smoke Test FAILED ==="; exit 1; \
+	fi
+	@echo "SUCCESS: SYS_UDP capability gate proven (capless UDP bind denied EPERM)"
 	@# Honesty gate: this default boot is DISKLESS, so the driver must say so
 	@# and MUST NOT claim a disk, and 'sync' must fail honestly (no disk).
 	@if ! grep -q "ATA: no disk" /tmp/qemu-boot.log 2>/dev/null; then \
@@ -702,8 +713,8 @@ ci-smoke-disk: kernel
 # RX interrupt -> ARP parse. Both directions through the real driver.
 ci-smoke-net: kernel
 	@echo "=== QuantumOS Networking Smoke Test (rtl8139 + user-net) ==="
-	@echo "[1/3] Booting with -device rtl8139 on QEMU user-net (+ shell nslookup)..."
-	@( printf 'nslookup example.com\n'; sleep 11 ) | timeout 13s qemu-system-x86_64 \
+	@echo "[1/3] Booting with -device rtl8139 on QEMU user-net (+ shell nslookup + udping)..."
+	@( printf 'nslookup example.com\nudping example.com\n'; sleep 15 ) | timeout 17s qemu-system-x86_64 \
 		-kernel $(BUILD_DIR)/kernel.elf32 \
 		-netdev user,id=n0 -device rtl8139,netdev=n0 -serial stdio -m 128M \
 		-display none -no-reboot 2>&1 | tee /tmp/qemu-net.log || true
@@ -769,6 +780,31 @@ ci-smoke-net: kernel
 		echo ""; echo "=== Networking Test FAILED ==="; exit 1; \
 	fi
 	@echo "SUCCESS: ring-3 nslookup resolved a hostname via SYS_RESOLVE"
+	@# Ring-3 UDP sockets (epic #80): the piped 'udping example.com' does DNS
+	@# ENTIRELY IN USERSPACE — builds the query in ring 3, UDP_SENDTO to
+	@# 10.0.2.3:53, UDP_RECVFROM the raw reply, parses it in ring 3. The
+	@# byte-count line proves raw datagrams flow both ways through the
+	@# socket API. Hermeticity: SLIRP only FORWARDS DNS to the runner's
+	@# resolver (it synthesizes nothing), so these gates share the
+	@# runner-resolver dependency of the DNS gates above — no new risk
+	@# class, since those already hard-fail without a resolver.
+	@if grep -q "qsh: udping: timed out" /tmp/qemu-net.log 2>/dev/null; then \
+		echo "ERROR: udping got no datagram back (qsh: udping: timed out)"; \
+		echo "Boot log:"; cat /tmp/qemu-net.log 2>/dev/null || true; \
+		echo ""; echo "=== Networking Test FAILED ==="; exit 1; \
+	fi
+	@if ! grep -qE "qsh: udp [0-9]+ bytes from 10.0.2.3:53" /tmp/qemu-net.log 2>/dev/null; then \
+		echo "ERROR: the socket API did not carry a datagram round trip (qsh: udp N bytes from 10.0.2.3:53)"; \
+		echo "Boot log:"; cat /tmp/qemu-net.log 2>/dev/null || true; \
+		echo ""; echo "=== Networking Test FAILED ==="; exit 1; \
+	fi
+	@echo "SUCCESS: ring-3 UDP sockets carried raw datagrams both ways (SYS_UDP)"
+	@if ! grep -qE "qsh: udpdns example.com -> [0-9]+\.[0-9]+\.[0-9]+\.[0-9]+" /tmp/qemu-net.log 2>/dev/null; then \
+		echo "ERROR: userspace DNS over SYS_UDP did not parse an A record (qsh: udpdns example.com -> a.b.c.d)"; \
+		echo "Boot log:"; cat /tmp/qemu-net.log 2>/dev/null || true; \
+		echo ""; echo "=== Networking Test FAILED ==="; exit 1; \
+	fi
+	@echo "SUCCESS: userspace DNS client over ring-3 UDP sockets parsed an A record"
 	@echo ""
 	@echo "=== Networking Test PASSED ==="
 

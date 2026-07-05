@@ -680,6 +680,115 @@ static uint64_t sys_resolve(uint32_t pid, uint64_t host_ptr, uint64_t out_ptr) {
     return RESOLVE_WOULDBLOCK;
 }
 
+/* SYS_UDP (epic #80): ring-3 UDP sockets, op-multiplexed over a request
+ * struct (usys wrappers cap out at 3 registers — the socketcall
+ * pattern). The layout must match user/usys.h's udp_req_t exactly:
+ * 24 bytes, buf at offset 16, no padding either side. */
+typedef struct __attribute__((packed)) {
+    int64_t sock;
+    uint8_t ip[4];
+    uint16_t port;
+    uint16_t len;
+    uint64_t buf;
+} udp_req_k_t;
+_Static_assert(sizeof(udp_req_k_t) == 24, "udp_req_t ABI drift");
+
+/* Map a net_udp_* result onto the syscall ABI. */
+static uint64_t udp_map_err(long r) {
+    switch (r) {
+    case NET_UDP_EINVAL:
+        return SYSCALL_EINVAL;
+    case NET_UDP_EPERM:
+        return SYSCALL_EPERM;
+    case NET_UDP_EAGAIN:
+        return RESOLVE_WOULDBLOCK;
+    case NET_UDP_ENONET:
+        return SYSCALL_EIO;
+    default:
+        return (uint64_t)r;
+    }
+}
+
+static uint64_t sys_udp(uint32_t pid, uint64_t op, uint64_t req_ptr) {
+    /* Capability FIRST — before any argument or network check — so the
+     * capless-denial gate fires even in the NIC-less default boot (the
+     * sys_resolve precedent). */
+    if (cap_find_resource(pid, CAP_RESOURCE_DEVICE, CAP_READ, DEVICE_ID_NET) != CAP_SUCCESS) {
+        return SYSCALL_EPERM;
+    }
+    /* The WHOLE struct must sit inside the user window — a struct whose
+     * first byte is in range but whose tail straddles the 2 GB boundary
+     * would have the kernel read/write past the user half. */
+    if (!in_user_range(req_ptr) || !in_user_range(req_ptr + sizeof(udp_req_k_t) - 1)) {
+        return SYSCALL_EFAULT;
+    }
+    udp_req_k_t req;
+    const uint8_t *usrc = (const uint8_t *)req_ptr;
+    for (size_t i = 0; i < sizeof(req); i++) {
+        ((uint8_t *)&req)[i] = usrc[i];
+    }
+
+    switch (op) {
+    case UDP_OP_BIND:
+        return udp_map_err(net_udp_bind(pid, req.port));
+
+    case UDP_OP_SENDTO: {
+        if (req.len > UDP_PAYLOAD_MAX) {
+            return SYSCALL_EINVAL;
+        }
+        if (!net_udp_dst_ok(req.ip)) {
+            return SYSCALL_EINVAL; /* fail fast — never ARP the unARPable */
+        }
+        /* req.buf is a second untrusted pointer; the user window is one
+         * contiguous range, so endpoint checks cover every byte. */
+        if (req.len > 0 && (!in_user_range(req.buf) || !in_user_range(req.buf + req.len - 1))) {
+            return SYSCALL_EFAULT;
+        }
+        /* Bounce to kernel memory: syscalls run cli'd on one CPU (the
+         * sys_readdir static-buffer justification), and the net thread
+         * must never see a user pointer — it runs under its own CR3. */
+        static uint8_t bounce[UDP_PAYLOAD_MAX];
+        const uint8_t *ubuf = (const uint8_t *)req.buf;
+        for (uint16_t i = 0; i < req.len; i++) {
+            bounce[i] = ubuf[i];
+        }
+        return udp_map_err(net_udp_sendto(pid, (long)req.sock, req.ip, req.port, bounce, req.len));
+    }
+
+    case UDP_OP_RECVFROM: {
+        uint16_t want = req.len > UDP_PAYLOAD_MAX ? UDP_PAYLOAD_MAX : req.len;
+        if (want > 0 && (!in_user_range(req.buf) || !in_user_range(req.buf + want - 1))) {
+            return SYSCALL_EFAULT;
+        }
+        static uint8_t bounce[UDP_PAYLOAD_MAX];
+        uint8_t sip[4];
+        uint16_t sport = 0;
+        long r = net_udp_recvfrom(pid, (long)req.sock, bounce, want, sip, &sport);
+        if (r < 0) {
+            return udp_map_err(r);
+        }
+        uint8_t *ubuf = (uint8_t *)req.buf;
+        for (long i = 0; i < r; i++) {
+            ubuf[i] = bounce[i];
+        }
+        /* Report the sender back through the (already validated) struct. */
+        udp_req_k_t *ureq = (udp_req_k_t *)req_ptr;
+        for (int i = 0; i < 4; i++) {
+            ureq->ip[i] = sip[i];
+        }
+        ureq->port = sport;
+        ureq->len = (uint16_t)r;
+        return (uint64_t)r;
+    }
+
+    case UDP_OP_CLOSE:
+        return udp_map_err(net_udp_close(pid, (long)req.sock));
+
+    default:
+        return SYSCALL_EINVAL;
+    }
+}
+
 static uint64_t sys_read(uint32_t pid, uint64_t fd, uint64_t user_ptr, uint64_t len) {
     process_t *cur = process_get_by_pid(pid);
     if (!cur || fd >= PROCESS_MAX_FDS || !cur->fds[fd].used) {
@@ -1025,6 +1134,9 @@ static void syscall_dispatch(cpu_state_t *state) {
         break;
     case SYS_RESOLVE:
         state->rax = sys_resolve(pid, state->rdi, state->rsi);
+        break;
+    case SYS_UDP:
+        state->rax = sys_udp(pid, state->rdi, state->rsi);
         break;
     default:
         state->rax = SYSCALL_ENOSYS;

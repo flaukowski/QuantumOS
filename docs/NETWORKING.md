@@ -189,13 +189,59 @@ the shell and gates `qsh: example.com -> <a.b.c.d>` — a hostname resolved
 **from ring 3** through the syscall, distinct from the boot self-test's
 `NET:` line. A NIC-less boot reports no network honestly.
 
+## Ring-3 UDP sockets: `SYS_UDP` (epic #80)
+
+`SYS_RESOLVE` asks the kernel to do one specific thing; `SYS_UDP` (#27)
+generalizes the same worker spine into real sockets — user programs send
+and receive **arbitrary datagrams**. It is op-multiplexed over a request
+struct (`udp_req_t` in `user/usys.h`; the usys wrappers cap out at three
+registers — the classic socketcall shape): `UDP_BIND` (port 0 =
+ephemeral, from 49152 up), `UDP_SENDTO`, `UDP_RECVFROM`, `UDP_CLOSE`.
+Everything is non-blocking (`WOULD_BLOCK` = poll again), and every op is
+gated on the same `DEVICE_ID_NET` capability held by `qsh` alone — the
+capless `ghost_test` proves the bind denial by attack every boot, NIC or
+no NIC (`NETC: capless UDP bind denied (EPERM)`).
+
+The concurrency design was adversarially attacked before implementation
+(epic #80 records the findings); the load-bearing rules:
+
+- **The net thread owns ALL NIC I/O.** `UDP_SENDTO` copies the payload
+  into a kernel TX ring (the net thread runs under its own CR3 — it must
+  never see a user pointer); the net thread drains it, ARP-resolving the
+  next hop through a small **ARP cache** (gateway and DNS proxy warm
+  after the self-test). The drain consumes an entry *completely* before
+  advancing the ring's tail, so a syscall can never overwrite an entry
+  mid-transmit.
+- **Every received frame is offered to the socket demux first** via a
+  single `net_rx()` wrapper — the only caller of `rtl8139_receive` — so
+  no kernel wait loop (ARP/DHCP/ICMP/DNS) can destroy a user datagram.
+  The demux validates ruthlessly: payload length comes from the UDP
+  header (never the padded frame length), fragments are dropped, forged
+  lengths can't overread the frame.
+- **Socket slots have a three-state lifecycle** (`FREE → ACTIVE →
+  CLOSING → FREE`): close and process-teardown only *mark* a slot; the
+  net thread alone retires `CLOSING → FREE`, at the top of a wake, where
+  it is by construction never mid-copy. A slot can't be rebound under a
+  preempted demux. Per-socket RX rings are SPSC with free-running
+  uint32 indexes; every multi-field publish ends with a compiler barrier
+  and one volatile store.
+
+The shell gains `udping <host>` — a **userspace DNS client**: it builds
+the A-query in ring 3, `UDP_SENDTO`s it to SLIRP's proxy `10.0.2.3:53`,
+`UDP_RECVFROM`s the raw reply (validating sender and txid), and parses
+the answer itself. CI gates both `qsh: udp <N> bytes from 10.0.2.3:53`
+(raw datagrams, both directions, through the socket API) and
+`qsh: udpdns example.com -> <a.b.c.d>` (the ring-3 parse). SLIRP only
+*forwards* DNS to the runner's resolver, so these gates share the
+existing DNS gates' (reliable) runner-resolver dependency — no new risk
+class.
+
 ## Known limits / follow-ups (the honest boundary)
 
-- **No TCP** is planned — Ethernet/ARP/IPv4/UDP/ICMP/DHCP/DNS + a ring-3
-  resolver is a complete, useful stack. TCP (with its state machine and
-  retransmission) is the honest follow-up.
-- `SYS_RESOLVE` is the first network primitive exposed to userland; a
-  fuller socket API (`sendto`/`recvfrom` over the same net-thread worker)
-  is the natural extension — the request/poll spine is already here.
-- Single rtl8139, IPv4 only. One resolve in flight at a time (only `qsh`
-  holds the capability, and it looks up one name at a time).
+- **No TCP** is planned — Ethernet/ARP/IPv4/UDP/ICMP/DHCP/DNS + ring-3
+  UDP sockets is a complete, useful stack. TCP (with its state machine
+  and retransmission) is the honest follow-up.
+- 4 sockets, 4-deep rings, 1472-byte datagrams (no IP fragmentation),
+  no UDP TX checksum (0 is legal for IPv4), no broadcast/multicast send.
+  Only `qsh` holds the network capability today.
+- Single rtl8139, IPv4 only. One kernel resolve in flight at a time.

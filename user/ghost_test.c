@@ -124,6 +124,24 @@ void _start(void) {
         }
     }
 
+    /* And for the socket API (epic #80): a capless UDP bind must be
+     * EPERM — checked EXACTLY (-4): an unimplemented syscall would be
+     * ENOSYS (-3) and a bad-argument path EINVAL (-1), and neither may
+     * satisfy this gate. The capability check precedes every argument
+     * and network check, so this holds in the NIC-less default boot. */
+    {
+        udp_req_t ureq;
+        for (unsigned i = 0; i < sizeof(ureq); i++) {
+            ((unsigned char *)&ureq)[i] = 0;
+        }
+        long ur = udp_(UDP_BIND, &ureq);
+        if (ur == -4) {
+            write_str("NETC: capless UDP bind denied (EPERM)");
+        } else {
+            write_str("NETC: WARNING — capless UDP bind was NOT denied");
+        }
+    }
+
     const uint32_t seeds[3] = {GHOST_SEED_0, GHOST_SEED_1, GHOST_SEED_2};
     uint32_t pats[3][GHOST_PW];
 
