@@ -15,6 +15,8 @@
 #include <kernel/initrd.h>
 #include <kernel/ata.h>
 #include <kernel/ramfs.h>
+#include <kernel/rtl8139.h>
+#include <kernel/net.h>
 #include <kernel/vga.h>
 #include <kernel/fb.h>
 #ifdef SCHED_RESONANT
@@ -165,6 +167,11 @@ static void kernel_init(void) {
     ata_init();
     persist_restore();
 
+    // Probe the RTL8139 NIC (epic #73). A NIC-less boot (the default
+    // -kernel path) logs "no rtl8139" and continues unchanged; the IRQ
+    // is unmasked and the ARP self-test runs only when a NIC is present.
+    rtl8139_init();
+
     // Initialize core services
     splash_stage("capabilities + quantum resources", 60);
     core_services_init();
@@ -183,6 +190,13 @@ static void kernel_init(void) {
     interrupt_enable(IRQ_BASE + IRQ_TIMER);
     interrupt_enable(IRQ_BASE + IRQ_KEYBOARD);
     interrupt_enable(IRQ_BASE + IRQ_COM1);
+    // Unmask the NIC's (dynamically assigned) IRQ line if a NIC came up.
+    // Its handler is routed from irq_handler's default case. On a PCI
+    // line >= 8 the slave PIC's cascade (IRQ2) must also be live — it is
+    // unmasked by pic_init at boot.
+    if (rtl8139_present()) {
+        interrupt_enable(IRQ_BASE + rtl8139_irq_line());
+    }
     interrupt_enable_all();
     boot_log("Timer started, interrupts enabled");
 
@@ -351,6 +365,17 @@ static void demo_thread_beta(void) {
     }
 }
 
+// Network self-test thread (epic #73): runs once interrupts are live so
+// the NIC RX IRQ can fire, ARP-resolves the user-net gateway, then idles.
+// A no-op on the NIC-less default boot.
+static void net_thread(void) {
+    net_init();
+    net_selftest();
+    while (1) {
+        __asm__ volatile("hlt");
+    }
+}
+
 // Scheduler + demo thread initialization
 static void scheduler_subsystem_init(void) {
     boot_log("Initializing scheduler...");
@@ -360,6 +385,11 @@ static void scheduler_subsystem_init(void) {
     }
     if (kernel_thread_create("beta", demo_thread_beta, PRIORITY_NORMAL, NULL) != STATUS_SUCCESS) {
         boot_log("Warning: failed to create kernel thread beta");
+    }
+    if (rtl8139_present()) {
+        if (kernel_thread_create("net", net_thread, PRIORITY_NORMAL, NULL) != STATUS_SUCCESS) {
+            boot_log("Warning: failed to create kernel thread net");
+        }
     }
 
     scheduler_init();

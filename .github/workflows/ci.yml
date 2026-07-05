@@ -519,6 +519,24 @@ jobs:
     - name: Prove persistence across reboots
       run: make ci-smoke-disk
 
+  networking:
+    name: Networking Test (rtl8139 + user-net ARP — epic #73)
+    runs-on: ubuntu-latest
+    needs: [build]
+    # Boot with an rtl8139 NIC on QEMU's user-mode network and prove the link
+    # layer end to end: SLIRP's gateway (10.0.2.2) always answers ARP, so an
+    # ARP request that gets a reply exercises PCI enumeration, the driver, the
+    # TX path, the RX interrupt, and ARP parsing. A required gate.
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+    - name: Install dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y build-essential qemu-system-x86 nasm
+    - name: ARP-resolve the SLIRP gateway through the rtl8139 driver
+      run: make ci-smoke-net
+
   integration:
     name: Integration Tests
     runs-on: ubuntu-latest
