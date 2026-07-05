@@ -100,7 +100,7 @@ OBJECTS = $(KERNEL_SOURCES:$(KERNEL_DIR)/src/%.c=$(BUILD_DIR)/%.o) \
 -include $(OBJECTS:.o=.d)
 
 # Targets
-.PHONY: all clean kernel run debug dump test test-list test-coverage ci-smoke ci-smoke-disk ci-smoke-resonant ci-smoke-qseed ci-smoke-swarm swarm-pingpong
+.PHONY: all clean kernel run debug dump test test-list test-coverage ci-smoke ci-smoke-disk ci-smoke-net ci-smoke-resonant ci-smoke-qseed ci-smoke-swarm swarm-pingpong
 
 all: kernel
 
@@ -597,6 +597,18 @@ ci-smoke: kernel
 		echo ""; echo "=== Smoke Test FAILED ==="; exit 1; \
 	fi
 	@echo "SUCCESS: watchdog rebirthed the shell after exit (QSH: reborn)"
+	@# epic #73: the default boot attaches no rtl8139, so the NIC driver must
+	@# report its honest absence and MUST NOT claim a NIC came up.
+	@if ! grep -q "NET: no rtl8139" /tmp/qemu-boot.log 2>/dev/null; then \
+		echo "ERROR: NIC-less boot did not report 'NET: no rtl8139'"; \
+		echo "Boot log:"; cat /tmp/qemu-boot.log 2>/dev/null || true; \
+		echo ""; echo "=== Smoke Test FAILED ==="; exit 1; \
+	fi
+	@if grep -q "NET: rtl8139 up" /tmp/qemu-boot.log 2>/dev/null; then \
+		echo "ERROR: NIC-less boot falsely claimed 'NET: rtl8139 up'"; \
+		echo ""; echo "=== Smoke Test FAILED ==="; exit 1; \
+	fi
+	@echo "SUCCESS: NIC-less boot degrades honestly (no rtl8139 reported)"
 	@echo ""
 	@echo "=== Smoke Test PASSED ==="
 
@@ -666,6 +678,40 @@ ci-smoke-disk: kernel
 	@echo "SUCCESS: content written in boot 1 read back in boot 2 — PERSISTENCE PROVEN"
 	@echo ""
 	@echo "=== Persistence Test PASSED ==="
+
+# CI Smoke Test (networking): boot WITH an rtl8139 NIC on QEMU's user-mode
+# network (SLIRP), and prove the link layer works end to end. SLIRP's gateway
+# (10.0.2.2) always answers ARP, so an ARP request that gets a reply exercises
+# the full path: PCI enumeration -> rtl8139 driver -> Ethernet TX -> SLIRP ->
+# RX interrupt -> ARP parse. Both directions through the real driver.
+ci-smoke-net: kernel
+	@echo "=== QuantumOS Networking Smoke Test (rtl8139 + user-net) ==="
+	@echo "[1/3] Booting with -device rtl8139 on QEMU user-net..."
+	@( sleep 9 ) | timeout 11s qemu-system-x86_64 -kernel $(BUILD_DIR)/kernel.elf32 \
+		-netdev user,id=n0 -device rtl8139,netdev=n0 -serial stdio -m 128M \
+		-display none -no-reboot 2>&1 | tee /tmp/qemu-net.log || true
+	@echo ""
+	@echo "[2/3] The NIC must be found and brought up..."
+	@if ! grep -q "NET: rtl8139 up" /tmp/qemu-net.log 2>/dev/null; then \
+		echo "ERROR: rtl8139 was not detected/brought up (NET: rtl8139 up)"; \
+		echo "Boot log:"; cat /tmp/qemu-net.log 2>/dev/null || true; \
+		echo ""; echo "=== Networking Test FAILED ==="; exit 1; \
+	fi
+	@echo "SUCCESS: rtl8139 NIC detected via PCI and brought up"
+	@echo "[3/3] ARP must resolve the SLIRP gateway (TX + RX round trip)..."
+	@if grep -q "NET: ARP 10.0.2.2 timed out" /tmp/qemu-net.log 2>/dev/null; then \
+		echo "ERROR: ARP timed out — no reply from the SLIRP gateway"; \
+		echo "Boot log:"; cat /tmp/qemu-net.log 2>/dev/null || true; \
+		echo ""; echo "=== Networking Test FAILED ==="; exit 1; \
+	fi
+	@if ! grep -q "NET: ARP 10.0.2.2 is at MAC" /tmp/qemu-net.log 2>/dev/null; then \
+		echo "ERROR: ARP did not resolve the gateway (NET: ARP 10.0.2.2 is at MAC)"; \
+		echo "Boot log:"; cat /tmp/qemu-net.log 2>/dev/null || true; \
+		echo ""; echo "=== Networking Test FAILED ==="; exit 1; \
+	fi
+	@echo "SUCCESS: ARP-resolved 10.0.2.2 — link layer works both directions"
+	@echo ""
+	@echo "=== Networking Test PASSED ==="
 
 # CI Smoke Test (resonant scheduler): rebuild WITH SCHED_RESONANT=1 and prove
 # the alternate policy still boots to ready, still passes the ghostd merge gate
