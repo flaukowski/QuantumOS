@@ -98,15 +98,44 @@ The default `-kernel` boot attaches no rtl8139; the driver logs
 unchanged. The default `make ci-smoke` double-side-gates that honest
 degrade (no-NIC line present, `rtl8139 up` absent).
 
+## Phase 2 — IPv4, UDP, and DHCP (`kernel/src/net.c`)
+
+On the same send/receive spine, phase 2 adds:
+
+- **IPv4** with the 20-byte header and its one's-complement header
+  checksum (`checksum16`).
+- **UDP** (checksum left 0 — "not computed", which RFC 768 permits for
+  IPv4 and SLIRP accepts).
+- A **DHCP client**: a full DISCOVER → OFFER → REQUEST → ACK exchange.
+  All four messages are broadcast (destination MAC `ff:…`, source IP
+  `0.0.0.0`, destination `255.255.255.255`) with the BOOTP broadcast flag
+  set, so no address or ARP resolution is needed first. The client tracks
+  the transaction by a fixed `xid` and the DHCP magic cookie, parses the
+  `msgtype`/`server-id` options, and on ACK records `yiaddr` as its lease.
+
+Obtaining the lease is the phase-2 proof, because a successful ACK means
+Ethernet TX *and* RX, the IPv4 header + checksum, UDP, and broadcast all
+worked, both directions. The gate is `NET: DHCP lease 10.0.2.15` — the
+exact address SLIRP's DHCP server hands out.
+
+## CI gate additions
+
+`make ci-smoke-net` now also asserts (with the timeout line as a hard
+failure):
+
+3. `NET: DHCP lease 10.0.2.15` — the DHCP exchange completed and the
+   IPv4/UDP stack works end to end.
+
 ## Known limits / follow-ups (the honest boundary)
 
-- **No IP stack yet** — phase 1 is link-layer only. Phase 2 adds IPv4 +
-  UDP + a DHCP client (gate: obtaining the SLIRP `10.0.2.15` lease);
-  phase 3 adds ICMP + DNS (capstone: a DNS query round-trip). **No TCP**
-  is planned — UDP/DHCP/DNS/ICMP is a complete, useful stack, and TCP is
-  the honest follow-up.
+- **Phase 3** adds ICMP echo + a DNS resolver (capstone: a DNS query
+  round-trip through SLIRP's resolver at 10.0.2.3). **No TCP** is planned
+  — UDP/DHCP/DNS/ICMP is a complete, useful stack, and TCP is the honest
+  follow-up.
 - Single rtl8139, IPv4 only, kernel-internal (a ring-3 socket API is a
-  later epic).
-- The self-test uses the SLIRP-assumed source IP 10.0.2.15 before DHCP;
-  SLIRP answers ARP regardless of the requester's address, so this is
-  fine for phase 1 and becomes a real lease in phase 2.
+  later epic). The DHCP lease is obtained and logged but not yet wired
+  into a routing table (there is nothing yet that sends unicast IP); that
+  arrives with ICMP/DNS in phase 3.
+- The pre-DHCP ARP uses the SLIRP-assumed source IP 10.0.2.15; SLIRP
+  answers ARP regardless of the requester's address, and the real lease
+  confirms the assumption immediately afterward.
