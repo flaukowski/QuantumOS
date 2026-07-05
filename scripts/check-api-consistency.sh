@@ -166,9 +166,10 @@ for source in $(find "$KERNEL_DIR/src" -name "*.c" 2>/dev/null); do
         while [[ "$line" =~ ([a-zA-Z_][a-zA-Z0-9_]*)[[:space:]]*\( ]]; do
             func_name="${BASH_REMATCH[1]}"
 
-            # Skip common non-functions and keywords
+            # Skip common non-functions and keywords (_Static_assert is
+            # the C11 compile-time assert keyword, not a function call)
             case "$func_name" in
-                if|while|for|switch|return|sizeof|typedef|struct|enum|union|static|extern|const|volatile|inline|__attribute__|ALIGNED|PACKED)
+                if|while|for|switch|return|sizeof|typedef|struct|enum|union|static|extern|const|volatile|inline|__attribute__|ALIGNED|PACKED|_Static_assert)
                     ;;
                 *)
                     CALLED_FUNCTIONS["$func_name"]=1

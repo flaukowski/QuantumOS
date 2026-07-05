@@ -1019,6 +1019,11 @@ int net_udp_dst_ok(const uint8_t *dip) {
     if (dhcp_have_lease && ip_eq(dip, my_ip)) {
         return 0; /* no loopback — the NIC doesn't echo its own TX */
     }
+    if (dhcp_have_lease && dip[0] == my_ip[0] && dip[1] == my_ip[1] && dip[2] == my_ip[2] &&
+        dip[3] == 255) {
+        return 0; /* on-link directed broadcast — unARPable, would stall
+                   * the TX drain ~2s in a doomed arp_resolve */
+    }
     return 1;
 }
 

@@ -232,6 +232,10 @@ static int dns_query_build(unsigned char *q, int max, const char *name, unsigned
             label = p++;
             llen = 0;
         } else {
+            if (llen >= 63) {
+                return 0; /* RFC 1035: labels cap at 63 bytes — 64+ would
+                           * collide with the compression-pointer tag */
+            }
             q[p++] = (unsigned char)name[i];
             llen++;
         }
