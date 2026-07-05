@@ -500,6 +500,25 @@ jobs:
     - name: Build + boot with the resonant scheduler and print the comparison
       run: make ci-smoke-resonant
 
+  quiet-boot:
+    name: Quiet-Boot Test (clean interactive console)
+    runs-on: ubuntu-latest
+    needs: [build]
+    # Boot with `-append quiet` and prove the interactive console is CLEAN — the
+    # periodic timer-tick heartbeat and the demo services' steady-state chatter
+    # are silenced — WHILE the shell still comes up and answers 'help'. The
+    # default boot (which keeps all that output, and whose gates depend on it)
+    # is unchanged; quiet is strictly opt-in.
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+    - name: Install dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y build-essential qemu-system-x86 nasm
+    - name: Prove a quiet boot yields a clean, usable console
+      run: make ci-smoke-quiet
+
   persistence:
     name: Persistence Test (two boots, one disk — epic #71)
     runs-on: ubuntu-latest

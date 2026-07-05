@@ -83,6 +83,16 @@ static uint32_t last_R = 0; /* most recent ghostd order parameter (Q16) */
 static int have_R = 0;      /* a real R has been received at least once */
 
 static void logline(const char *s) {
+    /* Under a `quiet` boot, stay off the shared console so the interactive
+     * shell isn't buried by paradoxd's steady-state phase chatter. The flag
+     * is fixed at boot; query it once. */
+    static int quiet = -1;
+    if (quiet < 0) {
+        quiet = (int)sysinfo_quiet();
+    }
+    if (quiet) {
+        return;
+    }
     write_str(s);
 }
 

@@ -413,6 +413,12 @@ static size_t fmt_str(char *buf, size_t o, size_t max, const char *s) {
  * table), SYSINFO_MEM is a single "MEM: ..." stats line. */
 static uint64_t sys_sysinfo(uint32_t pid, uint64_t op, uint64_t user_ptr, uint64_t len) {
     (void)pid;
+    /* SYSINFO_QUIET is a bare boolean query (no buffer): returns 1 if the
+     * kernel booted `quiet`, so a chatty service can silence its steady-state
+     * console logging. Answered before the buffer checks. */
+    if (op == SYSINFO_QUIET) {
+        return (uint64_t)boot_is_quiet();
+    }
     if (len == 0) {
         return 0;
     }

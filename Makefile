@@ -100,7 +100,7 @@ OBJECTS = $(KERNEL_SOURCES:$(KERNEL_DIR)/src/%.c=$(BUILD_DIR)/%.o) \
 -include $(OBJECTS:.o=.d)
 
 # Targets
-.PHONY: all clean kernel run debug dump test test-list test-coverage ci-smoke ci-smoke-disk ci-smoke-net ci-smoke-http ci-smoke-resonant ci-smoke-qseed ci-smoke-swarm swarm-pingpong
+.PHONY: all clean kernel run debug dump test test-list test-coverage ci-smoke ci-smoke-disk ci-smoke-net ci-smoke-http ci-smoke-quiet ci-smoke-resonant ci-smoke-qseed ci-smoke-swarm swarm-pingpong
 
 all: kernel
 
@@ -873,6 +873,49 @@ ci-smoke-http: kernel
 	@echo "SUCCESS: fetched http://example.com/ over TCP — QuantumOS reads the web"
 	@echo ""
 	@echo "=== TCP Test PASSED ==="
+
+# CI Smoke Test (quiet boot): boot with `-append quiet` and prove the interactive
+# console is CLEAN — the periodic timer-tick heartbeat and the demo services'
+# steady-state chatter are silenced — WHILE the shell still comes up and answers
+# a command. This is the clean-shell contract; the default boot (which keeps all
+# that output, and whose gates depend on it) is unchanged.
+ci-smoke-quiet: kernel
+	@echo "=== QuantumOS Quiet-Boot Smoke Test (clean interactive console) ==="
+	@echo "[1/3] Booting with -append quiet and typing 'help'..."
+	@( printf 'help\n'; sleep 6 ) | timeout 8s qemu-system-x86_64 \
+		-kernel $(BUILD_DIR)/kernel.elf32 -append quiet \
+		-serial stdio -m 128M -display none -no-reboot 2>&1 | tee /tmp/qemu-quiet.log || true
+	@echo "[2/3] The shell must still come up and answer 'help'..."
+	@if ! grep -q "interactive shell ready" /tmp/qemu-quiet.log 2>/dev/null; then \
+		echo "ERROR: qsh did not come up under a quiet boot"; \
+		echo "Boot log:"; cat /tmp/qemu-quiet.log 2>/dev/null || true; \
+		echo ""; echo "=== Quiet Test FAILED ==="; exit 1; \
+	fi
+	@if ! grep -q "qsh: commands:" /tmp/qemu-quiet.log 2>/dev/null; then \
+		echo "ERROR: 'help' produced no output — the shell is not usable under quiet"; \
+		echo "Boot log:"; cat /tmp/qemu-quiet.log 2>/dev/null || true; \
+		echo ""; echo "=== Quiet Test FAILED ==="; exit 1; \
+	fi
+	@echo "SUCCESS: qsh came up and answered 'help' under a quiet boot"
+	@echo "[3/3] The periodic heartbeat/chatter must be SILENCED (the whole point)..."
+	@if grep -q "Timer tick:" /tmp/qemu-quiet.log 2>/dev/null; then \
+		echo "ERROR: quiet boot still printed the periodic timer-tick heartbeat"; \
+		echo "Boot log:"; cat /tmp/qemu-quiet.log 2>/dev/null || true; \
+		echo ""; echo "=== Quiet Test FAILED ==="; exit 1; \
+	fi
+	@if grep -q "PARADOXD: phase ->" /tmp/qemu-quiet.log 2>/dev/null; then \
+		echo "ERROR: quiet boot still printed paradoxd phase chatter"; \
+		echo "Boot log:"; cat /tmp/qemu-quiet.log 2>/dev/null || true; \
+		echo ""; echo "=== Quiet Test FAILED ==="; exit 1; \
+	fi
+	@if grep -q "lambda-damp" /tmp/qemu-quiet.log 2>/dev/null; then \
+		echo "ERROR: quiet boot still printed ghostd lambda-damp chatter"; \
+		echo "Boot log:"; cat /tmp/qemu-quiet.log 2>/dev/null || true; \
+		echo ""; echo "=== Quiet Test FAILED ==="; exit 1; \
+	fi
+	@echo "SUCCESS: the periodic heartbeat + service chatter is silenced — a clean console"
+	@echo ""
+	@echo "=== Quiet Test PASSED ==="
 
 # CI Smoke Test (resonant scheduler): rebuild WITH SCHED_RESONANT=1 and prove
 # the alternate policy still boots to ready, still passes the ghostd merge gate
