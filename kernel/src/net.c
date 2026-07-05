@@ -376,6 +376,243 @@ static void dhcp_rx(const uint8_t *frame, uint16_t len) {
     }
 }
 
+/* ---- IPv4 unicast + ICMP + DNS (phase 3) ---- */
+
+#define IP_PROTO_ICMP 1
+#define ICMP_ECHO_REQUEST 8
+#define ICMP_ECHO_REPLY 0
+#define DNS_PORT 53
+static const uint8_t IP_DNS[4] = {10, 0, 2, 3}; /* SLIRP's DNS proxy */
+
+/* Fill an IPv4 header for a unicast packet of `payload_len` bytes to
+ * `dst`, from `my_ip`. Computes the header checksum. */
+static void ip_fill(ip_hdr_t *ip, const uint8_t *dst, uint8_t proto, uint16_t payload_len,
+                    uint16_t ident) {
+    ip->ver_ihl = 0x45;
+    ip->tos = 0;
+    ip->total_len = htons((uint16_t)(sizeof(ip_hdr_t) + payload_len));
+    ip->id = htons(ident);
+    ip->frag = htons(0x0000);
+    ip->ttl = 64;
+    ip->proto = proto;
+    ip->checksum = 0;
+    for (int i = 0; i < 4; i++) {
+        ip->src[i] = my_ip[i];
+        ip->dst[i] = dst[i];
+    }
+    ip->checksum = htons(checksum16((const uint8_t *)ip, sizeof(ip_hdr_t)));
+}
+
+/* Resolve `ip`'s MAC via ARP (bounded, pumping the RX queue). Returns 1
+ * and fills out_mac on success. */
+static int arp_resolve(const uint8_t *ip, const uint8_t *sender_ip, uint8_t *out_mac) {
+    arp_send_request(ip, sender_ip);
+    uint8_t frame[RTL_FRAME_MAX];
+    for (int tries = 0; tries < 200; tries++) {
+        uint16_t n = rtl8139_receive(frame, sizeof(frame));
+        if (n > 0 && arp_is_reply_from(frame, n, ip, out_mac)) {
+            return 1;
+        }
+        if (n == 0) {
+            if (tries > 0 && tries % 64 == 0) {
+                arp_send_request(ip, sender_ip);
+            }
+            __asm__ volatile("hlt");
+        }
+    }
+    return 0;
+}
+
+/* ICMP echo request to `dst` (dst_mac is its resolved link address).
+ * `ident`/`seq` tag the request; returns the built frame length. */
+static uint16_t icmp_build(uint8_t *frame, const uint8_t *dst, const uint8_t *dst_mac,
+                           uint16_t ident, uint16_t seq) {
+    eth_hdr_t *eth = (eth_hdr_t *)frame;
+    ip_hdr_t *ip = (ip_hdr_t *)(frame + sizeof(eth_hdr_t));
+    uint8_t *icmp = (uint8_t *)ip + sizeof(ip_hdr_t);
+
+    for (int i = 0; i < ETH_ADDR_LEN; i++) {
+        eth->dst[i] = dst_mac[i];
+        eth->src[i] = self_mac[i];
+    }
+    eth->type = htons(ETH_TYPE_IP);
+
+    /* ICMP echo: type(1) code(1) csum(2) id(2) seq(2) + 32 payload bytes. */
+    uint16_t icmp_len = 8 + 32;
+    for (uint16_t i = 0; i < icmp_len; i++) {
+        icmp[i] = 0;
+    }
+    icmp[0] = ICMP_ECHO_REQUEST;
+    icmp[1] = 0;
+    icmp[4] = (uint8_t)(ident >> 8);
+    icmp[5] = (uint8_t)ident;
+    icmp[6] = (uint8_t)(seq >> 8);
+    icmp[7] = (uint8_t)seq;
+    for (uint16_t i = 0; i < 32; i++) {
+        icmp[8 + i] = (uint8_t)('a' + (i % 26));
+    }
+    uint16_t csum = checksum16(icmp, icmp_len);
+    icmp[2] = (uint8_t)(csum >> 8);
+    icmp[3] = (uint8_t)csum;
+
+    ip_fill(ip, dst, IP_PROTO_ICMP, icmp_len, ident);
+    return (uint16_t)(sizeof(eth_hdr_t) + sizeof(ip_hdr_t) + icmp_len);
+}
+
+/* Is `frame` an ICMP echo reply from `src` with our id/seq? */
+static int icmp_is_reply(const uint8_t *frame, uint16_t len, const uint8_t *src, uint16_t ident,
+                         uint16_t seq) {
+    uint32_t need = sizeof(eth_hdr_t) + sizeof(ip_hdr_t) + 8;
+    if (len < need) {
+        return 0;
+    }
+    const eth_hdr_t *eth = (const eth_hdr_t *)frame;
+    if (ntohs(eth->type) != ETH_TYPE_IP) {
+        return 0;
+    }
+    const ip_hdr_t *ip = (const ip_hdr_t *)(frame + sizeof(eth_hdr_t));
+    if (ip->ver_ihl != 0x45 || ip->proto != IP_PROTO_ICMP || !ip_eq(ip->src, src)) {
+        return 0;
+    }
+    const uint8_t *icmp = (const uint8_t *)ip + sizeof(ip_hdr_t);
+    uint16_t rid = (uint16_t)((icmp[4] << 8) | icmp[5]);
+    uint16_t rseq = (uint16_t)((icmp[6] << 8) | icmp[7]);
+    return icmp[0] == ICMP_ECHO_REPLY && rid == ident && rseq == seq;
+}
+
+/* Build a DNS A-query for `name` to the resolver. UDP over IPv4. Returns
+ * the frame length, or 0 if the name doesn't fit. */
+static uint16_t dns_build(uint8_t *frame, const uint8_t *dns_mac, const char *name, uint16_t txid) {
+    eth_hdr_t *eth = (eth_hdr_t *)frame;
+    ip_hdr_t *ip = (ip_hdr_t *)(frame + sizeof(eth_hdr_t));
+    udp_hdr_t *udp = (udp_hdr_t *)((uint8_t *)ip + sizeof(ip_hdr_t));
+    uint8_t *dns = (uint8_t *)udp + sizeof(udp_hdr_t);
+
+    for (int i = 0; i < ETH_ADDR_LEN; i++) {
+        eth->dst[i] = dns_mac[i];
+        eth->src[i] = self_mac[i];
+    }
+    eth->type = htons(ETH_TYPE_IP);
+
+    /* DNS header: id, flags 0x0100 (recursion desired), qdcount 1. */
+    dns[0] = (uint8_t)(txid >> 8);
+    dns[1] = (uint8_t)txid;
+    dns[2] = 0x01;
+    dns[3] = 0x00;
+    dns[4] = 0x00;
+    dns[5] = 0x01; /* qdcount = 1 */
+    dns[6] = dns[7] = dns[8] = dns[9] = dns[10] = dns[11] = 0;
+    int p = 12;
+
+    /* QNAME: length-prefixed labels. */
+    int label_start = p++;
+    int label_len = 0;
+    for (const char *c = name; *c; c++) {
+        if (*c == '.') {
+            dns[label_start] = (uint8_t)label_len;
+            label_start = p++;
+            label_len = 0;
+        } else {
+            if (p >= 200) {
+                return 0;
+            }
+            dns[p++] = (uint8_t)*c;
+            label_len++;
+        }
+    }
+    dns[label_start] = (uint8_t)label_len;
+    dns[p++] = 0x00; /* root label */
+    dns[p++] = 0x00; /* QTYPE A = 1 */
+    dns[p++] = 0x01;
+    dns[p++] = 0x00; /* QCLASS IN = 1 */
+    dns[p++] = 0x01;
+
+    uint16_t dns_len = (uint16_t)p;
+    uint16_t udp_len = (uint16_t)(sizeof(udp_hdr_t) + dns_len);
+    udp->sport = htons(40000);
+    udp->dport = htons(DNS_PORT);
+    udp->len = htons(udp_len);
+    udp->checksum = 0;
+
+    ip_fill(ip, IP_DNS, IP_PROTO_UDP, udp_len, txid);
+    return (uint16_t)(sizeof(eth_hdr_t) + sizeof(ip_hdr_t) + udp_len);
+}
+
+/* Parse a DNS response; on a matching txid with at least one A record,
+ * copy the first A address into out_ip and return 1. */
+static int dns_parse(const uint8_t *frame, uint16_t len, uint16_t txid, uint8_t *out_ip) {
+    uint32_t base = sizeof(eth_hdr_t) + sizeof(ip_hdr_t) + sizeof(udp_hdr_t);
+    if (len < base + 12) {
+        return 0;
+    }
+    const eth_hdr_t *eth = (const eth_hdr_t *)frame;
+    if (ntohs(eth->type) != ETH_TYPE_IP) {
+        return 0;
+    }
+    const ip_hdr_t *ip = (const ip_hdr_t *)(frame + sizeof(eth_hdr_t));
+    if (ip->ver_ihl != 0x45 || ip->proto != IP_PROTO_UDP) {
+        return 0;
+    }
+    const udp_hdr_t *udp = (const udp_hdr_t *)((const uint8_t *)ip + sizeof(ip_hdr_t));
+    if (ntohs(udp->sport) != DNS_PORT) {
+        return 0;
+    }
+    const uint8_t *dns = frame + base;
+    uint16_t rid = (uint16_t)((dns[0] << 8) | dns[1]);
+    if (rid != txid) {
+        return 0;
+    }
+    uint16_t qd = (uint16_t)((dns[4] << 8) | dns[5]);
+    uint16_t an = (uint16_t)((dns[6] << 8) | dns[7]);
+    if (an == 0) {
+        return 0;
+    }
+
+    /* Skip the header (12) and the question section. */
+    uint32_t off = base + 12;
+    for (uint16_t q = 0; q < qd; q++) {
+        while (off < len && frame[off] != 0) {
+            if ((frame[off] & 0xC0) == 0xC0) { /* compression pointer */
+                off += 2;
+                goto qdone;
+            }
+            off += frame[off] + 1;
+        }
+        off += 1; /* the 0 root label */
+    qdone:
+        off += 4; /* QTYPE + QCLASS */
+    }
+
+    /* Walk answers; return the first A record (type 1, class IN, rdlen 4). */
+    for (uint16_t a = 0; a < an; a++) {
+        if (off + 2 > len) {
+            return 0;
+        }
+        if ((frame[off] & 0xC0) == 0xC0) {
+            off += 2; /* compressed name */
+        } else {
+            while (off < len && frame[off] != 0) {
+                off += frame[off] + 1;
+            }
+            off += 1;
+        }
+        if (off + 10 > len) {
+            return 0;
+        }
+        uint16_t type = (uint16_t)((frame[off] << 8) | frame[off + 1]);
+        uint16_t rdlen = (uint16_t)((frame[off + 8] << 8) | frame[off + 9]);
+        off += 10;
+        if (type == 1 && rdlen == 4 && off + 4 <= len) {
+            for (int i = 0; i < 4; i++) {
+                out_ip[i] = frame[off + i];
+            }
+            return 1;
+        }
+        off += rdlen;
+    }
+    return 0;
+}
+
 /* ---- self-test: ARP then DHCP ---- */
 
 static void log_ip(const char *label, const uint8_t *ip) {
@@ -470,5 +707,79 @@ void net_selftest(void) {
         log_ip("NET: DHCP lease ", my_ip);
     } else {
         boot_log("NET: DHCP timed out (no lease)");
+    }
+
+    /* Phase 3 needs a lease (unicast IP source) and the gateway's MAC. */
+    if (!arp_ok || !dhcp_have_lease) {
+        return;
+    }
+
+    /* Phase 3a: ICMP echo to the gateway. SLIRP answers ping to 10.0.2.2
+     * internally, so this is a fully self-contained round trip that
+     * exercises unicast IPv4 + ICMP + the header checksum both ways. */
+    {
+        uint16_t ident = 0xBEEF, seq = 1;
+        uint8_t out[sizeof(eth_hdr_t) + sizeof(ip_hdr_t) + 40];
+        uint16_t n = icmp_build(out, IP_GATEWAY, gw_mac, ident, seq);
+        rtl8139_transmit(out, n);
+
+        int pong = 0;
+        for (int tries = 0; tries < 300 && !pong; tries++) {
+            uint16_t m = rtl8139_receive(frame, sizeof(frame));
+            if (m > 0 && icmp_is_reply(frame, m, IP_GATEWAY, ident, seq)) {
+                pong = 1;
+            } else if (m == 0) {
+                if (tries > 0 && tries % 64 == 0) {
+                    rtl8139_transmit(out, n);
+                }
+                __asm__ volatile("hlt");
+            }
+        }
+        boot_log(pong ? "NET: ping 10.0.2.2 reply received" : "NET: ping 10.0.2.2 timed out");
+    }
+
+    /* Phase 3b: resolve a hostname through SLIRP's DNS proxy (10.0.2.3),
+     * which forwards to the host resolver. Getting a well-formed A record
+     * back is the capstone: ARP -> IPv4 -> UDP -> DNS, both directions. */
+    {
+        uint8_t dns_mac[ETH_ADDR_LEN];
+        if (!arp_resolve(IP_DNS, my_ip, dns_mac)) {
+            boot_log("NET: DNS resolver ARP failed (10.0.2.3)");
+            return;
+        }
+        const char *host = "example.com";
+        uint16_t txid = 0x1D15;
+        uint8_t out[sizeof(eth_hdr_t) + sizeof(ip_hdr_t) + sizeof(udp_hdr_t) + 256];
+        uint16_t n = dns_build(out, dns_mac, host, txid);
+        if (n == 0) {
+            return;
+        }
+        rtl8139_transmit(out, n);
+
+        uint8_t resolved[4];
+        int got = 0;
+        for (int tries = 0; tries < 400 && !got; tries++) {
+            uint16_t m = rtl8139_receive(frame, sizeof(frame));
+            if (m > 0 && dns_parse(frame, m, txid, resolved)) {
+                got = 1;
+            } else if (m == 0) {
+                if (tries > 0 && tries % 100 == 0) {
+                    rtl8139_transmit(out, n);
+                }
+                __asm__ volatile("hlt");
+            }
+        }
+        if (got) {
+            char label[48];
+            int o = 0;
+            const char *pfx = "NET: DNS example.com -> ";
+            while (*pfx) {
+                label[o++] = *pfx++;
+            }
+            label[o] = 0;
+            log_ip(label, resolved);
+        } else {
+            boot_log("NET: DNS example.com timed out (no answer)");
+        }
     }
 }

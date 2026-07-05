@@ -126,16 +126,50 @@ failure):
 3. `NET: DHCP lease 10.0.2.15` — the DHCP exchange completed and the
    IPv4/UDP stack works end to end.
 
+## Phase 3 — ICMP echo + DNS (`kernel/src/net.c`)
+
+Phase 3 sends **unicast** IP (phases 1-2 were broadcast or gateway-only),
+using the DHCP lease as the source address and an ARP-resolved
+destination MAC:
+
+- **ICMP echo** — an echo request (type 8) to the gateway 10.0.2.2 with
+  an id/seq and a 32-byte payload, its ICMP checksum computed, sent to
+  the gateway's resolved MAC. SLIRP answers ping to 10.0.2.2 internally,
+  so this is a **fully self-contained** round trip that exercises unicast
+  IPv4, the header checksum, and ICMP both directions. Gate:
+  `NET: ping 10.0.2.2 reply received`.
+- **DNS** — the capstone. ARP-resolve SLIRP's DNS proxy (10.0.2.3), send
+  a DNS A-query for `example.com` (length-prefixed QNAME, recursion
+  desired), and parse the response — skipping the question section,
+  following name-compression pointers, and returning the first A record.
+  SLIRP forwards the query to the runner's resolver, so a well-formed A
+  record coming back proves the whole path: ARP → IPv4 → UDP → DNS, both
+  directions. Gate: `NET: DNS example.com -> <a.b.c.d>` (any A record;
+  the timeout line is a hard failure).
+
+**A hobby OS that seeds its dice from quantum entropy can now resolve a
+hostname over a network stack it built from the NIC driver up.**
+
+The DNS gate is the one non-hermetic check in the suite: it depends on
+the CI runner's external resolver (GitHub Actions runners reliably
+resolve `example.com`). The ICMP gate is fully hermetic and proves the
+unicast IP path on its own.
+
+## Full CI gate (`make ci-smoke-net`)
+
+1. `NET: rtl8139 up` — NIC found via PCI and brought up
+2. `NET: ARP 10.0.2.2 is at MAC:` — link layer, both directions
+3. `NET: DHCP lease 10.0.2.15` — IPv4 + UDP + broadcast
+4. `NET: ping 10.0.2.2 reply received` — unicast IPv4 + ICMP
+5. `NET: DNS example.com -> <ip>` — the full stack, a real hostname lookup
+
 ## Known limits / follow-ups (the honest boundary)
 
-- **Phase 3** adds ICMP echo + a DNS resolver (capstone: a DNS query
-  round-trip through SLIRP's resolver at 10.0.2.3). **No TCP** is planned
-  — UDP/DHCP/DNS/ICMP is a complete, useful stack, and TCP is the honest
-  follow-up.
-- Single rtl8139, IPv4 only, kernel-internal (a ring-3 socket API is a
-  later epic). The DHCP lease is obtained and logged but not yet wired
-  into a routing table (there is nothing yet that sends unicast IP); that
-  arrives with ICMP/DNS in phase 3.
-- The pre-DHCP ARP uses the SLIRP-assumed source IP 10.0.2.15; SLIRP
-  answers ARP regardless of the requester's address, and the real lease
-  confirms the assumption immediately afterward.
+- **No TCP** is planned — Ethernet/ARP/IPv4/UDP/ICMP/DHCP/DNS is a
+  complete, useful stack. TCP (with its state machine and retransmission)
+  is the honest follow-up.
+- Single rtl8139, IPv4 only, kernel-internal (a **ring-3 socket API** is a
+  natural later epic — the pieces a user program would need are all here).
+- The stack is a boot-time self-test, not yet a persistent service with a
+  routing table; a resident `netd` (in the ghostd tradition) that answers
+  socket requests over capability IPC is the way to expose it to userland.

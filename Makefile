@@ -722,6 +722,27 @@ ci-smoke-net: kernel
 		echo ""; echo "=== Networking Test FAILED ==="; exit 1; \
 	fi
 	@echo "SUCCESS: DHCP lease 10.0.2.15 obtained — IPv4/UDP stack works end to end"
+	@echo "[5/6] ICMP echo to the gateway must round-trip (unicast IPv4 + checksum)..."
+	@if ! grep -q "NET: ping 10.0.2.2 reply received" /tmp/qemu-net.log 2>/dev/null; then \
+		echo "ERROR: ICMP echo did not round-trip (NET: ping 10.0.2.2 reply received)"; \
+		echo "Boot log:"; cat /tmp/qemu-net.log 2>/dev/null || true; \
+		echo ""; echo "=== Networking Test FAILED ==="; exit 1; \
+	fi
+	@echo "SUCCESS: ICMP ping 10.0.2.2 round-tripped — unicast IP works"
+	@# The DNS capstone resolves a hostname through SLIRP's DNS proxy, which
+	@# forwards to the runner's resolver — a real end-to-end hostname lookup.
+	@echo "[6/6] DNS must resolve a hostname to an A record (the capstone)..."
+	@if grep -q "NET: DNS example.com timed out" /tmp/qemu-net.log 2>/dev/null; then \
+		echo "ERROR: DNS query timed out — no answer from the resolver"; \
+		echo "Boot log:"; cat /tmp/qemu-net.log 2>/dev/null || true; \
+		echo ""; echo "=== Networking Test FAILED ==="; exit 1; \
+	fi
+	@if ! grep -qE "NET: DNS example.com -> [0-9]+\.[0-9]+\.[0-9]+\.[0-9]+" /tmp/qemu-net.log 2>/dev/null; then \
+		echo "ERROR: DNS did not resolve example.com to an A record"; \
+		echo "Boot log:"; cat /tmp/qemu-net.log 2>/dev/null || true; \
+		echo ""; echo "=== Networking Test FAILED ==="; exit 1; \
+	fi
+	@echo "SUCCESS: DNS resolved example.com to an A record — full stack proven"
 	@echo ""
 	@echo "=== Networking Test PASSED ==="
 
