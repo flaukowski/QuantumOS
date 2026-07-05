@@ -87,8 +87,8 @@ static const char *arg_of(const char *line, const char *cmd) {
  * ------------------------------------------------------------------ */
 
 static void cmd_help(void) {
-    out("qsh: commands: help echo ps free uptime pid ls cat write rm sync nslookup run qrand "
-        "qseed ghost clear exit\r\n");
+    out("qsh: commands: help echo ps free uptime date pid ls cat write rm sync nslookup run "
+        "qrand qseed ghost clear exit\r\n");
 }
 
 /* write <path> <text>: create/truncate an overlay file with the text
@@ -274,6 +274,16 @@ static void cmd_free(void) {
     long n = sysinfo(SYSINFO_MEM, buf, sizeof(buf));
     if (n > 0) {
         out_bytes(buf, n);
+    }
+}
+
+static void cmd_date(void) {
+    char buf[64];
+    long n = sysinfo(SYSINFO_TIME, buf, sizeof(buf));
+    if (n > 0) {
+        out_bytes(buf, n);
+    } else {
+        out("qsh: date: unavailable\r\n");
     }
 }
 
@@ -483,6 +493,8 @@ static void execute(const char *line) {
         cmd_free();
     } else if (is_cmd(line, "uptime")) {
         cmd_uptime();
+    } else if (is_cmd(line, "date")) {
+        cmd_date();
     } else if (is_cmd(line, "pid")) {
         cmd_pid();
     } else if (is_cmd(line, "qrand")) {

@@ -179,6 +179,7 @@
 /* SYS_SYSINFO operations (rdi) */
 #define SYSINFO_PS 0
 #define SYSINFO_MEM 1
+#define SYSINFO_TIME 2 /* "TIME: YYYY-MM-DD HH:MM:SS" from the CMOS RTC */
 
 /* Bytes SYS_CONS will move per call at most (bounds the kernel bounce buffer). */
 #define CONS_MAX_BYTES 256

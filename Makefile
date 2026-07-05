@@ -353,7 +353,7 @@ ci-smoke: kernel
 	@echo "[1/3] Build verified: $(BUILD_DIR)/kernel.elf exists"
 	@test -f $(BUILD_DIR)/kernel.elf || (echo "ERROR: Kernel not built" && exit 1)
 	@echo "[2/3] Running QEMU boot test (14 second timeout, shell session piped into the console)..."
-	@( printf 'help\nps\nfree\nuptime\nghost\nqrand\nls\ncat /docs/hello.txt\nrun /bin/hello\nrun /bin/args alpha quantumos\nwrite /data/note ramfs-works\nls /data\nrm /data/note\nsync\nexit\n'; sleep 13 ) | \
+	@( printf 'help\nps\nfree\nuptime\ndate\nghost\nqrand\nls\ncat /docs/hello.txt\nrun /bin/hello\nrun /bin/args alpha quantumos\nwrite /data/note ramfs-works\nls /data\nrm /data/note\nsync\nexit\n'; sleep 13 ) | \
 		timeout 14s qemu-system-x86_64 -kernel $(BUILD_DIR)/kernel.elf32 \
 		-serial stdio -m 128M -display none -no-reboot 2>&1 | tee /tmp/qemu-boot.log || true
 	@echo ""
@@ -479,6 +479,15 @@ ci-smoke: kernel
 		echo ""; echo "=== Smoke Test FAILED ==="; exit 1; \
 	fi
 	@echo "SUCCESS: uptime + qrand answered (shell quantum-pool cap live)"
+	@# RTC: 'date' must report the wall-clock time from the CMOS RTC. The year
+	@# comes from the (QEMU host) clock, so gate the "TIME: 20xx-.." shape —
+	@# plausible for any real boot without pinning an exact timestamp.
+	@if ! grep -qE "TIME: 20[0-9][0-9]-[0-1][0-9]-[0-3][0-9] " /tmp/qemu-boot.log 2>/dev/null; then \
+		echo "ERROR: 'date' did not report a plausible wall-clock time (TIME: 20xx-..)"; \
+		echo "Boot log:"; cat /tmp/qemu-boot.log 2>/dev/null || true; \
+		echo ""; echo "=== Smoke Test FAILED ==="; exit 1; \
+	fi
+	@echo "SUCCESS: date reported the wall-clock time (CMOS RTC live)"
 	@# epic #62 phase 2 (issue #64): the shell must greet with /etc/motd read
 	@# through the VFS off the embedded initrd.
 	@if ! grep -q "Welcome to QuantumOS" /tmp/qemu-boot.log 2>/dev/null; then \
