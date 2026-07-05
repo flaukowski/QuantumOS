@@ -393,7 +393,7 @@ status_t process_create(const process_create_params_t *params, process_t **proce
 
     *process = &process_table[pid];
 
-    boot_log("Process created successfully");
+    boot_log_v("Process created successfully");
     return STATUS_SUCCESS;
 }
 
@@ -467,8 +467,10 @@ status_t process_destroy(uint32_t pid) {
         process->owns_kernel_stack = false;
         process->stack_bottom = NULL;
         process->stack_top = NULL;
-        boot_log("freed kernel-thread stack; heap free bytes: ");
-        early_console_write_hex(kheap_free_bytes());
+        if (!boot_is_quiet()) {
+            boot_log("freed kernel-thread stack; heap free bytes: ");
+            early_console_write_hex(kheap_free_bytes());
+        }
     }
 
     /* Remove from parent's children list */
@@ -485,7 +487,7 @@ status_t process_destroy(uint32_t pid) {
     process->state = PROCESS_STATE_UNUSED;
     process->magic = 0;
 
-    boot_log("Process destroyed");
+    boot_log_v("Process destroyed");
     return STATUS_SUCCESS;
 }
 
@@ -506,8 +508,10 @@ void process_reap(void) {
          * pmm; the slot returns to UNUSED */
         process_destroy(pid);
 
-        boot_log("reaped process; free frames: ");
-        early_console_write_hex(pmm_get_free_frames());
+        if (!boot_is_quiet()) {
+            boot_log("reaped process; free frames: ");
+            early_console_write_hex(pmm_get_free_frames());
+        }
     }
 }
 
@@ -540,7 +544,7 @@ status_t process_exit(uint32_t pid, int32_t exit_code) {
     process_statistics.zombie_processes++;
 
     (void)exit_code; /* Exit code stored in PCB */
-    boot_log("Process exited");
+    boot_log_v("Process exited");
     return STATUS_SUCCESS;
 }
 

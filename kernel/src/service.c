@@ -282,8 +282,10 @@ static svc_result_t start_slot(service_slot_t *slot) {
      * now be scheduled with full authority. */
     svc_irq_restore(irqflags);
 
-    boot_log("service started:");
-    boot_log(slot->info.name);
+    if (!boot_is_quiet()) {
+        boot_log("service started:");
+        boot_log(slot->info.name);
+    }
     return SVC_SUCCESS;
 }
 
@@ -419,16 +421,22 @@ static void health_monitor_scan(void) {
         }
         if (now - slot->last_heartbeat > SERVICE_HEARTBEAT_TIMEOUT) {
             slot->info.state = SERVICE_STATE_CRASHED;
-            boot_log("health monitor: service unresponsive:");
-            boot_log(slot->info.name);
+            if (!boot_is_quiet()) {
+                boot_log("health monitor: service unresponsive:");
+                boot_log(slot->info.name);
+            }
 
             if (service_restart(slot->info.service_id) == SVC_SUCCESS) {
                 monitor_restarts++;
-                boot_log("health monitor: service restarted:");
-                boot_log(slot->info.name);
+                if (!boot_is_quiet()) {
+                    boot_log("health monitor: service restarted:");
+                    boot_log(slot->info.name);
+                }
             } else {
-                boot_log("health monitor: restart limit reached:");
-                boot_log(slot->info.name);
+                if (!boot_is_quiet()) {
+                    boot_log("health monitor: restart limit reached:");
+                    boot_log(slot->info.name);
+                }
             }
         }
     }
@@ -478,7 +486,7 @@ static void device_manager_service(void) {
 /* Deliberately stops heartbeating after ~1.5 s to demonstrate crash
  * detection and automatic restart */
 static void flaky_demo_service(void) {
-    boot_log("svc flaky-demo: online");
+    boot_log_v("svc flaky-demo: online");
     uint64_t born = timer_get_ticks();
     while (1) {
         __asm__ volatile("hlt");

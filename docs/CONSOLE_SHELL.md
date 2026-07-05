@@ -126,20 +126,34 @@ stdin and asserts, from the same boot:
 
 ## Quiet boot: a clean interactive console (`quiet`)
 
-The demo kernel narrates itself: a per-second `Timer tick:` heartbeat, plus
-the `paradoxd` and `ghostd` services logging their steady-state dynamics.
-All of it lands on the *same* serial console `qsh` uses, so for hands-on
-interactive work (typing `http`, `nslookup`, …) the prompt scrolls away
-under the chatter.
+The demo kernel narrates itself: a per-second `Timer tick:` heartbeat, the
+`paradoxd`/`ghostd` services logging their steady-state dynamics, the
+per-process lifecycle (`Process created/destroyed`, `reaped process`,
+`syscall: user process exited`), the per-service `service started` /
+health-monitor lines, the demo kernel-threads' `alive` heartbeat, and the
+`watched-svc` watchdog demo's `online`/`going silent`. Because the
+flaky-demo service crashes and restarts on a ~1.5 s cycle, most of this
+*repeats forever*. All of it lands on the *same* serial console `qsh` uses,
+so for hands-on interactive work (typing `http`, `nslookup`, …) the prompt
+scrolls away under the chatter.
 
 Adding the token `quiet` to the kernel command line (`-append quiet`,
 alongside `qseed=…`) silences that steady-state output:
 
 - the kernel's periodic timer-tick heartbeat is suppressed (the one-time
   "interrupts are live" line still prints);
+- `boot_log_v()` — a `boot_log` variant that no-ops under `quiet` — carries
+  the kernel's repeating lifecycle/demo lines (process create/destroy/reap,
+  service start, the `alive` thread heartbeats); label+hex pairs are gated
+  as whole blocks so quiet never emits an orphaned hex value;
 - `SYSINFO_QUIET` — a bufferless `SYS_SYSINFO` op — exposes the flag to
-  ring 3, and `paradoxd`/`ghostd` query it once and go silent on their
-  `logline()` output.
+  ring 3, and the chatty ring-3 services (`paradoxd`, `ghostd`,
+  `watched-svc`) query it once and go silent on their console output.
+
+One-time boot milestones (`…: online`, `QuantumOS ready`, the `NET:`
+self-test) still print, so a quiet boot is legible; only the repeating
+chatter is gone. Measured over a 9 s boot, the ~76 repeating lines a normal
+boot emits drop to a single one-time line, with `qsh` fully usable.
 
 The services still run and do their work; they just stop narrating. The
 default boot is unchanged — `quiet` is strictly opt-in, so every CI gate

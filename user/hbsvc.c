@@ -12,7 +12,14 @@
 #include "usys.h"
 
 void _start(void) {
-    write_str("watched-svc: online in ring 3, heartbeating to the watchdog");
+    /* Under a `quiet` boot, stay off the shared console — the watchdog
+     * demo reprints "online"/"going silent" on every restart, which would
+     * bury the interactive shell. The behaviour (heartbeat then hang) is
+     * unchanged; only the narration is silenced. */
+    int quiet = (int)sysinfo_quiet();
+    if (!quiet) {
+        write_str("watched-svc: online in ring 3, heartbeating to the watchdog");
+    }
 
     long start = ticks();
     int went_silent = 0;
@@ -22,7 +29,9 @@ void _start(void) {
         if (now - start < 120) { /* ~1.2s of healthy heartbeats */
             heartbeat();
         } else if (!went_silent) {
-            write_str("watched-svc: going silent (simulated hang)");
+            if (!quiet) {
+                write_str("watched-svc: going silent (simulated hang)");
+            }
             went_silent = 1; /* stop heartbeating; keep running */
         }
         yield();
