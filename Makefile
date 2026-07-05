@@ -556,6 +556,13 @@ ci-smoke: kernel
 		echo ""; echo "=== Smoke Test FAILED ==="; exit 1; \
 	fi
 	@echo "SUCCESS: filesystem-write capability gate proven (capless caller denied EPERM)"
+	@# Capability gate: the capless ghost-test must be denied SYS_RESOLVE.
+	@if ! grep -q "NETC: capless caller denied (EPERM)" /tmp/qemu-boot.log 2>/dev/null; then \
+		echo "ERROR: capless SYS_RESOLVE was not denied (NETC: capless caller denied)"; \
+		echo "Boot log:"; cat /tmp/qemu-boot.log 2>/dev/null || true; \
+		echo ""; echo "=== Smoke Test FAILED ==="; exit 1; \
+	fi
+	@echo "SUCCESS: SYS_RESOLVE capability gate proven (capless caller denied EPERM)"
 	@# Honesty gate: this default boot is DISKLESS, so the driver must say so
 	@# and MUST NOT claim a disk, and 'sync' must fail honestly (no disk).
 	@if ! grep -q "ATA: no disk" /tmp/qemu-boot.log 2>/dev/null; then \
@@ -686,8 +693,9 @@ ci-smoke-disk: kernel
 # RX interrupt -> ARP parse. Both directions through the real driver.
 ci-smoke-net: kernel
 	@echo "=== QuantumOS Networking Smoke Test (rtl8139 + user-net) ==="
-	@echo "[1/3] Booting with -device rtl8139 on QEMU user-net..."
-	@( sleep 9 ) | timeout 11s qemu-system-x86_64 -kernel $(BUILD_DIR)/kernel.elf32 \
+	@echo "[1/3] Booting with -device rtl8139 on QEMU user-net (+ shell nslookup)..."
+	@( printf 'nslookup example.com\n'; sleep 11 ) | timeout 13s qemu-system-x86_64 \
+		-kernel $(BUILD_DIR)/kernel.elf32 \
 		-netdev user,id=n0 -device rtl8139,netdev=n0 -serial stdio -m 128M \
 		-display none -no-reboot 2>&1 | tee /tmp/qemu-net.log || true
 	@echo ""
@@ -743,6 +751,15 @@ ci-smoke-net: kernel
 		echo ""; echo "=== Networking Test FAILED ==="; exit 1; \
 	fi
 	@echo "SUCCESS: DNS resolved example.com to an A record — full stack proven"
+	@# Ring-3 network access (#77): the piped 'nslookup example.com' must
+	@# resolve a hostname from the SHELL via SYS_RESOLVE (not the boot
+	@# self-test) — the "qsh:" prefix distinguishes it from the "NET:" line.
+	@if ! grep -qE "qsh: example.com -> [0-9]+\.[0-9]+\.[0-9]+\.[0-9]+" /tmp/qemu-net.log 2>/dev/null; then \
+		echo "ERROR: the shell's nslookup did not resolve (qsh: example.com -> a.b.c.d)"; \
+		echo "Boot log:"; cat /tmp/qemu-net.log 2>/dev/null || true; \
+		echo ""; echo "=== Networking Test FAILED ==="; exit 1; \
+	fi
+	@echo "SUCCESS: ring-3 nslookup resolved a hostname via SYS_RESOLVE"
 	@echo ""
 	@echo "=== Networking Test PASSED ==="
 

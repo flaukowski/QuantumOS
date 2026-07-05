@@ -131,6 +131,20 @@
                          * next boot). Gated on the filesystem-write capability.
                          * Returns files flushed, EIO with no disk or on write
                          * failure. */
+#define SYS_RESOLVE                                                                                \
+    26 /* rdi = hostname ptr, rsi = 4-byte out buffer; resolve a
+                         * hostname to an IPv4 A record via the kernel's DNS
+                         * client. Non-blocking, request/poll: the first call
+                         * posts the request (returns WOULD_BLOCK); subsequent
+                         * calls poll — WOULD_BLOCK while pending, 0 with the
+                         * address written on success, EIO on failure (no
+                         * network or lookup failed). The network I/O runs in
+                         * the IF=1 net thread, not this cli'd syscall. Gated on
+                         * a CAP_RESOURCE_DEVICE capability over DEVICE_ID_NET
+                         * (EPERM without) — held only by qsh. */
+
+/* SYS_RESOLVE: still resolving (poll again). */
+#define RESOLVE_WOULDBLOCK ((uint64_t) - 11)
 
 /* SYS_WAITPID: the target is still running. */
 #define WAITPID_RUNNING 256
