@@ -913,7 +913,15 @@ ci-smoke-quiet: kernel
 		echo "Boot log:"; cat /tmp/qemu-quiet.log 2>/dev/null || true; \
 		echo ""; echo "=== Quiet Test FAILED ==="; exit 1; \
 	fi
-	@echo "SUCCESS: the periodic heartbeat + service chatter is silenced — a clean console"
+	@# The process/service/syscall lifecycle chatter (boot_log_v) must be
+	@# silenced too — it repeats as the demo services churn and would bury
+	@# the interactive prompt just like the heartbeat did.
+	@if grep -qE "Process created successfully|Process destroyed|reaped process|syscall: user process exited|kernel-thread (alpha|beta): alive|service started:" /tmp/qemu-quiet.log 2>/dev/null; then \
+		echo "ERROR: quiet boot still printed process/service/syscall lifecycle chatter"; \
+		echo "Boot log:"; cat /tmp/qemu-quiet.log 2>/dev/null || true; \
+		echo ""; echo "=== Quiet Test FAILED ==="; exit 1; \
+	fi
+	@echo "SUCCESS: the periodic heartbeat + process/service/syscall chatter is silenced — a clean console"
 	@echo ""
 	@echo "=== Quiet Test PASSED ==="
 

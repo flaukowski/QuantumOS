@@ -143,7 +143,7 @@ static void sys_exit(uint32_t pid, uint64_t code, cpu_state_t *state) {
         cur->has_exited = true;
     }
     exit_ledger_record(pid, (int32_t)code);
-    boot_log("syscall: user process exited");
+    boot_log_v("syscall: user process exited");
     process_set_state(pid, PROCESS_STATE_TERMINATED);
     scheduler_kill_current(state);
 }

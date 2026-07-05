@@ -350,7 +350,7 @@ static void demo_thread_alpha(void) {
     while (1) {
         __asm__ volatile("hlt");
         if (++alpha_wakeups % 200 == 0) {
-            boot_log("kernel-thread alpha: alive");
+            boot_log_v("kernel-thread alpha: alive");
         }
     }
 }
@@ -360,7 +360,7 @@ static void demo_thread_beta(void) {
     while (1) {
         __asm__ volatile("hlt");
         if (++beta_wakeups % 200 == 0) {
-            boot_log("kernel-thread beta: alive");
+            boot_log_v("kernel-thread beta: alive");
         }
     }
 }
@@ -510,6 +510,13 @@ void boot_log(const char *message) {
     early_console_write("[BOOT] ");
     early_console_write(message);
     early_console_write("\r\n");
+}
+
+// Steady-state / demo boot logging — silenced under a `quiet` boot. See boot.h.
+void boot_log_v(const char *message) {
+    if (!g_boot_quiet) {
+        boot_log(message);
+    }
 }
 
 // boot_panic is provided by boot.S (assembly implementation)

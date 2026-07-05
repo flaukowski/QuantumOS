@@ -74,6 +74,13 @@ bool boot_validate_multiboot(uint32_t magic, uint32_t info_addr);
 // Returns 1 if `quiet` was on the Multiboot command line, else 0.
 int boot_is_quiet(void);
 
+// boot_log for STEADY-STATE / demo chatter: prints exactly like boot_log on a
+// normal boot, but is silenced under `quiet` so it can't bury the interactive
+// console. Use for lines that repeat while the system runs (per-process
+// create/destroy/reap, per-service start, the demo kernel-thread heartbeats);
+// keep plain boot_log for one-time boot milestones.
+void boot_log_v(const char *message);
+
 // Early boot utilities
 void early_console_init(void);
 void early_console_write(const char *str);
