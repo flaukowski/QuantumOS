@@ -27,6 +27,7 @@
 #include <kernel/ramfs.h>
 #include <kernel/ata.h>
 #include <kernel/net.h>
+#include <kernel/rtc.h>
 #include <kernel/boot.h>
 
 /* Embedded user programs (kernel/src/user_blob.S) */
@@ -426,6 +427,8 @@ static uint64_t sys_sysinfo(uint32_t pid, uint64_t op, uint64_t user_ptr, uint64
 
     if (op == SYSINFO_PS) {
         produced = process_format_ps(tmp, sizeof(tmp));
+    } else if (op == SYSINFO_TIME) {
+        produced = rtc_format(tmp, sizeof(tmp));
     } else if (op == SYSINFO_MEM) {
         size_t o = 0;
         o = fmt_str(tmp, o, sizeof(tmp), "MEM: heap free=");

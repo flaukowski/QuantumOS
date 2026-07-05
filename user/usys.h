@@ -52,6 +52,7 @@
 /* SYS_SYSINFO operations (arg 1) */
 #define SYSINFO_PS 0
 #define SYSINFO_MEM 1
+#define SYSINFO_TIME 2
 
 static inline long usys0(long n) {
     long r;
