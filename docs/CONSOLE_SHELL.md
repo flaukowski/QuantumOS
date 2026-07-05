@@ -124,6 +124,31 @@ stdin and asserts, from the same boot:
 7. `CONS: capless caller denied (EPERM)` — capability gate, by attack
 8. `QSH: reborn` — watchdog restarted the shell after `exit`
 
+## Quiet boot: a clean interactive console (`quiet`)
+
+The demo kernel narrates itself: a per-second `Timer tick:` heartbeat, plus
+the `paradoxd` and `ghostd` services logging their steady-state dynamics.
+All of it lands on the *same* serial console `qsh` uses, so for hands-on
+interactive work (typing `http`, `nslookup`, …) the prompt scrolls away
+under the chatter.
+
+Adding the token `quiet` to the kernel command line (`-append quiet`,
+alongside `qseed=…`) silences that steady-state output:
+
+- the kernel's periodic timer-tick heartbeat is suppressed (the one-time
+  "interrupts are live" line still prints);
+- `SYSINFO_QUIET` — a bufferless `SYS_SYSINFO` op — exposes the flag to
+  ring 3, and `paradoxd`/`ghostd` query it once and go silent on their
+  `logline()` output.
+
+The services still run and do their work; they just stop narrating. The
+default boot is unchanged — `quiet` is strictly opt-in, so every CI gate
+that depends on the normal boot output still holds. `make ci-smoke-quiet`
+boots `-append quiet`, types `help`, and asserts *both* that the shell
+still answers *and* that the heartbeat/chatter is gone. (The kannaka lab
+harness exposes this as `lab-qos-boot --quiet`, which pairs with
+`--network` for a clean networked shell on a cloud box.)
+
 ## Known limits / follow-ups
 
 - Serial-first: shell output is not yet mirrored to the VGA text screen

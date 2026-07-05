@@ -371,10 +371,13 @@ void timer_set_callback(timer_callback_t callback) {
 void timer_irq_handler(cpu_state_t *state) {
     timer_ticks_count++;
 
-    /* Proof-of-life on first tick, then once per second (at 100 Hz) */
+    /* Proof-of-life on first tick, then once per second (at 100 Hz). The
+     * periodic heartbeat is silenced under a `quiet` boot so it can't bury
+     * the interactive shell on the shared console; the one-time first-tick
+     * line always prints. */
     if (timer_ticks_count == 1) {
         boot_log("Timer tick 1 received — interrupts are live");
-    } else if (timer_ticks_count % TIMER_DEFAULT_HZ == 0) {
+    } else if (!boot_is_quiet() && timer_ticks_count % TIMER_DEFAULT_HZ == 0) {
         boot_log("Timer tick: ");
         early_console_write_hex(timer_ticks_count);
     }

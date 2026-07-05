@@ -115,6 +115,16 @@ static int qbuf_pos = GHOST_QBUF;           /* next unread byte (== size => empt
 
 /* ---- small serial helpers ---- */
 static void logline(const char *s) {
+    /* Under a `quiet` boot, suppress ghostd's steady-state console output
+     * (the lambda-damp heartbeat) so the interactive shell stays legible on
+     * the shared console. The flag is fixed at boot; query it once. */
+    static int quiet = -1;
+    if (quiet < 0) {
+        quiet = (int)sysinfo_quiet();
+    }
+    if (quiet) {
+        return;
+    }
     write_str(s);
 }
 

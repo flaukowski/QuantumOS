@@ -69,6 +69,7 @@
 #define SYSINFO_PS 0
 #define SYSINFO_MEM 1
 #define SYSINFO_TIME 2
+#define SYSINFO_QUIET 3
 
 static inline long usys0(long n) {
     long r;
@@ -185,6 +186,11 @@ static inline long cons_write(const void *buf, long len) {
  * buf. Uncapped, read-only. Returns bytes copied. */
 static inline long sysinfo(long op, void *buf, long len) {
     return usys3(SYS_SYSINFO, op, (long)buf, len);
+}
+/* 1 if the kernel booted `quiet` (a service should then suppress its
+ * steady-state console logging), else 0. Uncapped, no buffer. */
+static inline long sysinfo_quiet(void) {
+    return usys3(SYS_SYSINFO, SYSINFO_QUIET, 0, 0);
 }
 
 /* SYS_OPEN flags (arg 2). Write flags require the filesystem-write

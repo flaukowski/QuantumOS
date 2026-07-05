@@ -67,6 +67,13 @@ void boot_panic(const char *message);
 void boot_log(const char *message);
 bool boot_validate_multiboot(uint32_t magic, uint32_t info_addr);
 
+// Quiet boot (cmdline token `quiet`): suppress the periodic console
+// heartbeat/chatter (the timer-tick line and the demo services' steady-state
+// logging) so the shared serial console stays clean for interactive qsh use.
+// One-time boot output and CI-gated lines are unaffected on a normal boot.
+// Returns 1 if `quiet` was on the Multiboot command line, else 0.
+int boot_is_quiet(void);
+
 // Early boot utilities
 void early_console_init(void);
 void early_console_write(const char *str);

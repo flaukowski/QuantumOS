@@ -419,7 +419,34 @@ static int hex_val(char c) {
     return -1;
 }
 
-// Match "qseed=" at p; on hit, decode up to 16 hex digits into a u64.
+// Quiet-boot flag (cmdline token `quiet`) — see boot_is_quiet().
+static int g_boot_quiet = 0;
+
+int boot_is_quiet(void) {
+    return g_boot_quiet;
+}
+
+// Is the whole-word token `word` present in `cmd` (space/tab/start bounded on
+// the left, space/tab/NUL bounded on the right)? Avoids matching `quiet` inside
+// a longer token like `disquiet=1`.
+static int cmdline_has_word(const char *cmd, const char *word) {
+    for (const char *p = cmd; *p; p++) {
+        if (p != cmd && p[-1] != ' ' && p[-1] != '\t') {
+            continue; // not at a token boundary
+        }
+        int k = 0;
+        while (word[k] && p[k] == word[k]) {
+            k++;
+        }
+        if (word[k] == '\0' && (p[k] == '\0' || p[k] == ' ' || p[k] == '\t')) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+// Match "qseed=" at p; on hit, decode up to 16 hex digits into a u64. Also
+// scans for the bare `quiet` token (clean interactive console).
 static void parse_boot_cmdline(uint32_t info_addr) {
     uint32_t *info = (uint32_t *)(uintptr_t)info_addr;
     // Multiboot v1: flags bit 2 => cmdline valid; cmdline ptr at word 4
@@ -429,6 +456,10 @@ static void parse_boot_cmdline(uint32_t info_addr) {
     const char *cmd = (const char *)(uintptr_t)info[4];
     if (!cmd) {
         return;
+    }
+
+    if (cmdline_has_word(cmd, "quiet")) {
+        g_boot_quiet = 1;
     }
 
     static const char key[] = "qseed=";
