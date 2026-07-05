@@ -150,7 +150,7 @@ $(USER_BUILD)/%_elf.o: $(USER_BUILD)/%.elf
 ROOTFS_DIR = rootfs
 ROOTFS_FILES = $(shell find $(ROOTFS_DIR) -type f 2>/dev/null)
 ROOTFS_STAGE = $(BUILD_DIR)/rootfs-stage
-INITRD_BIN_PROGS = hello
+INITRD_BIN_PROGS = hello args
 
 $(BUILD_DIR)/initrd.tar: $(ROOTFS_FILES) $(INITRD_BIN_PROGS:%=$(USER_BUILD)/%.elf)
 	@mkdir -p $(BUILD_DIR)
@@ -353,7 +353,7 @@ ci-smoke: kernel
 	@echo "[1/3] Build verified: $(BUILD_DIR)/kernel.elf exists"
 	@test -f $(BUILD_DIR)/kernel.elf || (echo "ERROR: Kernel not built" && exit 1)
 	@echo "[2/3] Running QEMU boot test (14 second timeout, shell session piped into the console)..."
-	@( printf 'help\nps\nfree\nuptime\nghost\nqrand\nls\ncat /docs/hello.txt\nrun /bin/hello\nexit\n'; sleep 13 ) | \
+	@( printf 'help\nps\nfree\nuptime\nghost\nqrand\nls\ncat /docs/hello.txt\nrun /bin/hello\nrun /bin/args alpha quantumos\nexit\n'; sleep 13 ) | \
 		timeout 14s qemu-system-x86_64 -kernel $(BUILD_DIR)/kernel.elf32 \
 		-serial stdio -m 128M -display none -no-reboot 2>&1 | tee /tmp/qemu-boot.log || true
 	@echo ""
@@ -516,6 +516,20 @@ ci-smoke: kernel
 		echo ""; echo "=== Smoke Test FAILED ==="; exit 1; \
 	fi
 	@echo "SUCCESS: exit code returned to the shell (SYS_WAITPID live)"
+	@# epic #62 follow-up (issue #69): 'run /bin/args alpha quantumos' must pass
+	@# an argument vector — the program reads argc=3 and both args back.
+	@if ! grep -q "ARGS: argc=3" /tmp/qemu-boot.log 2>/dev/null; then \
+		echo "ERROR: /bin/args did not see argc=3 (argv not delivered)"; \
+		echo "Boot log:"; cat /tmp/qemu-boot.log 2>/dev/null || true; \
+		echo ""; echo "=== Smoke Test FAILED ==="; exit 1; \
+	fi
+	@if ! grep -q "ARGS: argv\[1\]=alpha" /tmp/qemu-boot.log 2>/dev/null || \
+	    ! grep -q "ARGS: argv\[2\]=quantumos" /tmp/qemu-boot.log 2>/dev/null; then \
+		echo "ERROR: /bin/args did not echo its arguments (argv[1]=alpha argv[2]=quantumos)"; \
+		echo "Boot log:"; cat /tmp/qemu-boot.log 2>/dev/null || true; \
+		echo ""; echo "=== Smoke Test FAILED ==="; exit 1; \
+	fi
+	@echo "SUCCESS: argv delivered to a spawned program (argc + both args read back)"
 	@# Capability gate: the capless ghost-test must be denied SYS_SPAWN — only
 	@# qsh holds the spawn capability.
 	@if ! grep -q "SPAWN: capless caller denied (EPERM)" /tmp/qemu-boot.log 2>/dev/null; then \
