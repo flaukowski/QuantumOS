@@ -161,6 +161,27 @@
 #define UDP_OP_RECVFROM 2
 #define UDP_OP_CLOSE 3
 
+#define SYS_TCP                                                                                    \
+    28 /* rdi = op, rsi = tcp_req_t ptr; ring-3 TCP CLIENT (epic
+                         * #82). Ops: TCP_OP_CONNECT (active open to ip:port,
+                         * WOULD_BLOCK while the handshake runs, 0 once
+                         * ESTABLISHED, EIO on refuse/timeout), TCP_OP_SEND
+                         * (<= MSS bytes, WOULD_BLOCK while a segment is
+                         * outstanding), TCP_OP_RECV (bytes from the receive
+                         * ring, 0 = peer closed / EOF, WOULD_BLOCK when empty),
+                         * TCP_OP_CLOSE (graceful FIN, poll to CLOSED),
+                         * TCP_OP_STATUS. One connection at a time; all TCP I/O
+                         * runs in the IF=1 net thread. Gated on
+                         * CAP_RESOURCE_DEVICE over DEVICE_ID_NET (EPERM
+                         * without) — held only by qsh. */
+
+/* SYS_TCP operations (rdi). */
+#define TCP_OP_CONNECT 0
+#define TCP_OP_SEND 1
+#define TCP_OP_RECV 2
+#define TCP_OP_CLOSE 3
+#define TCP_OP_STATUS 4
+
 /* SYS_RESOLVE / SYS_UDP: still pending (poll again) / queue-ring full. */
 #define RESOLVE_WOULDBLOCK ((uint64_t) - 11)
 

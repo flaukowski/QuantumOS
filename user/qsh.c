@@ -88,7 +88,7 @@ static const char *arg_of(const char *line, const char *cmd) {
 
 static void cmd_help(void) {
     out("qsh: commands: help echo ps free uptime date pid ls cat write rm sync nslookup udping "
-        "run qrand qseed ghost clear exit\r\n");
+        "http run qrand qseed ghost clear exit\r\n");
 }
 
 /* write <path> <text>: create/truncate an overlay file with the text
@@ -425,6 +425,248 @@ static void cmd_udping(const char *host) {
     }
 }
 
+/* ------------------------------------------------------------------ *
+ * http <host> [port]: fetch a web page over the ring-3 TCP client
+ * (epic #82). Resolves the name (SYS_RESOLVE — two syscalls compose),
+ * opens a connection, sends one HTTP/1.0 GET, reads the response to EOF,
+ * and prints the status line + byte count. All polling is time-bounded
+ * (heartbeat+yield so a slow fetch can't get the shell watchdog-killed),
+ * and the socket is closed on every exit path (qsh never exits — a
+ * leaked connection would wedge the single TCB).
+ * ------------------------------------------------------------------ */
+
+/* Parse "a.b.c.d" into ip[4]; returns 1 on success. Stops at NUL/space. */
+static int parse_ipv4(const char *s, unsigned char *ip) {
+    int vals[4];
+    int vi = 0, cur = 0, digits = 0;
+    for (int i = 0;; i++) {
+        char c = s[i];
+        if (c >= '0' && c <= '9') {
+            cur = cur * 10 + (c - '0');
+            digits++;
+            if (cur > 255) {
+                return 0;
+            }
+        } else if (c == '.' || c == '\0' || c == ' ') {
+            if (digits == 0 || vi >= 4) {
+                return 0;
+            }
+            vals[vi++] = cur;
+            cur = 0;
+            digits = 0;
+            if (c == '\0' || c == ' ') {
+                break;
+            }
+        } else {
+            return 0;
+        }
+    }
+    if (vi != 4) {
+        return 0;
+    }
+    for (int i = 0; i < 4; i++) {
+        ip[i] = (unsigned char)vals[i];
+    }
+    return 1;
+}
+
+/* Poll-close the connection (bounded); ignores the outcome. */
+static void http_close(tcp_req_t *req) {
+    long t0 = ticks();
+    for (int guard = 0; guard < 20000 && ticks() - t0 < 300; guard++) {
+        heartbeat();
+        long r = tcp_(TCP_CLOSE, req);
+        if (r != UDP_WOULDBLOCK) {
+            break;
+        }
+        yield();
+    }
+}
+
+static void cmd_http(const char *args) {
+    char host[64];
+    int hlen = 0;
+    while (args[hlen] && args[hlen] != ' ' && hlen < (int)sizeof(host) - 1) {
+        host[hlen] = args[hlen];
+        hlen++;
+    }
+    host[hlen] = '\0';
+
+    const char *pp = args + hlen;
+    while (*pp == ' ') {
+        pp++;
+    }
+    unsigned port = 0;
+    while (*pp >= '0' && *pp <= '9') {
+        port = port * 10 + (unsigned)(*pp - '0');
+        pp++;
+    }
+    if (port == 0) {
+        port = 80;
+    }
+
+    /* Resolve the host (literal dotted-quad, or DNS via SYS_RESOLVE). */
+    unsigned char ip[4];
+    if (!parse_ipv4(host, ip)) {
+        long r = RESOLVE_WOULDBLOCK;
+        for (int tries = 0; tries < 2000 && r == RESOLVE_WOULDBLOCK; tries++) {
+            heartbeat();
+            r = resolve_(host, ip);
+            if (r == RESOLVE_WOULDBLOCK) {
+                yield();
+            }
+        }
+        if (r == -4) {
+            out("qsh: http: denied (no network capability)\r\n");
+            return;
+        }
+        if (r != 0) {
+            out("qsh: http: could not resolve host\r\n");
+            return;
+        }
+    }
+
+    tcp_req_t req;
+    for (unsigned i = 0; i < sizeof(req); i++) {
+        ((unsigned char *)&req)[i] = 0;
+    }
+
+    /* Connect (time-bounded poll). */
+    long cr = UDP_WOULDBLOCK;
+    long t0 = ticks();
+    for (int guard = 0; guard < 200000 && ticks() - t0 < 600; guard++) {
+        heartbeat();
+        req.sock = 0;
+        for (int i = 0; i < 4; i++) {
+            req.ip[i] = ip[i];
+        }
+        req.port = (unsigned short)port;
+        cr = tcp_(TCP_CONNECT, &req);
+        if (cr == 0) {
+            break;
+        }
+        if (cr != UDP_WOULDBLOCK) {
+            break;
+        }
+        yield();
+    }
+    if (cr != 0) {
+        http_close(&req);
+        if (cr == -4) {
+            out("qsh: http: denied (no network capability)\r\n");
+        } else {
+            out("qsh: http: connect failed\r\n");
+        }
+        return;
+    }
+
+    /* One HTTP/1.0 GET (<= MSS, sends in a single segment). */
+    char get[256];
+    int g = ghost_put(get, 0, "GET / HTTP/1.0\r\nHost: ");
+    for (int i = 0; host[i] && g < (int)sizeof(get) - 32; i++) {
+        get[g++] = host[i];
+    }
+    g = ghost_put(get, g, "\r\nConnection: close\r\n\r\n");
+
+    long sres = UDP_WOULDBLOCK;
+    t0 = ticks();
+    for (int guard = 0; guard < 200000 && ticks() - t0 < 500; guard++) {
+        heartbeat();
+        req.buf = get;
+        req.len = (unsigned short)g;
+        sres = tcp_(TCP_SEND, &req);
+        if (sres == g) {
+            break;
+        }
+        if (sres != UDP_WOULDBLOCK) {
+            break;
+        }
+        yield();
+    }
+    if (sres != g) {
+        http_close(&req);
+        out("qsh: http: send failed\r\n");
+        return;
+    }
+
+    /* Read the response to EOF, capturing the first line and counting
+     * bytes. The idle timer resets on progress so a large transfer isn't
+     * cut short; only a genuine stall trips the bound. */
+    char chunk[256];
+    char status[80];
+    int slen = 0, got_status = 0;
+    long total = 0;
+    int reset = 0;
+    long tr = ticks();
+    for (int guard = 0; guard < 2000000; guard++) {
+        heartbeat();
+        if (ticks() - tr > 800) {
+            break;
+        }
+        req.buf = chunk;
+        req.len = (unsigned short)sizeof(chunk);
+        long rr = tcp_(TCP_RECV, &req);
+        if (rr == 0) {
+            break; /* clean EOF (peer FIN, ring drained) */
+        }
+        if (rr == UDP_WOULDBLOCK) {
+            yield();
+            continue;
+        }
+        if (rr < 0) {
+            reset = 1; /* reset/error mid-stream — the fetch is truncated */
+            break;
+        }
+        if (!got_status) {
+            for (long i = 0; i < rr; i++) {
+                char c = chunk[i];
+                if (c == '\r' || c == '\n') {
+                    got_status = 1;
+                    break;
+                }
+                if (slen < (int)sizeof(status) - 1) {
+                    status[slen++] = c;
+                }
+            }
+        }
+        total += rr;
+        tr = ticks();
+    }
+    status[slen] = '\0';
+
+    http_close(&req);
+
+    if (!got_status) {
+        out("qsh: http: no response (timed out)\r\n");
+        return;
+    }
+
+    /* Status line — host label WITHOUT the port. */
+    char b[128];
+    int o = ghost_put(b, 0, "qsh: http ");
+    for (int i = 0; host[i] && o < (int)sizeof(b) - 48; i++) {
+        b[o++] = host[i];
+    }
+    o = ghost_put(b, o, " -> ");
+    for (int i = 0; i < slen && o < (int)sizeof(b) - 4; i++) {
+        b[o++] = status[i];
+    }
+    o = ghost_put(b, o, "\r\n");
+    out_bytes(b, o);
+
+    o = ghost_put(b, 0, "qsh: http ");
+    for (int i = 0; host[i] && o < (int)sizeof(b) - 40; i++) {
+        b[o++] = host[i];
+    }
+    o = ghost_put(b, o, ": ");
+    o = ghost_put_u(b, o, (unsigned)total);
+    /* Be honest about a truncated transfer: a mid-stream reset drains what
+     * was buffered and then returns an error, which must NOT read as a
+     * clean fetch. */
+    o = ghost_put(b, o, reset ? " bytes then connection reset\r\n" : " bytes received\r\n");
+    out_bytes(b, o);
+}
+
 static void cmd_sync(void) {
     long r = sync_();
     if (r >= 0) {
@@ -723,6 +965,10 @@ static void execute(const char *line) {
         cmd_udping(a);
     } else if (is_cmd(line, "udping")) {
         out("qsh: udping: usage: udping <host>\r\n");
+    } else if ((a = arg_of(line, "http")) != 0) {
+        cmd_http(a);
+    } else if (is_cmd(line, "http")) {
+        out("qsh: http: usage: http <host> [port]\r\n");
     } else if (is_cmd(line, "free")) {
         cmd_free();
     } else if (is_cmd(line, "uptime")) {

@@ -531,11 +531,16 @@ jobs:
     - name: Checkout code
       uses: actions/checkout@v4
     - name: Install dependencies
+      # python3 + curl drive the hermetic TCP test's loopback HTTP server
+      # (epic #82); installed explicitly rather than relying on the runner
+      # image's preinstall.
       run: |
         sudo apt-get update
-        sudo apt-get install -y build-essential qemu-system-x86 nasm
+        sudo apt-get install -y build-essential qemu-system-x86 nasm python3 curl
     - name: ARP-resolve the SLIRP gateway through the rtl8139 driver
       run: make ci-smoke-net
+    - name: Fetch a web page over the ring-3 TCP client (epic #82)
+      run: make ci-smoke-http
 
   integration:
     name: Integration Tests

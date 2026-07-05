@@ -439,6 +439,12 @@ status_t process_destroy(uint32_t pid) {
      * them at its next wake (never mid-copy). */
     net_udp_cleanup(process->pid);
 
+    /* Abort a TCP connection the process still owned (epic #82): posts
+     * an abort the net thread services (RST + retire). Guarded on
+     * ownership, so an unrelated process's death never tears down qsh's
+     * live connection. */
+    net_tcp_cleanup(process->pid);
+
     /* Revoke every capability the process owns (cascades to anything
      * it granted onward) */
     cap_revoke_all_for_process(pid);

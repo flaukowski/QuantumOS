@@ -789,6 +789,91 @@ static uint64_t sys_udp(uint32_t pid, uint64_t op, uint64_t req_ptr) {
     }
 }
 
+/* SYS_TCP (epic #82): ring-3 TCP client. Same request-struct ABI shape as
+ * SYS_UDP (the `sock`/`ip`/`port`/`len`/`buf` layout); the single
+ * connection means `sock` is unused. */
+#define TCP_SEND_MAX 1460 /* == TCP_MSS */
+
+static uint64_t tcp_map_err(long r) {
+    switch (r) {
+    case NET_TCP_EINVAL:
+        return SYSCALL_EINVAL;
+    case NET_TCP_EIO:
+        return SYSCALL_EIO;
+    case NET_TCP_WOULDBLOCK:
+        return RESOLVE_WOULDBLOCK;
+    case NET_TCP_ENONET:
+        return SYSCALL_EIO;
+    default:
+        return (uint64_t)r;
+    }
+}
+
+static uint64_t sys_tcp(uint32_t pid, uint64_t op, uint64_t req_ptr) {
+    /* Capability FIRST (the sys_udp/sys_resolve precedent) so the capless
+     * gate fires even in the NIC-less default boot. */
+    if (cap_find_resource(pid, CAP_RESOURCE_DEVICE, CAP_READ, DEVICE_ID_NET) != CAP_SUCCESS) {
+        return SYSCALL_EPERM;
+    }
+    if (!in_user_range(req_ptr) || !in_user_range(req_ptr + sizeof(udp_req_k_t) - 1)) {
+        return SYSCALL_EFAULT;
+    }
+    udp_req_k_t req;
+    const uint8_t *usrc = (const uint8_t *)req_ptr;
+    for (size_t i = 0; i < sizeof(req); i++) {
+        ((uint8_t *)&req)[i] = usrc[i];
+    }
+
+    switch (op) {
+    case TCP_OP_CONNECT:
+        if (!net_udp_dst_ok(req.ip)) {
+            return SYSCALL_EINVAL; /* same unARPable-destination guard as UDP */
+        }
+        return tcp_map_err(net_tcp_connect(pid, req.ip, req.port));
+
+    case TCP_OP_SEND: {
+        if (req.len > TCP_SEND_MAX) {
+            return SYSCALL_EINVAL;
+        }
+        if (req.len > 0 && (!in_user_range(req.buf) || !in_user_range(req.buf + req.len - 1))) {
+            return SYSCALL_EFAULT;
+        }
+        static uint8_t bounce[TCP_SEND_MAX];
+        const uint8_t *ubuf = (const uint8_t *)req.buf;
+        for (uint16_t i = 0; i < req.len; i++) {
+            bounce[i] = ubuf[i];
+        }
+        return tcp_map_err(net_tcp_send(pid, bounce, req.len));
+    }
+
+    case TCP_OP_RECV: {
+        uint16_t want = req.len > TCP_SEND_MAX ? TCP_SEND_MAX : req.len;
+        if (want > 0 && (!in_user_range(req.buf) || !in_user_range(req.buf + want - 1))) {
+            return SYSCALL_EFAULT;
+        }
+        static uint8_t bounce[TCP_SEND_MAX];
+        long r = net_tcp_recv(pid, bounce, want);
+        if (r < 0) {
+            return tcp_map_err(r);
+        }
+        uint8_t *ubuf = (uint8_t *)req.buf;
+        for (long i = 0; i < r; i++) {
+            ubuf[i] = bounce[i];
+        }
+        return (uint64_t)r; /* 0 = EOF */
+    }
+
+    case TCP_OP_CLOSE:
+        return tcp_map_err(net_tcp_close(pid));
+
+    case TCP_OP_STATUS:
+        return tcp_map_err(net_tcp_status(pid));
+
+    default:
+        return SYSCALL_EINVAL;
+    }
+}
+
 static uint64_t sys_read(uint32_t pid, uint64_t fd, uint64_t user_ptr, uint64_t len) {
     process_t *cur = process_get_by_pid(pid);
     if (!cur || fd >= PROCESS_MAX_FDS || !cur->fds[fd].used) {
@@ -1137,6 +1222,9 @@ static void syscall_dispatch(cpu_state_t *state) {
         break;
     case SYS_UDP:
         state->rax = sys_udp(pid, state->rdi, state->rsi);
+        break;
+    case SYS_TCP:
+        state->rax = sys_tcp(pid, state->rdi, state->rsi);
         break;
     default:
         state->rax = SYSCALL_ENOSYS;

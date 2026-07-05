@@ -236,12 +236,65 @@ the answer itself. CI gates both `qsh: udp <N> bytes from 10.0.2.3:53`
 existing DNS gates' (reliable) runner-resolver dependency — no new risk
 class.
 
+## A TCP client: `SYS_TCP` + the shell's `http` (epic #82)
+
+The capstone. `SYS_TCP` (#28) is a real, if minimal, TCP **client** — one
+active-open connection at a time — built on the same net-thread spine.
+The IF=1 net thread owns the entire state machine (CLOSED → SYN_SENT →
+ESTABLISHED → the FIN dance → TIME_WAIT → CLOSED, plus an ERROR sink for
+RST/timeout); syscalls only read/write the shared TCB under the publish
+discipline and post one-shot request flags (`connect_req` / `close_req` /
+`abort_req` — independent flags so a reaper's abort can never be clobbered
+by a concurrent close). The op-multiplexed syscall exposes CONNECT / SEND
+/ RECV (0 = EOF) / CLOSE / STATUS, all non-blocking WOULD_BLOCK polls,
+capability-gated exactly like `SYS_UDP`.
+
+The design was adversarially attacked before implementation (epic #82
+records the findings). The load-bearing pieces the attack forced:
+
+- **One-pass input.** A single segment carrying ACK + payload + FIN (both
+  real servers piggyback the FIN on the last data segment) is processed
+  as an ordered pipeline — validate/checksum/RST, then the ACK field,
+  then in-order payload, then the FIN — with exactly one ACK reflecting
+  the final `rcv_nxt`. Mutually-exclusive branches would drop the FIN and
+  hang forever waiting for an EOF that already arrived.
+- **Mandatory checksum, done right.** The segment length comes from the
+  IP header's `total_len`, never the Ethernet frame length (a 54-byte
+  control segment is padded to the 60-byte minimum; folding the pad into
+  the checksum drops every ACK). The checksum runs once over a single
+  running sum of pseudo-header + header + payload.
+- **A window-update path.** The advertised window is the free receive-ring
+  space; after the app drains the ring the net thread proactively
+  re-advertises, instead of deadlocking on a peer that is waiting for a
+  window it was last told was zero.
+- **A terminal ERROR + net-thread-only retire.** A syscall never resets a
+  net-thread-owned field; ERROR is sticky until an abort retires the TCB
+  to a pristine CLOSED (the UDP three-state lesson), and the ephemeral
+  port advances every open so a stale in-flight segment can't 4-tuple
+  match a fresh connection.
+
+The shell gains `http <host> [port]`: it resolves the name (`SYS_RESOLVE`
+— two syscalls compose), connects, sends one `GET / HTTP/1.0` with
+`Host:` and `Connection: close`, reads the response to EOF, and prints the
+status line and byte count. **CI proves it two ways.** A hermetic gate
+runs a loopback `python3 -m http.server` on the runner: SLIRP forwards a
+guest connection to `10.0.2.2:PORT` to the host's `127.0.0.1:PORT`, so
+`http 10.0.2.2 18080` drives a full three-way handshake, bidirectional
+data, and FIN teardown against a real TCP peer with **zero external
+network** — gated on `qsh: http 10.0.2.2 -> HTTP/1.[01] 200` and
+`qsh: http 10.0.2.2: <N> bytes received`. Then `http example.com` is the
+real-world capstone (`qsh: http example.com -> HTTP/1.[01] 200`), the same
+non-hermetic runner-egress class as the `example.com` DNS gate.
+
 ## Known limits / follow-ups (the honest boundary)
 
-- **No TCP** is planned — Ethernet/ARP/IPv4/UDP/ICMP/DHCP/DNS + ring-3
-  UDP sockets is a complete, useful stack. TCP (with its state machine
-  and retransmission) is the honest follow-up.
-- 4 sockets, 4-deep rings, 1472-byte datagrams (no IP fragmentation),
-  no UDP TX checksum (0 is legal for IPv4), no broadcast/multicast send.
-  Only `qsh` holds the network capability today.
-- Single rtl8139, IPv4 only. One kernel resolve in flight at a time.
+- **TCP is client only.** No listen/accept (no server), one connection at
+  a time, stop-and-wait send (one outstanding segment ≤ MSS), in-order
+  receive only (out-of-order segments are dropped; the peer retransmits),
+  no congestion control, a shortened ~1 s TIME_WAIT (not 2 MSL), and no
+  TLS. A complete, honest fetch-a-page client — not a general stack.
+- UDP: 4 sockets, 4-deep rings, 1472-byte datagrams (no IP
+  fragmentation), no UDP TX checksum (0 is legal for IPv4), no
+  broadcast/multicast send.
+- Single rtl8139, IPv4 only. Only `qsh` holds the network capability
+  today; one kernel resolve and one TCP connection in flight at a time.
