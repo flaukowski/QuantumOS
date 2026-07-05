@@ -613,6 +613,122 @@ static int dns_parse(const uint8_t *frame, uint16_t len, uint16_t txid, uint8_t 
     return 0;
 }
 
+/* Resolve `host` to an IPv4 A record via SLIRP's DNS proxy. Bounded,
+ * pumps the RX queue (must run in the IF=1 net thread, not a cli'd
+ * syscall). Returns 0 and fills out_ip on success, -1 on failure.
+ * Requires a NIC and a DHCP lease (for the unicast source address). */
+static int dns_resolve(const char *host, uint16_t txid, uint8_t *out_ip) {
+    if (!rtl8139_present() || !dhcp_have_lease) {
+        return -1;
+    }
+    uint8_t dns_mac[ETH_ADDR_LEN];
+    if (!arp_resolve(IP_DNS, my_ip, dns_mac)) {
+        return -1;
+    }
+    uint8_t out[sizeof(eth_hdr_t) + sizeof(ip_hdr_t) + sizeof(udp_hdr_t) + 256];
+    uint16_t n = dns_build(out, dns_mac, host, txid);
+    if (n == 0) {
+        return -1;
+    }
+    rtl8139_transmit(out, n);
+
+    uint8_t frame[RTL_FRAME_MAX];
+    for (int tries = 0; tries < 400; tries++) {
+        uint16_t m = rtl8139_receive(frame, sizeof(frame));
+        if (m > 0 && dns_parse(frame, m, txid, out_ip)) {
+            return 0;
+        }
+        if (m == 0) {
+            if (tries > 0 && tries % 100 == 0) {
+                rtl8139_transmit(out, n);
+            }
+            __asm__ volatile("hlt");
+        }
+    }
+    return -1;
+}
+
+/* ---- ring-3 resolve service (epic #73 follow-up, #77) ----
+ *
+ * A syscall runs with interrupts disabled, so it cannot pump the RX ring
+ * (the NIC IRQ can never fire) — DNS must happen in the IF=1 net thread.
+ * SYS_RESOLVE posts a hostname here and the net thread services it; the
+ * user polls. Single writer per field on one CPU, `resolve_state` (a
+ * volatile, written last on post) is the handshake flag. */
+#define RESOLVE_IDLE 0
+#define RESOLVE_PENDING 1
+#define RESOLVE_DONE 2
+#define RESOLVE_FAILED 3
+#define RESOLVE_HOST_MAX 64
+
+static volatile int resolve_state;
+static char resolve_host[RESOLVE_HOST_MAX];
+static uint8_t resolve_ip[4];
+static uint16_t resolve_txid = 0x2000;
+
+int net_ready(void) {
+    return rtl8139_present() && dhcp_have_lease;
+}
+
+int net_nic_present(void) {
+    return rtl8139_present();
+}
+
+/* Post a resolve request (from SYS_RESOLVE). Returns 0 accepted, -1 if
+ * the network isn't ready or a request is already in flight. */
+int net_request_resolve(const char *host) {
+    if (!net_ready()) {
+        return -1;
+    }
+    if (resolve_state == RESOLVE_PENDING) {
+        return -1; /* one at a time */
+    }
+    int i = 0;
+    while (i < RESOLVE_HOST_MAX - 1 && host[i]) {
+        resolve_host[i] = host[i];
+        i++;
+    }
+    resolve_host[i] = '\0';
+    resolve_state = RESOLVE_PENDING; /* written last — the handshake */
+    return 0;
+}
+
+/* Poll the outcome (from SYS_RESOLVE). Returns 1 done (out_ip filled),
+ * 0 still pending, -1 failed (also resets to idle). */
+int net_poll_resolve(uint8_t *out_ip) {
+    if (resolve_state == RESOLVE_DONE) {
+        for (int i = 0; i < 4; i++) {
+            out_ip[i] = resolve_ip[i];
+        }
+        resolve_state = RESOLVE_IDLE;
+        return 1;
+    }
+    if (resolve_state == RESOLVE_FAILED) {
+        resolve_state = RESOLVE_IDLE;
+        return -1;
+    }
+    return 0;
+}
+
+/* Net thread body after the self-test: service resolve requests forever.
+ * Wakes on every timer tick (hlt) and checks for a pending request. */
+void net_service_loop(void) {
+    for (;;) {
+        if (resolve_state == RESOLVE_PENDING) {
+            uint8_t ip[4];
+            if (dns_resolve(resolve_host, resolve_txid++, ip) == 0) {
+                for (int i = 0; i < 4; i++) {
+                    resolve_ip[i] = ip[i];
+                }
+                resolve_state = RESOLVE_DONE;
+            } else {
+                resolve_state = RESOLVE_FAILED;
+            }
+        }
+        __asm__ volatile("hlt");
+    }
+}
+
 /* ---- self-test: ARP then DHCP ---- */
 
 static void log_ip(const char *label, const uint8_t *ip) {
@@ -742,42 +858,9 @@ void net_selftest(void) {
      * which forwards to the host resolver. Getting a well-formed A record
      * back is the capstone: ARP -> IPv4 -> UDP -> DNS, both directions. */
     {
-        uint8_t dns_mac[ETH_ADDR_LEN];
-        if (!arp_resolve(IP_DNS, my_ip, dns_mac)) {
-            boot_log("NET: DNS resolver ARP failed (10.0.2.3)");
-            return;
-        }
-        const char *host = "example.com";
-        uint16_t txid = 0x1D15;
-        uint8_t out[sizeof(eth_hdr_t) + sizeof(ip_hdr_t) + sizeof(udp_hdr_t) + 256];
-        uint16_t n = dns_build(out, dns_mac, host, txid);
-        if (n == 0) {
-            return;
-        }
-        rtl8139_transmit(out, n);
-
         uint8_t resolved[4];
-        int got = 0;
-        for (int tries = 0; tries < 400 && !got; tries++) {
-            uint16_t m = rtl8139_receive(frame, sizeof(frame));
-            if (m > 0 && dns_parse(frame, m, txid, resolved)) {
-                got = 1;
-            } else if (m == 0) {
-                if (tries > 0 && tries % 100 == 0) {
-                    rtl8139_transmit(out, n);
-                }
-                __asm__ volatile("hlt");
-            }
-        }
-        if (got) {
-            char label[48];
-            int o = 0;
-            const char *pfx = "NET: DNS example.com -> ";
-            while (*pfx) {
-                label[o++] = *pfx++;
-            }
-            label[o] = 0;
-            log_ip(label, resolved);
+        if (dns_resolve("example.com", 0x1D15, resolved) == 0) {
+            log_ip("NET: DNS example.com -> ", resolved);
         } else {
             boot_log("NET: DNS example.com timed out (no answer)");
         }

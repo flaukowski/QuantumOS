@@ -33,6 +33,10 @@
 #define SYS_FWRITE 23
 #define SYS_UNLINK 24
 #define SYS_SYNC 25
+#define SYS_RESOLVE 26
+
+/* SYS_RESOLVE: still resolving, poll again. */
+#define RESOLVE_WOULDBLOCK (-11)
 
 /* SYS_WAITPID: the target is still running. */
 #define WAITPID_RUNNING 256
@@ -214,6 +218,14 @@ static inline long unlink_(const char *path) {
  * -4 EPERM without the write capability, -5 EIO with no disk. */
 static inline long sync_(void) {
     return usys0(SYS_SYNC);
+}
+
+/* Resolve a hostname into ip[4]. Non-blocking request/poll: returns
+ * RESOLVE_WOULDBLOCK (-11) while pending (poll again after a yield), 0
+ * with ip filled on success, -4 EPERM without the network capability,
+ * -5 EIO if there is no network or the lookup failed. */
+static inline long resolve_(const char *host, unsigned char *ip) {
+    return usys2(SYS_RESOLVE, (long)host, (long)ip);
 }
 
 /* Start an initrd ELF as a new ring-3 process. `cmd` is a command line:

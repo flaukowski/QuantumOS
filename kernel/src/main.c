@@ -371,9 +371,10 @@ static void demo_thread_beta(void) {
 static void net_thread(void) {
     net_init();
     net_selftest();
-    while (1) {
-        __asm__ volatile("hlt");
-    }
+    // Then serve ring-3 resolve requests forever (SYS_RESOLVE). Network
+    // I/O must live here, in an IF=1 thread, because a syscall runs with
+    // interrupts disabled and could never pump the NIC's RX interrupt.
+    net_service_loop();
 }
 
 // Scheduler + demo thread initialization

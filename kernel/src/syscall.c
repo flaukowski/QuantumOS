@@ -26,6 +26,7 @@
 #include <kernel/initrd.h>
 #include <kernel/ramfs.h>
 #include <kernel/ata.h>
+#include <kernel/net.h>
 #include <kernel/boot.h>
 
 /* Embedded user programs (kernel/src/user_blob.S) */
@@ -626,6 +627,56 @@ static uint64_t sys_sync_fs(uint32_t pid) {
     return (uint64_t)n;
 }
 
+/* Resolve a hostname to an IPv4 address (epic #73 follow-up). Real
+ * authority — using the shared NIC — so it is capability-gated on a
+ * CAP_RESOURCE_DEVICE over DEVICE_ID_NET, held only by qsh. The lookup
+ * itself runs in the IF=1 net thread (a cli'd syscall can't pump the RX
+ * IRQ); this call posts the request on the first invocation and polls on
+ * the rest, so the caller loops with SYS_YIELD. */
+static uint64_t sys_resolve(uint32_t pid, uint64_t host_ptr, uint64_t out_ptr) {
+    if (cap_find_resource(pid, CAP_RESOURCE_DEVICE, CAP_READ, DEVICE_ID_NET) != CAP_SUCCESS) {
+        return SYSCALL_EPERM;
+    }
+    if (!in_user_range(out_ptr)) {
+        return SYSCALL_EFAULT;
+    }
+
+    char host[64];
+    if (copy_user_path(host_ptr, host, sizeof(host)) != 0) {
+        return SYSCALL_EFAULT;
+    }
+
+    /* Poll first: if a result for the in-flight request is ready, deliver
+     * it. A fresh (idle) state returns 0 here, so we then post below. */
+    uint8_t ip[4];
+    int r = net_poll_resolve(ip);
+    if (r == 1) {
+        uint8_t *dst = (uint8_t *)out_ptr;
+        for (int i = 0; i < 4; i++) {
+            if (in_user_range(out_ptr + i)) {
+                dst[i] = ip[i];
+            }
+        }
+        return 0;
+    }
+    if (r < 0) {
+        return SYSCALL_EIO; /* the lookup failed */
+    }
+
+    /* No NIC at all is a hard failure; a NIC that is still bringing its
+     * DHCP lease up is transient — keep polling until the net thread is
+     * ready and services the request. */
+    if (!net_nic_present()) {
+        return SYSCALL_EIO;
+    }
+
+    /* Pending or idle: (re)post the request. net_request_resolve returns
+     * busy while one is already in flight or the lease isn't up yet, so
+     * re-posting the same host each poll is harmless. */
+    net_request_resolve(host);
+    return RESOLVE_WOULDBLOCK;
+}
+
 static uint64_t sys_read(uint32_t pid, uint64_t fd, uint64_t user_ptr, uint64_t len) {
     process_t *cur = process_get_by_pid(pid);
     if (!cur || fd >= PROCESS_MAX_FDS || !cur->fds[fd].used) {
@@ -968,6 +1019,9 @@ static void syscall_dispatch(cpu_state_t *state) {
         break;
     case SYS_SYNC:
         state->rax = sys_sync_fs(pid);
+        break;
+    case SYS_RESOLVE:
+        state->rax = sys_resolve(pid, state->rdi, state->rsi);
         break;
     default:
         state->rax = SYSCALL_ENOSYS;
@@ -1413,6 +1467,8 @@ void user_shell_init(uint32_t ghostd_pid) {
          * other declared grants. */
         .grant_spawn = 1,
         .grant_fswrite = 1,
+        /* Network access: the shell alone may resolve hostnames (SYS_RESOLVE). */
+        .grant_net = 1,
     };
 
     uint32_t sid = 0;

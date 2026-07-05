@@ -163,13 +163,39 @@ unicast IP path on its own.
 4. `NET: ping 10.0.2.2 reply received` — unicast IPv4 + ICMP
 5. `NET: DNS example.com -> <ip>` — the full stack, a real hostname lookup
 
+## Ring-3 access: `SYS_RESOLVE` + the shell's `nslookup`
+
+The stack started as a kernel boot self-test; `SYS_RESOLVE` (#26) exposes
+it to user programs. The design respects the one hard constraint: **a
+syscall runs with interrupts disabled**, so it can never pump the NIC's
+RX interrupt — it cannot do network I/O itself. Instead:
+
+- The resident **`net` kernel thread** (IF=1, which already ran the
+  self-test) owns all network I/O. After the self-test it enters
+  `net_service_loop`, waking on each timer tick to service requests.
+- `SYS_RESOLVE` is **non-blocking request/poll**: the first call posts a
+  hostname into a shared slot (`resolve_state`, a volatile written last as
+  the handshake flag) and returns `WOULD_BLOCK`; the net thread does the
+  DNS lookup and fills the result; later calls poll — `WOULD_BLOCK` while
+  pending, then the address, or EIO on failure. The shell loops with
+  `yield` (heartbeating so a slow lookup can't get it watchdog-killed).
+- It is **capability-gated**: `CAP_RESOURCE_DEVICE` over `DEVICE_ID_NET`
+  (a synthetic id — the NIC's I/O base is dynamic), granted to `qsh`
+  alone. The capless `ghost_test` proves the denial by attack every boot
+  (`NETC: capless caller denied (EPERM)`).
+
+The shell gains `nslookup <host>`. CI pipes `nslookup example.com` into
+the shell and gates `qsh: example.com -> <a.b.c.d>` — a hostname resolved
+**from ring 3** through the syscall, distinct from the boot self-test's
+`NET:` line. A NIC-less boot reports no network honestly.
+
 ## Known limits / follow-ups (the honest boundary)
 
-- **No TCP** is planned — Ethernet/ARP/IPv4/UDP/ICMP/DHCP/DNS is a
-  complete, useful stack. TCP (with its state machine and retransmission)
-  is the honest follow-up.
-- Single rtl8139, IPv4 only, kernel-internal (a **ring-3 socket API** is a
-  natural later epic — the pieces a user program would need are all here).
-- The stack is a boot-time self-test, not yet a persistent service with a
-  routing table; a resident `netd` (in the ghostd tradition) that answers
-  socket requests over capability IPC is the way to expose it to userland.
+- **No TCP** is planned — Ethernet/ARP/IPv4/UDP/ICMP/DHCP/DNS + a ring-3
+  resolver is a complete, useful stack. TCP (with its state machine and
+  retransmission) is the honest follow-up.
+- `SYS_RESOLVE` is the first network primitive exposed to userland; a
+  fuller socket API (`sendto`/`recvfrom` over the same net-thread worker)
+  is the natural extension — the request/poll spine is already here.
+- Single rtl8139, IPv4 only. One resolve in flight at a time (only `qsh`
+  holds the capability, and it looks up one name at a time).

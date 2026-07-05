@@ -111,6 +111,19 @@ void _start(void) {
         }
     }
 
+    /* And for network access (epic #73 follow-up): only qsh holds the
+     * network capability, so a capless resolve must be denied EPERM
+     * before any lookup is posted. */
+    {
+        unsigned char ip[4];
+        long nr = resolve_("example.com", ip);
+        if (nr == -4) {
+            write_str("NETC: capless caller denied (EPERM)");
+        } else {
+            write_str("NETC: WARNING — capless caller was NOT denied");
+        }
+    }
+
     const uint32_t seeds[3] = {GHOST_SEED_0, GHOST_SEED_1, GHOST_SEED_2};
     uint32_t pats[3][GHOST_PW];
 

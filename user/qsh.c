@@ -87,8 +87,8 @@ static const char *arg_of(const char *line, const char *cmd) {
  * ------------------------------------------------------------------ */
 
 static void cmd_help(void) {
-    out("qsh: commands: help echo ps free uptime pid ls cat write rm sync run qrand qseed "
-        "ghost clear exit\r\n");
+    out("qsh: commands: help echo ps free uptime pid ls cat write rm sync nslookup run qrand "
+        "qseed ghost clear exit\r\n");
 }
 
 /* write <path> <text>: create/truncate an overlay file with the text
@@ -154,6 +154,44 @@ static void cmd_rm(const char *path) {
         o = ghost_put_u(b, o, (unsigned)(-r));
         o = ghost_put(b, o, ")\r\n");
         out_bytes(b, o);
+    }
+}
+
+/* nslookup <host>: resolve a hostname to an IPv4 address via SYS_RESOLVE
+ * (the shell's network capability at work). The kernel does the lookup
+ * in its net thread; we poll, yielding+heartbeating so a slow lookup
+ * doesn't get the shell watchdog-killed. */
+static void cmd_nslookup(const char *host) {
+    unsigned char ip[4];
+    long r = RESOLVE_WOULDBLOCK;
+    for (int tries = 0; tries < 2000 && r == RESOLVE_WOULDBLOCK; tries++) {
+        heartbeat();
+        r = resolve_(host, ip);
+        if (r == RESOLVE_WOULDBLOCK) {
+            yield();
+        }
+    }
+    if (r == 0) {
+        char b[96];
+        int o = ghost_put(b, 0, "qsh: ");
+        for (int i = 0; host[i] && o < (int)sizeof(b) - 32; i++) {
+            b[o++] = host[i];
+        }
+        o = ghost_put(b, o, " -> ");
+        for (int i = 0; i < 4; i++) {
+            o = ghost_put_u(b, o, ip[i]);
+            if (i < 3) {
+                b[o++] = '.';
+            }
+        }
+        o = ghost_put(b, o, "\r\n");
+        out_bytes(b, o);
+    } else if (r == -4) {
+        out("qsh: nslookup: denied (no network capability)\r\n");
+    } else if (r == RESOLVE_WOULDBLOCK) {
+        out("qsh: nslookup: timed out\r\n");
+    } else {
+        out("qsh: nslookup: no network / lookup failed\r\n");
     }
 }
 
@@ -437,6 +475,10 @@ static void execute(const char *line) {
         cmd_rm(a);
     } else if (is_cmd(line, "sync")) {
         cmd_sync();
+    } else if ((a = arg_of(line, "nslookup")) != 0) {
+        cmd_nslookup(a);
+    } else if (is_cmd(line, "nslookup")) {
+        out("qsh: nslookup: usage: nslookup <host>\r\n");
     } else if (is_cmd(line, "free")) {
         cmd_free();
     } else if (is_cmd(line, "uptime")) {

@@ -116,6 +116,10 @@ typedef struct {
      * the RAM overlay and SYS_SYNC to the persistence disk. Held only by
      * qsh (epic #71). */
     uint8_t grant_fswrite;
+    /* Grant a CAP_RESOURCE_DEVICE read cap over DEVICE_ID_NET, re-minted on
+     * every start. The network-access right: SYS_RESOLVE (hostname lookup)
+     * from ring 3. Held only by qsh (epic #73 follow-up). */
+    uint8_t grant_net;
 } service_definition_t;
 
 /* ============================================================================
