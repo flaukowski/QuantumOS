@@ -143,7 +143,25 @@
                          * a CAP_RESOURCE_DEVICE capability over DEVICE_ID_NET
                          * (EPERM without) — held only by qsh. */
 
-/* SYS_RESOLVE: still resolving (poll again). */
+#define SYS_UDP                                                                                    \
+    27 /* rdi = op, rsi = udp_req_t ptr; ring-3 UDP sockets (epic
+                         * #80). Ops: UDP_OP_BIND (port 0 = ephemeral, returns
+                         * sock id), UDP_OP_SENDTO (<= 1472 bytes queued for the
+                         * net thread, WOULD_BLOCK when the TX queue is full),
+                         * UDP_OP_RECVFROM (pops the socket's RX ring, returns
+                         * byte count or WOULD_BLOCK when empty), UDP_OP_CLOSE.
+                         * Non-blocking throughout — all NIC I/O happens in the
+                         * IF=1 net thread, never in this cli'd syscall. Gated
+                         * on CAP_RESOURCE_DEVICE over DEVICE_ID_NET (EPERM
+                         * without) — held only by qsh. */
+
+/* SYS_UDP operations (rdi). */
+#define UDP_OP_BIND 0
+#define UDP_OP_SENDTO 1
+#define UDP_OP_RECVFROM 2
+#define UDP_OP_CLOSE 3
+
+/* SYS_RESOLVE / SYS_UDP: still pending (poll again) / queue-ring full. */
 #define RESOLVE_WOULDBLOCK ((uint64_t) - 11)
 
 /* SYS_WAITPID: the target is still running. */

@@ -87,8 +87,8 @@ static const char *arg_of(const char *line, const char *cmd) {
  * ------------------------------------------------------------------ */
 
 static void cmd_help(void) {
-    out("qsh: commands: help echo ps free uptime date pid ls cat write rm sync nslookup run "
-        "qrand qseed ghost clear exit\r\n");
+    out("qsh: commands: help echo ps free uptime date pid ls cat write rm sync nslookup udping "
+        "run qrand qseed ghost clear exit\r\n");
 }
 
 /* write <path> <text>: create/truncate an overlay file with the text
@@ -192,6 +192,232 @@ static void cmd_nslookup(const char *host) {
         out("qsh: nslookup: timed out\r\n");
     } else {
         out("qsh: nslookup: no network / lookup failed\r\n");
+    }
+}
+
+/* ------------------------------------------------------------------ *
+ * udping <host>: a USERSPACE DNS client over the SYS_UDP socket API
+ * (epic #80). Where nslookup asks the kernel to resolve, udping builds
+ * the DNS A-query itself in ring 3, sends it as a raw datagram to
+ * SLIRP's proxy (10.0.2.3:53) with UDP_SENDTO, receives the raw reply
+ * with UDP_RECVFROM, and parses the answer itself — proving user
+ * programs can speak arbitrary UDP through the capability-gated
+ * socket API.
+ * ------------------------------------------------------------------ */
+
+/* Build a DNS A query for `name`. Returns the query length, 0 if the
+ * name doesn't fit. */
+static int dns_query_build(unsigned char *q, int max, const char *name, unsigned txid) {
+    if (max < 18) {
+        return 0;
+    }
+    q[0] = (unsigned char)(txid >> 8);
+    q[1] = (unsigned char)txid;
+    q[2] = 0x01; /* recursion desired */
+    q[3] = 0x00;
+    q[4] = 0x00;
+    q[5] = 0x01; /* qdcount = 1 */
+    for (int i = 6; i < 12; i++) {
+        q[i] = 0;
+    }
+    int p = 12;
+    int label = p++;
+    int llen = 0;
+    for (int i = 0; name[i]; i++) {
+        if (p >= max - 5) {
+            return 0;
+        }
+        if (name[i] == '.') {
+            q[label] = (unsigned char)llen;
+            label = p++;
+            llen = 0;
+        } else {
+            q[p++] = (unsigned char)name[i];
+            llen++;
+        }
+    }
+    q[label] = (unsigned char)llen;
+    q[p++] = 0x00; /* root label */
+    q[p++] = 0x00; /* QTYPE A = 1 */
+    q[p++] = 0x01;
+    q[p++] = 0x00; /* QCLASS IN = 1 */
+    q[p++] = 0x01;
+    return p;
+}
+
+/* Advance past a (possibly compressed) DNS name. */
+static int dns_skip_name(const unsigned char *r, int len, int off) {
+    while (off < len) {
+        unsigned char c = r[off];
+        if (c == 0) {
+            return off + 1;
+        }
+        if ((c & 0xC0) == 0xC0) {
+            return off + 2; /* a compression pointer ends the name */
+        }
+        off += c + 1;
+    }
+    return len;
+}
+
+/* Find the first A record in a DNS response. 1 + ip filled, or 0. */
+static int dns_reply_parse(const unsigned char *r, int len, unsigned char *ip) {
+    if (len < 12) {
+        return 0;
+    }
+    int qd = (r[4] << 8) | r[5];
+    int an = (r[6] << 8) | r[7];
+    int off = 12;
+    for (int q = 0; q < qd; q++) {
+        off = dns_skip_name(r, len, off) + 4; /* + QTYPE/QCLASS */
+    }
+    for (int a = 0; a < an; a++) {
+        off = dns_skip_name(r, len, off);
+        if (off + 10 > len) {
+            return 0;
+        }
+        int type = (r[off] << 8) | r[off + 1];
+        int rdlen = (r[off + 8] << 8) | r[off + 9];
+        off += 10;
+        if (type == 1 && rdlen == 4 && off + 4 <= len) {
+            for (int i = 0; i < 4; i++) {
+                ip[i] = r[off + i];
+            }
+            return 1;
+        }
+        off += rdlen;
+    }
+    return 0;
+}
+
+/* Send the query to 10.0.2.3:53, retrying WOULDBLOCK (the net thread
+ * may be busy with a kernel resolve). Bounded, heartbeating. */
+static long udping_send(long sock, unsigned char *query, int qlen) {
+    udp_req_t req;
+    req.sock = sock;
+    req.ip[0] = 10;
+    req.ip[1] = 0;
+    req.ip[2] = 2;
+    req.ip[3] = 3;
+    req.port = 53;
+    req.len = (unsigned short)qlen;
+    req.buf = query;
+    long r = UDP_WOULDBLOCK;
+    for (int tries = 0; tries < 2000 && r == UDP_WOULDBLOCK; tries++) {
+        heartbeat();
+        r = udp_(UDP_SENDTO, &req);
+        if (r == UDP_WOULDBLOCK) {
+            yield();
+        }
+    }
+    return r;
+}
+
+static void cmd_udping(const char *host) {
+    udp_req_t req;
+    for (unsigned i = 0; i < sizeof(req); i++) {
+        ((unsigned char *)&req)[i] = 0;
+    }
+    long sock = udp_(UDP_BIND, &req); /* port 0 = ephemeral */
+    if (sock == -4) {
+        out("qsh: udping: denied (no network capability)\r\n");
+        return;
+    }
+    if (sock < 0) {
+        out("qsh: udping: no socket (no network?)\r\n");
+        return;
+    }
+
+    unsigned char query[288];
+    unsigned txid = (unsigned)ticks() & 0xFFFFu;
+    int qlen = dns_query_build(query, (int)sizeof(query), host, txid);
+    if (qlen == 0) {
+        req.sock = sock;
+        udp_(UDP_CLOSE, &req);
+        out("qsh: udping: hostname too long\r\n");
+        return;
+    }
+
+    long sr = udping_send(sock, query, qlen);
+    if (sr < 0) {
+        req.sock = sock;
+        udp_(UDP_CLOSE, &req);
+        out(sr == UDP_WOULDBLOCK ? "qsh: udping: send queue busy\r\n"
+                                 : "qsh: udping: send failed\r\n");
+        return;
+    }
+
+    /* Poll for the reply, TIME-bounded (~8s at 100 Hz: resolver latency
+     * is wall-clock, not an iteration count). Validate the datagram is
+     * really our answer — right sender, right txid; strays are skipped.
+     * One retransmit halfway in case the first query was lost. */
+    unsigned char resp[512];
+    long t0 = ticks();
+    long got = -1;
+    int resent = 0;
+    while (ticks() - t0 < 800) {
+        heartbeat();
+        req.sock = sock;
+        req.len = (unsigned short)sizeof(resp);
+        req.buf = resp;
+        long rr = udp_(UDP_RECVFROM, &req);
+        if (rr == UDP_WOULDBLOCK) {
+            if (!resent && ticks() - t0 > 400) {
+                resent = 1;
+                udping_send(sock, query, qlen);
+            }
+            yield();
+            continue;
+        }
+        if (rr < 0) {
+            break;
+        }
+        if (req.ip[0] == 10 && req.ip[1] == 0 && req.ip[2] == 2 && req.ip[3] == 3 &&
+            req.port == 53 && rr >= 12 && resp[0] == (unsigned char)(txid >> 8) &&
+            resp[1] == (unsigned char)txid) {
+            got = rr;
+            break;
+        }
+    }
+
+    /* Single close point BEFORE reporting: qsh never exits, so a slot
+     * leaked on any path here would be leaked for good (4 exist). */
+    req.sock = sock;
+    udp_(UDP_CLOSE, &req);
+
+    if (got < 0) {
+        out("qsh: udping: timed out\r\n");
+        return;
+    }
+
+    char b[96];
+    int o = ghost_put(b, 0, "qsh: udp ");
+    o = ghost_put_u(b, o, (unsigned)got);
+    o = ghost_put(b, o, " bytes from 10.0.2.3:53\r\n");
+    out_bytes(b, o);
+
+    unsigned char ip[4];
+    if (dns_reply_parse(resp, (int)got, ip)) {
+        o = ghost_put(b, 0, "qsh: udpdns ");
+        for (int i = 0; host[i] && o < (int)sizeof(b) - 40; i++) {
+            b[o++] = host[i];
+        }
+        o = ghost_put(b, o, " -> ");
+        for (int i = 0; i < 4; i++) {
+            o = ghost_put_u(b, o, ip[i]);
+            if (i < 3) {
+                b[o++] = '.';
+            }
+        }
+        o = ghost_put(b, o, "\r\n");
+        out_bytes(b, o);
+    } else {
+        o = ghost_put(b, 0, "qsh: udpdns ");
+        for (int i = 0; host[i] && o < (int)sizeof(b) - 24; i++) {
+            b[o++] = host[i];
+        }
+        o = ghost_put(b, o, ": no A record\r\n");
+        out_bytes(b, o);
     }
 }
 
@@ -489,6 +715,10 @@ static void execute(const char *line) {
         cmd_nslookup(a);
     } else if (is_cmd(line, "nslookup")) {
         out("qsh: nslookup: usage: nslookup <host>\r\n");
+    } else if ((a = arg_of(line, "udping")) != 0) {
+        cmd_udping(a);
+    } else if (is_cmd(line, "udping")) {
+        out("qsh: udping: usage: udping <host>\r\n");
     } else if (is_cmd(line, "free")) {
         cmd_free();
     } else if (is_cmd(line, "uptime")) {

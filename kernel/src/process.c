@@ -17,6 +17,7 @@
 #include <kernel/quantum.h>
 #include <kernel/gdt.h>
 #include <kernel/vmspace.h>
+#include <kernel/net.h>
 
 /* Local strncpy implementation (no libc in freestanding kernel) */
 static char *strncpy_local(char *dest, const char *src, size_t n) {
@@ -431,6 +432,12 @@ status_t process_destroy(uint32_t pid) {
 
     /* Clean up IPC resources */
     ipc_process_cleanup(process->pid);
+
+    /* Release any UDP sockets the process still held (epic #80): same
+     * dead-PCB lesson as the fd sweep above — a dead process must not
+     * pin socket slots. Marks slots CLOSING; the net thread retires
+     * them at its next wake (never mid-copy). */
+    net_udp_cleanup(process->pid);
 
     /* Revoke every capability the process owns (cascades to anything
      * it granted onward) */

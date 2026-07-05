@@ -49,4 +49,49 @@ int net_request_resolve(const char *host);
  * 0 pending, -1 failed. */
 int net_poll_resolve(uint8_t *out_ip);
 
+/* ---- ring-3 UDP sockets (epic #80) ----
+ *
+ * Syscall-facing socket operations. All run in cli'd syscall context and
+ * never touch the NIC: SENDTO queues into a TX ring the net thread
+ * drains, RECVFROM pops a per-socket RX ring the net thread's demux
+ * fills. Payload pointers are KERNEL memory (the syscall layer bounces
+ * user buffers); the net thread must never see a user pointer. */
+
+/* Largest UDP payload: 1500 (MTU) - 20 (IP) - 8 (UDP). */
+#define UDP_PAYLOAD_MAX 1472
+
+/* net_udp_* return codes (mapped to SYSCALL_* by the syscall layer). */
+#define NET_UDP_EINVAL (-1) /* bad socket id / state / port */
+#define NET_UDP_EPERM (-2)  /* caller does not own the socket */
+#define NET_UDP_EAGAIN (-3) /* RX ring empty / TX queue full / no slot */
+#define NET_UDP_ENONET (-4) /* no NIC present (hard failure) */
+
+/* Bind a new socket to `port` (0 = ephemeral). Returns the socket id
+ * (>= 0) or NET_UDP_EINVAL (reserved/in-use port) / NET_UDP_EAGAIN (no
+ * free slot). */
+long net_udp_bind(uint32_t pid, uint16_t port);
+
+/* Queue one datagram (payload is kernel memory, len <= UDP_PAYLOAD_MAX).
+ * 0 queued; EAGAIN with the TX queue full or the DHCP lease still coming
+ * up; ENONET with no NIC. */
+long net_udp_sendto(uint32_t pid, long sock, const uint8_t *dip, uint16_t dport,
+                    const uint8_t *payload, uint16_t len);
+
+/* Pop the socket's oldest datagram into `payload` (kernel memory, up to
+ * `maxlen` bytes — longer datagrams are truncated). Fills the sender's
+ * ip/port. Returns copied bytes, EAGAIN when empty, ENONET with no NIC. */
+long net_udp_recvfrom(uint32_t pid, long sock, uint8_t *payload, uint16_t maxlen, uint8_t *out_sip,
+                      uint16_t *out_sport);
+
+/* Release a socket (marks it CLOSING; the net thread retires it). */
+long net_udp_close(uint32_t pid, long sock);
+
+/* Release every socket `pid` owns (process teardown — the epic-#71
+ * dead-PCB lesson applied to sockets). */
+void net_udp_cleanup(uint32_t pid);
+
+/* Is `dip` a sane unicast destination? Rejects 0.0.0.0, multicast/
+ * reserved (>= 224.0.0.0), 255.255.255.255, and our own address. */
+int net_udp_dst_ok(const uint8_t *dip);
+
 #endif /* NET_H */
