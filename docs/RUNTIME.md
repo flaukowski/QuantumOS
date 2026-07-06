@@ -152,3 +152,17 @@ kannakad is the ranked, importance-weighted cousin. Each memory's content-born
 phase is stored as a normalized `(cos, sin)` vector, so `cos(Δφ)` is a 2-D dot
 product — no atan2. A ci-smoke gate asserts the recall argmax is correct **and**
 the dream cohered the field (`RESONANCE VERIFIED`).
+
+`user/quantumd.c` is the essence of `kannaka-quantum`, and — unlike the two
+above — a **kernel-embedded service**, not a `/bin` program. `SYS_QRAND` and
+`SYS_QSEED` are capability-gated (a capless `/bin` caller gets EPERM by
+design), so quantumd is declared with `grant_quantum_pool = 1` in
+`user_quantum_demo_init()`; the service framework mints its quantum-pool read
+cap on every start. It draws **real collapse-derived entropy** — a quantum
+coin, a rejection-sampled die, a qrng readout — and performs recall as
+**amplitude amplification**: candidate resonance scores are amplitude-encoded,
+Grover-amplified in closed form (`P_target = sin²((2m+1)·asin(√p))`, via
+`fx_asin`/`fx_sin`), then sampled from the pool; the amplified argmax must
+agree with the classical argmax (`QUANTUM VERIFIED`). It refuses to fall back
+to a software PRNG — if the pool is denied it fails loud, honouring
+kannaka-quantum's entropy discipline.

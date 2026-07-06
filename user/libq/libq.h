@@ -64,7 +64,7 @@ void free(void *p);
 void *calloc(size_t nmemb, size_t size);
 void *realloc(void *p, size_t n);
 
-/* Integer-only printf family: %d %i %u %x %X %s %c %p %%, the '0' flag,
+/* Integer-only printf family: %d %i %u %x %X %s %c %p %%, the '0' and '-' flags,
  * numeric width, and the l/ll length modifiers. No floating point (the user
  * ABI is -mno-sse; a float conversion would drag in soft-float). snprintf /
  * vsnprintf are pure and follow C99 truncation: size 0 writes nothing, the
@@ -81,6 +81,7 @@ int vsnprintf(char *buf, size_t size, const char *fmt, va_list ap);
  * Q15 (a value v means v / 32768, range [-32767, 32767]). */
 int32_t fx_sin(uint32_t turns);
 int32_t fx_cos(uint32_t turns);
-uint32_t fx_isqrt(uint64_t x); /* floor(sqrt(x)) */
+uint32_t fx_isqrt(uint64_t x);   /* floor(sqrt(x)) */
+uint32_t fx_asin(int32_t x_q15); /* turns in [0, quarter] with sin == x (coarse) */
 
 #endif /* LIBQ_H */
