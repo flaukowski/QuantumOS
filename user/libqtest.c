@@ -8,8 +8,8 @@
  * "LIBQ FAIL: <what>" and omits the sentinel, failing the gate. Uses only
  * SYS_WRITE + SYS_EXIT (no capabilities).
  *
- * The self-test grows with the runtime: this commit covers the mem and str
- * functions; the heap and printf checks arrive with those modules.
+ * The self-test grows with the runtime: this commit covers the mem, str and
+ * heap functions; the printf checks arrive with that module.
  *
  * SPDX-License-Identifier: GPL-2.0-only
  */
@@ -88,6 +88,55 @@ void _start(void) {
     if (strchr(hay, '\0') != hay + 5) {
         fail("LIBQ FAIL: strchr nul");
     }
+
+    /* ---- heap ---- */
+    void *p = malloc(100);
+    if (p == NULL || ((uintptr_t)p & 15u) != 0) {
+        fail("LIBQ FAIL: malloc align");
+    }
+    memset(p, 0x5A, 100);
+    if (((unsigned char *)p)[0] != 0x5A || ((unsigned char *)p)[99] != 0x5A) {
+        fail("LIBQ FAIL: malloc readback");
+    }
+    void *q = malloc(200);
+    if (q == NULL) {
+        fail("LIBQ FAIL: malloc 200");
+    }
+    memset(q, 0x33, 200);
+    void *r = realloc(q, 400); /* q is consumed; must preserve the first 200 */
+    if (r == NULL) {
+        fail("LIBQ FAIL: realloc");
+    }
+    for (int i = 0; i < 200; i++) {
+        if (((unsigned char *)r)[i] != 0x33) {
+            fail("LIBQ FAIL: realloc preserve");
+        }
+    }
+    unsigned char *z = calloc(8, 16);
+    if (z == NULL) {
+        fail("LIBQ FAIL: calloc");
+    }
+    for (int i = 0; i < 128; i++) {
+        if (z[i] != 0) {
+            fail("LIBQ FAIL: calloc zero");
+        }
+    }
+    free(p); /* free the arena-head block first: backward-coalesce guard */
+    free(r);
+    free(z);
+    /* churn, then one large alloc must succeed — proving coalescing reclaims */
+    for (int i = 0; i < 64; i++) {
+        void *t = malloc(256);
+        if (t == NULL) {
+            fail("LIBQ FAIL: churn malloc");
+        }
+        free(t);
+    }
+    void *big = malloc(LIBQ_HEAP_SIZE / 2);
+    if (big == NULL) {
+        fail("LIBQ FAIL: large alloc after churn");
+    }
+    free(big);
 
     write_str("LIBQ: self-test OK");
     exit_(0);
