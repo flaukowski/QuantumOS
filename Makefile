@@ -87,7 +87,7 @@ ASSEMBLY_SOURCES = $(wildcard $(KERNEL_DIR)/src/*.S)
 # objects (symbols _binary_<name>_elf_start/_end)
 USER_DIR = user
 USER_BUILD = $(BUILD_DIR)/user
-USER_PROGS = init echo client hbsvc ghostd ghost_test paradoxd paradox_test swarm_svc qsh
+USER_PROGS = init echo client hbsvc ghostd ghost_test paradoxd paradox_test swarm_svc qsh quantumd
 USER_ELF_OBJS = $(USER_PROGS:%=$(USER_BUILD)/%_elf.o)
 
 # libq: the freestanding ring-3 runtime, built as a static archive and linked
@@ -600,6 +600,15 @@ ci-smoke: kernel
 		echo ""; echo "=== Smoke Test FAILED ==="; exit 1; \
 	fi
 	@echo "SUCCESS: kannakad holographic recall + dream verified on libq (RESONANCE VERIFIED)"
+	@# fourth citizen: quantumd runs at boot as a quantum-pool SERVICE and draws
+	@# REAL entropy (SYS_QRAND); its amplitude-amplification recall must agree
+	@# with the classical argmax for QUANTUM VERIFIED to print.
+	@if ! grep -q "quantumd: QUANTUM VERIFIED" /tmp/qemu-boot.log 2>/dev/null; then \
+		echo "ERROR: quantumd quantum demo failed (quantumd: QUANTUM VERIFIED)"; \
+		echo "Boot log:"; cat /tmp/qemu-boot.log 2>/dev/null || true; \
+		echo ""; echo "=== Smoke Test FAILED ==="; exit 1; \
+	fi
+	@echo "SUCCESS: quantumd drew real quantum entropy + amplitude-amplification recall (QUANTUM VERIFIED)"
 	@# epic #71 phase 2: the writable RAM overlay. 'write' must store bytes
 	@# (kernel-reported count, not an echo), 'ls /data' must show the file
 	@# tagged [ram] with the kernel-computed size, and 'rm' must remove it.

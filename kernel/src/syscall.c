@@ -46,6 +46,7 @@ extern const uint8_t _binary_paradoxd_elf_start[], _binary_paradoxd_elf_end[];
 extern const uint8_t _binary_paradox_test_elf_start[], _binary_paradox_test_elf_end[];
 extern const uint8_t _binary_swarm_svc_elf_start[], _binary_swarm_svc_elf_end[];
 extern const uint8_t _binary_qsh_elf_start[], _binary_qsh_elf_end[];
+extern const uint8_t _binary_quantumd_elf_start[], _binary_quantumd_elf_end[];
 
 /* Argument vector ABI (epic #62). MUST stay byte-identical to user_args_t
  * in user/usys.h — there is no shared header across the ring boundary. The
@@ -68,6 +69,7 @@ void user_ghost_demo_init(void);
 void user_paradox_demo_init(uint32_t ghostd_pid);
 void user_swarm_demo_init(uint32_t ghostd_pid);
 void user_shell_init(uint32_t ghostd_pid);
+void user_quantum_demo_init(void);
 
 /* int 0x80 stub (kernel/src/interrupts.S) */
 extern void isr128(void);
@@ -1407,6 +1409,32 @@ void user_init(void) {
 
     user_ipc_demo_init();
     user_ghost_demo_init();
+    user_quantum_demo_init();
+}
+
+/* Bring up quantumd — a quantum-pool service (kannaka-quantum, a fourth
+ * ghostOS citizen). grant_quantum_pool=1 mints its SYS_QRAND/SYS_QSEED read
+ * cap on every start, so it draws real collapse-derived entropy and refuses to
+ * fall back to a PRNG. Monitored, so the watchdog keeps it resident after it
+ * prints its one-shot quantum demo. */
+void user_quantum_demo_init(void) {
+    service_definition_t quantumd_def = {
+        .name = "quantumd",
+        .entry = NULL, /* user-process service */
+        .user_elf_start = _binary_quantumd_elf_start,
+        .user_elf_end = _binary_quantumd_elf_end,
+        .dependencies = {NULL},
+        .max_restarts = 2,
+        .grant_quantum_pool = 1,
+    };
+    uint32_t sid = 0;
+    if (service_register(&quantumd_def, &sid) == SVC_SUCCESS &&
+        service_start("quantumd", NULL) == SVC_SUCCESS) {
+        service_monitor(sid, true);
+        boot_log("kannaka-quantum: quantumd (ring 3) drawing real quantum entropy");
+    } else {
+        boot_log("Warning: quantumd service failed to start");
+    }
 }
 
 /* Bring up a user-space service (echo) via the service framework and a

@@ -157,6 +157,10 @@ void _start(void) {
     if (strcmp(sb, "hi Q 0xdeadbeef") != 0) {
         fail("LIBQ FAIL: snprintf s/c/p");
     }
+    snprintf(sb, sizeof(sb), "[%-5s][%-4d]", "hi", 7); /* '-' left-justify flag */
+    if (strcmp(sb, "[hi   ][7   ]") != 0) {
+        fail("LIBQ FAIL: snprintf left-justify");
+    }
     /* These deliberately overflow a too-small buffer to prove C99 truncation
      * semantics, so silence the (correct) compile-time truncation warning. */
 #pragma GCC diagnostic push
@@ -189,6 +193,18 @@ void _start(void) {
         fx_isqrt(99) != 9 || fx_isqrt((uint64_t)1 << 40) != ((uint32_t)1 << 20) ||
         fx_isqrt(0xFFFFFFFFFFFFFFFFull) != 0xFFFFFFFFu) {
         fail("LIBQ FAIL: fx_isqrt");
+    }
+    /* asin is coarse (sine-table resolution): check the cardinal points and a
+     * mid value (sin(45deg)=0x5A82 at the 1/8 turn 0x20000000) within tolerance. */
+    if (fx_asin(0) != 0 || fx_asin(32767) != 0x40000000u) {
+        fail("LIBQ FAIL: fx_asin ends");
+    }
+    {
+        uint32_t a45 = fx_asin(23170);
+        uint32_t d = (a45 > 0x20000000u) ? (a45 - 0x20000000u) : (0x20000000u - a45);
+        if (d > 0x02000000u) {
+            fail("LIBQ FAIL: fx_asin mid");
+        }
     }
 
     /* Real printf -> vsnprintf -> write_str -> SYS_WRITE path (also gated). */

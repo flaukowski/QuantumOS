@@ -68,3 +68,26 @@ uint32_t fx_isqrt(uint64_t x) {
     }
     return (uint32_t)root;
 }
+
+/* asin: the turn in [0, quarter] whose sine is x (Q15 in [0, 32767]), by
+ * bisection on fx_sin. Resolution is the sine table's (~1.4 degrees) — coarse
+ * but monotonic, which is all the amplitude-amplification math needs. */
+uint32_t fx_asin(int32_t x_q15) {
+    if (x_q15 <= 0) {
+        return 0;
+    }
+    if (x_q15 >= 32767) {
+        return 0x40000000u; /* quarter turn = asin(1) */
+    }
+    uint32_t lo = 0;
+    uint32_t hi = 0x40000000u;
+    for (int i = 0; i < 30; i++) {
+        uint32_t mid = lo + (hi - lo) / 2u;
+        if (fx_sin(mid) < x_q15) {
+            lo = mid;
+        } else {
+            hi = mid;
+        }
+    }
+    return lo;
+}

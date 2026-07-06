@@ -3,7 +3,7 @@
  *
  * vsnprintf is the pure, iterative core (no recursion, no floating point);
  * snprintf/vprintf/printf build on it. Supported conversions: d i u x X s c p
- * and a literal percent, with the '0' flag, a numeric field width, and the
+ * and a literal percent, with the '0' and '-' (left-justify) flags, a numeric field width, and the
  * l / ll length modifiers. No floating point: the user ABI is -mno-sse, so a
  * float conversion would drag in soft-float and break the -nostdlib link.
  *
@@ -38,11 +38,11 @@ static void out_str(outbuf_t *o, const char *s) {
     }
 }
 
-/* Emit `mag` in `base` with an optional leading '-', right-justified to
- * `width` and padded with '0' (when zero) or ' '. The sign is placed before
- * the zero padding but after the space padding, matching C. */
+/* Emit `mag` in `base` with an optional leading '-', justified to `width`.
+ * left: pad with spaces AFTER. Otherwise pad before with '0' (when zero) or
+ * ' '; the sign sits before zero padding but after space padding, matching C. */
 static void emit_number(outbuf_t *o, unsigned long long mag, int negative, unsigned base, int upper,
-                        int width, int zero) {
+                        int width, int zero, int left) {
     char tmp[24];
     const char *digs = upper ? "0123456789ABCDEF" : "0123456789abcdef";
     int n = 0;
@@ -54,6 +54,18 @@ static void emit_number(outbuf_t *o, unsigned long long mag, int negative, unsig
         mag /= base;
     }
     int total = n + (negative ? 1 : 0);
+    if (left) {
+        if (negative) {
+            out_char(o, '-');
+        }
+        while (n) {
+            out_char(o, tmp[--n]);
+        }
+        for (int i = total; i < width; i++) {
+            out_char(o, ' ');
+        }
+        return;
+    }
     if (zero) {
         if (negative) {
             out_char(o, '-');
@@ -87,8 +99,15 @@ int vsnprintf(char *buf, size_t size, const char *fmt, va_list ap) {
             continue;
         }
         int zero = 0;
-        while (*f == '0') {
-            zero = 1;
+        int left = 0;
+        for (;;) {
+            if (*f == '0') {
+                zero = 1;
+            } else if (*f == '-') {
+                left = 1;
+            } else {
+                break;
+            }
             f++;
         }
         int width = 0;
@@ -111,14 +130,14 @@ int vsnprintf(char *buf, size_t size, const char *fmt, va_list ap) {
             int neg = v < 0;
             unsigned long long mag =
                 neg ? (unsigned long long)(-(v + 1)) + 1ull : (unsigned long long)v;
-            emit_number(&o, mag, neg, 10u, 0, width, zero);
+            emit_number(&o, mag, neg, 10u, 0, width, zero, left);
             break;
         }
         case 'u': {
             unsigned long long v = (lng >= 2)   ? va_arg(ap, unsigned long long)
                                    : (lng == 1) ? va_arg(ap, unsigned long)
                                                 : (unsigned long long)va_arg(ap, unsigned int);
-            emit_number(&o, v, 0, 10u, 0, width, zero);
+            emit_number(&o, v, 0, 10u, 0, width, zero, left);
             break;
         }
         case 'x':
@@ -126,14 +145,14 @@ int vsnprintf(char *buf, size_t size, const char *fmt, va_list ap) {
             unsigned long long v = (lng >= 2)   ? va_arg(ap, unsigned long long)
                                    : (lng == 1) ? va_arg(ap, unsigned long)
                                                 : (unsigned long long)va_arg(ap, unsigned int);
-            emit_number(&o, v, 0, 16u, conv == 'X', width, zero);
+            emit_number(&o, v, 0, 16u, conv == 'X', width, zero, left);
             break;
         }
         case 'p': {
             void *pv = va_arg(ap, void *);
             out_char(&o, '0');
             out_char(&o, 'x');
-            emit_number(&o, (unsigned long long)(uintptr_t)pv, 0, 16u, 0, 0, 0);
+            emit_number(&o, (unsigned long long)(uintptr_t)pv, 0, 16u, 0, 0, 0, 0);
             break;
         }
         case 's': {
@@ -145,10 +164,17 @@ int vsnprintf(char *buf, size_t size, const char *fmt, va_list ap) {
             for (const char *t = s; *t; t++) {
                 len++;
             }
-            for (int i = len; i < width; i++) {
-                out_char(&o, zero ? '0' : ' ');
+            if (left) {
+                out_str(&o, s);
+                for (int i = len; i < width; i++) {
+                    out_char(&o, ' ');
+                }
+            } else {
+                for (int i = len; i < width; i++) {
+                    out_char(&o, zero ? '0' : ' ');
+                }
+                out_str(&o, s);
             }
-            out_str(&o, s);
             break;
         }
         case 'c': {
