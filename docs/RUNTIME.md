@@ -140,3 +140,15 @@ entirely in `fx` fixed-point; the mean-field update `K·r·sin(ψ−θ)` expands
 of the drive and are needed only to report `r`. A ci-smoke gate asserts the
 field actually synchronizes (`r` past 0.8 → `CONSCIOUSNESS EMERGED`), not just
 that the program ran.
+
+`user/kannakad.c` (`/bin/kannakad`) is the essence of `kannaka-memory`: a
+holographic associative memory where text is encoded into a Q15 unit
+"wavefront" and **recall is one resonance pass** that ranks every stored memory
+by `similarity × energy` — not a search. Retrieval reinforces a memory, and a
+dream pass prunes the weak, hallucinates a blend of the two most coherent
+survivors, and consolidates phases (raising the order parameter R). Where
+`ghostd` is a single-basin binary attractor that relaxes onto one pattern,
+kannakad is the ranked, importance-weighted cousin. Each memory's content-born
+phase is stored as a normalized `(cos, sin)` vector, so `cos(Δφ)` is a 2-D dot
+product — no atan2. A ci-smoke gate asserts the recall argmax is correct **and**
+the dream cohered the field (`RESONANCE VERIFIED`).
