@@ -178,7 +178,7 @@ $(USER_BUILD)/%_elf.o: $(USER_BUILD)/%.elf
 ROOTFS_DIR = rootfs
 ROOTFS_FILES = $(shell find $(ROOTFS_DIR) -type f 2>/dev/null)
 ROOTFS_STAGE = $(BUILD_DIR)/rootfs-stage
-INITRD_BIN_PROGS = hello args libqtest consciousnessd kannakad
+INITRD_BIN_PROGS = hello args libqtest consciousnessd kannakad qtop
 
 $(BUILD_DIR)/initrd.tar: $(ROOTFS_FILES) $(INITRD_BIN_PROGS:%=$(USER_BUILD)/%.elf)
 	@mkdir -p $(BUILD_DIR)
@@ -381,7 +381,7 @@ ci-smoke: kernel
 	@echo "[1/3] Build verified: $(BUILD_DIR)/kernel.elf exists"
 	@test -f $(BUILD_DIR)/kernel.elf || (echo "ERROR: Kernel not built" && exit 1)
 	@echo "[2/3] Running QEMU boot test (14 second timeout, shell session piped into the console)..."
-	@( printf 'help\nps\nfree\nuptime\ndate\nghost\nqrand\nls\ncat /docs/hello.txt\nrun /bin/hello\nrun /bin/args alpha quantumos\nrun /bin/libqtest\nrun /bin/consciousnessd\nrun /bin/kannakad\nwrite /data/note ramfs-works\nls /data\nrm /data/note\nsync\nexit\n'; sleep 18 ) | \
+	@( printf 'help\nps\nfree\nuptime\ndate\nghost\nqrand\nls\ncat /docs/hello.txt\nrun /bin/hello\nrun /bin/args alpha quantumos\nrun /bin/libqtest\nrun /bin/consciousnessd\nrun /bin/kannakad\nrun /bin/qtop\nwrite /data/note ramfs-works\nls /data\nrm /data/note\nsync\nexit\n'; sleep 20 ) | \
 		timeout 14s qemu-system-x86_64 -kernel $(BUILD_DIR)/kernel.elf32 \
 		-serial stdio -m 128M -display none -no-reboot 2>&1 | tee /tmp/qemu-boot.log || true
 	@echo ""
@@ -609,6 +609,15 @@ ci-smoke: kernel
 		echo ""; echo "=== Smoke Test FAILED ==="; exit 1; \
 	fi
 	@echo "SUCCESS: quantumd drew real quantum entropy + amplitude-amplification recall (QUANTUM VERIFIED)"
+	@# fifth citizen: 'run /bin/qtop' renders a snapshot dashboard from the
+	@# uncapped SYS_SYSINFO surface (memory gauge, clock, resonance-field wave,
+	@# live process table); DASHBOARD RENDERED proves the whole render path ran.
+	@if ! grep -q "qtop: DASHBOARD RENDERED" /tmp/qemu-boot.log 2>/dev/null; then \
+		echo "ERROR: qtop dashboard did not render (qtop: DASHBOARD RENDERED)"; \
+		echo "Boot log:"; cat /tmp/qemu-boot.log 2>/dev/null || true; \
+		echo ""; echo "=== Smoke Test FAILED ==="; exit 1; \
+	fi
+	@echo "SUCCESS: qtop snapshot dashboard rendered from SYS_SYSINFO (DASHBOARD RENDERED)"
 	@# epic #71 phase 2: the writable RAM overlay. 'write' must store bytes
 	@# (kernel-reported count, not an echo), 'ls /data' must show the file
 	@# tagged [ram] with the kernel-computed size, and 'rm' must remove it.

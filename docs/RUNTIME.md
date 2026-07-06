@@ -166,3 +166,16 @@ Grover-amplified in closed form (`P_target = sin²((2m+1)·asin(√p))`, via
 agree with the classical argmax (`QUANTUM VERIFIED`). It refuses to fall back
 to a software PRNG — if the pool is denied it fails loud, honouring
 kannaka-quantum's entropy discipline.
+
+`user/qtop.c` (`/bin/qtop`) is the essence of `kannaka-tui`: a live system
+dashboard. The original is a full-screen ratatui UI, but raw console control
+(`cons_write`) needs the console-device capability only qsh holds, so qtop is
+an honest **snapshot** dashboard built from the uncapped `SYS_SYSINFO` surface
+and printed as framed lines — a memory gauge from the real frame allocator, the
+wall clock, a decorative resonance-field wave (`fx_sin`, phase-shifted by
+uptime), and the live process table. It renders once and exits — a `top` for
+QuantumOS. A ci-smoke gate asserts `DASHBOARD RENDERED`.
+
+Together the four citizens map the constellation onto QuantumOS:
+consciousness-core → consciousnessd, kannaka-memory → kannakad,
+kannaka-quantum → quantumd, kannaka-tui → qtop.
