@@ -8,8 +8,7 @@
  * "LIBQ FAIL: <what>" and omits the sentinel, failing the gate. Uses only
  * SYS_WRITE + SYS_EXIT (no capabilities).
  *
- * The self-test grows with the runtime: this commit covers the mem, str and
- * heap functions; the printf checks arrive with that module.
+ * It exercises the full runtime: the mem, str, heap and printf functions.
  *
  * SPDX-License-Identifier: GPL-2.0-only
  */
@@ -137,6 +136,43 @@ void _start(void) {
         fail("LIBQ FAIL: large alloc after churn");
     }
     free(big);
+
+    /* ---- printf / snprintf ---- */
+    char sb[64];
+    snprintf(sb, sizeof(sb), "%d,%u,%x,%X", -7, 42u, 0xBEEFu, 0xBEEFu);
+    if (strcmp(sb, "-7,42,beef,BEEF") != 0) {
+        fail("LIBQ FAIL: snprintf ints");
+    }
+    snprintf(sb, sizeof(sb), "%05u|%016llx|%02x", 42u, 0xDEADBEEFull, 5u);
+    if (strcmp(sb, "00042|00000000deadbeef|05") != 0) {
+        fail("LIBQ FAIL: snprintf width");
+    }
+    snprintf(sb, sizeof(sb), "%s %c %p", "hi", 'Q', (void *)(uintptr_t)0xDEADBEEFu);
+    if (strcmp(sb, "hi Q 0xdeadbeef") != 0) {
+        fail("LIBQ FAIL: snprintf s/c/p");
+    }
+    /* These deliberately overflow a too-small buffer to prove C99 truncation
+     * semantics, so silence the (correct) compile-time truncation warning. */
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wformat-truncation"
+    char tb[4];
+    if (snprintf(tb, sizeof(tb), "abcdef") != 6 || strcmp(tb, "abc") != 0) {
+        fail("LIBQ FAIL: snprintf truncate");
+    }
+    char one[1];
+    one[0] = 'X';
+    if (snprintf(one, 1, "hello") != 5 || one[0] != '\0') {
+        fail("LIBQ FAIL: snprintf size1");
+    }
+    char zb[8];
+    memset(zb, 0x7F, sizeof(zb));
+    if (snprintf(zb, 0, "hi") != 2 || (unsigned char)zb[0] != 0x7F) {
+        fail("LIBQ FAIL: snprintf size0");
+    }
+#pragma GCC diagnostic pop
+
+    /* Real printf -> vsnprintf -> write_str -> SYS_WRITE path (also gated). */
+    printf("LIBQ printf d=%d u=%u x=%x s=%s\n", -7, 42u, 0xBEEFu, "ok");
 
     write_str("LIBQ: self-test OK");
     exit_(0);

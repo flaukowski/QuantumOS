@@ -576,6 +576,12 @@ ci-smoke: kernel
 		echo ""; echo "=== Smoke Test FAILED ==="; exit 1; \
 	fi
 	@echo "SUCCESS: libq freestanding runtime self-test passed (LIBQ: self-test OK)"
+	@if ! grep -q "LIBQ printf d=-7 u=42 x=beef s=ok" /tmp/qemu-boot.log 2>/dev/null; then \
+		echo "ERROR: libq printf->SYS_WRITE path did not run (LIBQ printf d=-7 u=42 x=beef s=ok)"; \
+		echo "Boot log:"; cat /tmp/qemu-boot.log 2>/dev/null || true; \
+		echo ""; echo "=== Smoke Test FAILED ==="; exit 1; \
+	fi
+	@echo "SUCCESS: libq printf -> SYS_WRITE path exercised end-to-end"
 	@# epic #71 phase 2: the writable RAM overlay. 'write' must store bytes
 	@# (kernel-reported count, not an echo), 'ls /data' must show the file
 	@# tagged [ram] with the kernel-computed size, and 'rm' must remove it.
