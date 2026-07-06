@@ -22,22 +22,7 @@
 #include <kernel/memory.h>
 #include <kernel/boot.h>
 #include <kernel/types.h>
-
-/* ============================================================================
- * Mathematical Helpers
- * ============================================================================ */
-
-static double fabs_d(double x) {
-    return x < 0.0 ? -x : x;
-}
-
-static double clamp(double value, double min, double max) {
-    if (value < min)
-        return min;
-    if (value > max)
-        return max;
-    return value;
-}
+#include <kernel/resonance/math_helpers.h>
 
 /* ============================================================================
  * Internal State
@@ -71,8 +56,8 @@ static chiral_stability_class_t classify_stability(double asymmetry) {
  */
 static double calculate_asymmetry(double eta, double gamma) {
     if (gamma <= 0.0)
-        return fabs_d(eta);
-    return fabs_d(eta / gamma);
+        return fast_abs(eta);
+    return fast_abs(eta / gamma);
 }
 
 /**
@@ -490,9 +475,9 @@ status_t chiral_optimize_qubit(uint32_t qubit_id) {
 
     /* Adjust gamma to maintain stability */
     if (q->chiral_gamma > 0.0) {
-        double ratio = fabs_d(q->chiral_eta / q->chiral_gamma);
+        double ratio = fast_abs(q->chiral_eta / q->chiral_gamma);
         if (ratio >= STABILITY_MARGINAL) {
-            q->chiral_gamma = fabs_d(q->chiral_eta) / (STABILITY_MARGINAL * 0.9);
+            q->chiral_gamma = fast_abs(q->chiral_eta) / (STABILITY_MARGINAL * 0.9);
         }
     }
 
@@ -514,7 +499,7 @@ status_t chiral_rebalance_qubit(uint32_t qubit_id) {
 
     if (q->asymmetry > STABILITY_MARGINAL) {
         /* Unstable: increase gamma to reduce |eta/gamma| ratio */
-        q->chiral_gamma = fabs_d(q->chiral_eta) / (STABILITY_GOOD * 0.9);
+        q->chiral_gamma = fast_abs(q->chiral_eta) / (STABILITY_GOOD * 0.9);
     } else if (q->asymmetry < STABILITY_EXCELLENT) {
         /* Over-damped: relax gamma slightly to allow more dynamics */
         q->chiral_gamma *= 0.95;

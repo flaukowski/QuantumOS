@@ -145,8 +145,10 @@ geometric module when WASM is unavailable.
 - Makefile resonance integration (`RESONANCE_SOURCES`, compile rule) is correct.
 - ghostmagicOS TypeScript and QuantumOS C constants match across both codebases.
 - `quantum_types.h` dependency (`qubit_handle_t`, `FIDELITY_STANDARD`) is satisfied.
-- Static helper duplication (`fast_sqrt`, `fast_abs`, `clamp`) across .c files is fine for now
-  but consider a shared `kernel/src/resonance/math_helpers.h` if the module grows.
+- Static helper duplication (`fast_sqrt`, `fast_abs`, `fast_sin`, `fast_cos`, `fast_asin`,
+  `fast_atan2`, `clamp`, plus `PI`/`TWO_PI`) is now consolidated into the shared header
+  `kernel/include/kernel/resonance/math_helpers.h`. The helpers are `static inline`, so each
+  resonance TU gets its own copy with no link conflict; add new freestanding math helpers there.
 - `resonance_types.h` cross-repo constant documentation (`LAMBDA_DEFAULT` vs `K_COUPLING`,
   `CISS_COHERENCE_BOOST` additive vs multiplicative) is clear.
 - `geometric_control.h` API design is clean. Implementation in `geometric_control.c` is complete.
