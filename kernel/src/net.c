@@ -17,7 +17,6 @@
 #include <kernel/net.h>
 #include <kernel/rtl8139.h>
 #include <kernel/boot.h>
-#include <kernel/interrupts.h> /* timer_get_ticks (TCP timers, epic #82) */
 #include <kernel/net_internal.h>
 
 /* QEMU user-net (SLIRP): gateway 10.0.2.2, DHCP hands out 10.0.2.15.

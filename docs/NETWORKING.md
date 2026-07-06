@@ -289,7 +289,7 @@ non-hermetic runner-egress class as the `example.com` DNS gate.
 ## Source layout (after the transport split)
 
 The stack started life as a single `kernel/src/net.c`. As the ring-3
-transports landed it grew past 1900 lines, so it is now split by layer —
+transports landed it grew past 1900 lines, so it is now split by transport —
 same code, three translation units plus a shared internal header:
 
 - **`kernel/src/net.c`** — the control plane: Ethernet, ARP, IPv4, ICMP,
