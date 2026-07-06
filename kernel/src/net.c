@@ -18,44 +18,34 @@
 #include <kernel/rtl8139.h>
 #include <kernel/boot.h>
 #include <kernel/interrupts.h> /* timer_get_ticks (TCP timers, epic #82) */
+#include <kernel/net_internal.h>
 
-/* QEMU user-net (SLIRP): gateway 10.0.2.2, DHCP hands out 10.0.2.15. */
+/* QEMU user-net (SLIRP): gateway 10.0.2.2, DHCP hands out 10.0.2.15.
+ * IP_ZERO/IP_BCAST are also read by the transport TUs, so they have
+ * external linkage (declared extern in net_internal.h). */
 static const uint8_t IP_GATEWAY[4] = {10, 0, 2, 2};
-static const uint8_t IP_ZERO[4] = {0, 0, 0, 0};
-static const uint8_t IP_BCAST[4] = {255, 255, 255, 255};
+const uint8_t IP_ZERO[4] = {0, 0, 0, 0};
+const uint8_t IP_BCAST[4] = {255, 255, 255, 255};
 static const uint8_t MAC_BCAST[ETH_ADDR_LEN] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
 
 #define ETH_TYPE_ARP 0x0806
-#define ETH_TYPE_IP 0x0800
 #define ARP_HTYPE_ETH 1
 #define ARP_PTYPE_IP 0x0800
 #define ARP_OP_REQUEST 1
 #define ARP_OP_REPLY 2
-#define IP_PROTO_UDP 17
 #define DHCP_SPORT 68
 #define DHCP_DPORT 67
 
-static uint8_t self_mac[ETH_ADDR_LEN];
+/* netif state; extern in net_internal.h so the transport TUs can read it. */
+uint8_t self_mac[ETH_ADDR_LEN];
 
 /* DHCP outcome (filled by the exchange). */
-static uint8_t my_ip[4];
-static int dhcp_have_lease;
+uint8_t my_ip[4];
+int dhcp_have_lease;
 
-static inline uint16_t htons(uint16_t v) {
-    return (uint16_t)((v << 8) | (v >> 8));
-}
-#define ntohs(v) htons(v)
-static inline uint32_t htonl(uint32_t v) {
-    return ((v & 0xFF) << 24) | ((v & 0xFF00) << 8) | ((v >> 8) & 0xFF00) | ((v >> 24) & 0xFF);
-}
-
-/* ---- packet headers (all packed) ---- */
-typedef struct __attribute__((packed)) {
-    uint8_t dst[ETH_ADDR_LEN];
-    uint8_t src[ETH_ADDR_LEN];
-    uint16_t type;
-} eth_hdr_t;
-
+/* ---- packet headers (all packed). eth_hdr_t / ip_hdr_t / udp_hdr_t are
+ * shared and live in net_internal.h; arp_pkt_t and dhcp_hdr_t are used
+ * only by the control plane and stay here. ---- */
 typedef struct __attribute__((packed)) {
     uint16_t htype;
     uint16_t ptype;
@@ -67,26 +57,6 @@ typedef struct __attribute__((packed)) {
     uint8_t tha[ETH_ADDR_LEN];
     uint8_t tpa[4];
 } arp_pkt_t;
-
-typedef struct __attribute__((packed)) {
-    uint8_t ver_ihl; /* 0x45: IPv4, 5*4=20 byte header */
-    uint8_t tos;
-    uint16_t total_len;
-    uint16_t id;
-    uint16_t frag;
-    uint8_t ttl;
-    uint8_t proto;
-    uint16_t checksum;
-    uint8_t src[4];
-    uint8_t dst[4];
-} ip_hdr_t;
-
-typedef struct __attribute__((packed)) {
-    uint16_t sport;
-    uint16_t dport;
-    uint16_t len;
-    uint16_t checksum;
-} udp_hdr_t;
 
 /* BOOTP/DHCP fixed header (before options). */
 typedef struct __attribute__((packed)) {
@@ -124,10 +94,6 @@ typedef struct __attribute__((packed)) {
 static int dhcp_state; /* 0 idle, 1 sent DISCOVER, 2 sent REQUEST */
 static uint8_t dhcp_offer_ip[4];
 static uint8_t dhcp_server_id[4];
-
-static int ip_eq(const uint8_t *a, const uint8_t *b) {
-    return a[0] == b[0] && a[1] == b[1] && a[2] == b[2] && a[3] == b[3];
-}
 
 /* ---- ring-3 UDP sockets (epic #80): socket table + rings ----
  *
@@ -193,15 +159,12 @@ static volatile uint32_t udp_tx_head; /* producer: SENDTO syscall */
 static volatile uint32_t udp_tx_tail; /* consumer: net thread drain */
 static uint32_t udp_tx_dropped;       /* ARP-failure drops */
 
-/* Order plain stores before the volatile publish store. */
-#define publish_barrier() __asm__ volatile("" ::: "memory")
-
 /* Offer one received frame to the bound sockets (net thread only).
  * Validation chain per the design attack: the payload length comes from
  * the UDP header, never from the frame length (Ethernet pads runts to
  * 60 bytes; a forged udp->len must not overread the frame into stale
  * buffer memory). Fragments are dropped — no reassembly. */
-static void udp_rx_demux(const uint8_t *frame, uint16_t len) {
+void udp_rx_demux(const uint8_t *frame, uint16_t len) {
     const uint32_t base = sizeof(eth_hdr_t) + sizeof(ip_hdr_t) + sizeof(udp_hdr_t); /* 42 */
     if (len < base) {
         return;
@@ -256,11 +219,6 @@ static void udp_rx_demux(const uint8_t *frame, uint16_t len) {
         return;
     }
 }
-
-/* Feed a received frame to the single TCP connection (epic #82). Defined
- * with the TCP section below; declared here because net_rx offers every
- * frame to it. */
-static void tcp_rx_demux(const uint8_t *frame, uint16_t len);
 
 /* The net thread's ONLY window onto the RX queue: every frame is offered
  * to the socket demux BEFORE the caller's own matcher sees it, so no
@@ -581,8 +539,8 @@ static const uint8_t IP_DNS[4] = {10, 0, 2, 3}; /* SLIRP's DNS proxy */
 
 /* Fill an IPv4 header for a unicast packet of `payload_len` bytes to
  * `dst`, from `my_ip`. Computes the header checksum. */
-static void ip_fill(ip_hdr_t *ip, const uint8_t *dst, uint8_t proto, uint16_t payload_len,
-                    uint16_t ident) {
+void ip_fill(ip_hdr_t *ip, const uint8_t *dst, uint8_t proto, uint16_t payload_len,
+             uint16_t ident) {
     ip->ver_ihl = 0x45;
     ip->tos = 0;
     ip->total_len = htons((uint16_t)(sizeof(ip_hdr_t) + payload_len));
@@ -621,7 +579,7 @@ static int arp_resolve(const uint8_t *ip, const uint8_t *sender_ip, uint8_t *out
 
 /* Cache-first MAC lookup (net thread only): hit is instant; a miss runs
  * one bounded arp_resolve and remembers the answer. */
-static int resolve_mac(const uint8_t *ip, uint8_t *out_mac) {
+int resolve_mac(const uint8_t *ip, uint8_t *out_mac) {
     if (arp_cache_get(ip, out_mac)) {
         return 1;
     }
@@ -1039,7 +997,7 @@ int net_udp_dst_ok(const uint8_t *dip) {
 /* Retire CLOSING slots (net thread only, called at the top of a wake —
  * never mid-copy, so a preempted demux can't be writing into a slot
  * being reset; see the slot-lifecycle comment at the table). */
-static void udp_retire_closing(void) {
+void udp_retire_closing(void) {
     for (int i = 0; i < UDP_SOCK_MAX; i++) {
         udp_sock_t *s = &udp_socks[i];
         if (s->state != UDP_SLOT_CLOSING) {
@@ -1056,7 +1014,7 @@ static void udp_retire_closing(void) {
 
 /* On-link (SLIRP's 10.0.2.0/24) destinations get ARPed directly; anything
  * else routes via the gateway's MAC. Shared by the UDP drain and TCP. */
-static const uint8_t *net_next_hop(const uint8_t *dip) {
+const uint8_t *net_next_hop(const uint8_t *dip) {
     if (dhcp_have_lease && dip[0] == my_ip[0] && dip[1] == my_ip[1] && dip[2] == my_ip[2]) {
         return dip;
     }
@@ -1067,7 +1025,7 @@ static const uint8_t *net_next_hop(const uint8_t *dip) {
  * COMPLETELY before the tail advances — SENDTO's full test then counts
  * an in-drain entry as still occupied, so a preempting syscall can never
  * overwrite what this loop is still reading. */
-static void udp_tx_drain(void) {
+void udp_tx_drain(void) {
     while (udp_tx_tail != udp_tx_head) {
         const udp_txent_t *e = &udp_txq[udp_tx_tail & (UDP_TXQ_DEPTH - 1)];
         uint8_t mac[ETH_ADDR_LEN];
@@ -1308,7 +1266,7 @@ static void tcp_reset_closed(void) {
  * then in-order payload, then the FIN flag — never mutually-exclusive
  * branches (a data+FIN segment must have both consumed and one ACK
  * covering both). */
-static void tcp_rx_demux(const uint8_t *frame, uint16_t len) {
+void tcp_rx_demux(const uint8_t *frame, uint16_t len) {
     int st = tcb.state;
     if (st == TCPS_CLOSED || st == TCPS_ERROR) {
         return; /* ERROR is terminal for the net thread until abort retires it */
@@ -1450,7 +1408,7 @@ static uint16_t tcp_ephemeral(void) {
 
 /* Net-thread TCP servicing: retire aborts, start connects, drive
  * retransmission/close/TIME_WAIT. Runs each service-loop wake. */
-static void tcp_service(void) {
+void tcp_service(void) {
     uint32_t now = (uint32_t)timer_get_ticks();
 
     /* abort_req wins over everything and always retires to CLOSED. */
