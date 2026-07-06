@@ -189,7 +189,7 @@ the shell and gates `qsh: example.com -> <a.b.c.d>` — a hostname resolved
 **from ring 3** through the syscall, distinct from the boot self-test's
 `NET:` line. A NIC-less boot reports no network honestly.
 
-## Ring-3 UDP sockets: `SYS_UDP` (epic #80)
+## Ring-3 UDP sockets: `SYS_UDP` (epic #80, `kernel/src/net_udp.c`)
 
 `SYS_RESOLVE` asks the kernel to do one specific thing; `SYS_UDP` (#27)
 generalizes the same worker spine into real sockets — user programs send
@@ -236,7 +236,7 @@ the answer itself. CI gates both `qsh: udp <N> bytes from 10.0.2.3:53`
 existing DNS gates' (reliable) runner-resolver dependency — no new risk
 class.
 
-## A TCP client: `SYS_TCP` + the shell's `http` (epic #82)
+## A TCP client: `SYS_TCP` + the shell's `http` (epic #82, `kernel/src/net_tcp.c`)
 
 The capstone. `SYS_TCP` (#28) is a real, if minimal, TCP **client** — one
 active-open connection at a time — built on the same net-thread spine.
@@ -285,6 +285,29 @@ network** — gated on `qsh: http 10.0.2.2 -> HTTP/1.[01] 200` and
 `qsh: http 10.0.2.2: <N> bytes received`. Then `http example.com` is the
 real-world capstone (`qsh: http example.com -> HTTP/1.[01] 200`), the same
 non-hermetic runner-egress class as the `example.com` DNS gate.
+
+## Source layout (after the transport split)
+
+The stack started life as a single `kernel/src/net.c`. As the ring-3
+transports landed it grew past 1900 lines, so it is now split by transport —
+same code, three translation units plus a shared internal header:
+
+- **`kernel/src/net.c`** — the control plane: Ethernet, ARP, IPv4, ICMP,
+  DHCP, DNS, the `SYS_RESOLVE` state machine, and the boot self-test.
+- **`kernel/src/net_udp.c`** — the ring-3 UDP sockets (epic #80): the
+  socket table, the SENDTO tx ring, the `net_udp_*` syscall API, and the
+  net-thread rx demux / closing-slot retire / tx drain.
+- **`kernel/src/net_tcp.c`** — the ring-3 TCP client (epic #82): the
+  single TCB and its net-thread state machine, plus the `net_tcp_*` API.
+- **`kernel/include/kernel/net_internal.h`** — the shared internal
+  surface: the `eth`/`ip`/`udp` wire structs (with `_Static_assert` size
+  guards), the `htons`/`htonl`/`ip_eq` helpers, the netif globals, and the
+  handful of prototypes one net TU calls in another. Not a public API;
+  user-facing declarations still live in `kernel/include/kernel/net.h`.
+
+The transports keep all their state `static` in their own file, so the
+concurrency invariants (the volatile publish discipline on the UDP tx ring
+and the TCP TCB) are unchanged — the split is a pure code move.
 
 ## Known limits / follow-ups (the honest boundary)
 
