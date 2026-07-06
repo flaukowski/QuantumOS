@@ -13,12 +13,14 @@ ifdef CROSS_CC
     LD = $(ARCH)-elf-ld
     OBJCOPY = $(ARCH)-elf-objcopy
     OBJDUMP = $(ARCH)-elf-objdump
+    AR = $(ARCH)-elf-ar
 else
     # Fall back to system GCC with appropriate flags for freestanding code
     CC = gcc
     LD = ld
     OBJCOPY = objcopy
     OBJDUMP = objdump
+    AR = ar
 endif
 GDB = gdb-multiarch
 
@@ -88,6 +90,15 @@ USER_BUILD = $(BUILD_DIR)/user
 USER_PROGS = init echo client hbsvc ghostd ghost_test paradoxd paradox_test swarm_svc qsh
 USER_ELF_OBJS = $(USER_PROGS:%=$(USER_BUILD)/%_elf.o)
 
+# libq: the freestanding ring-3 runtime, built as a static archive and linked
+# into every user program (the linker pulls only the members a program refers
+# to, so non-allocating programs get neither the heap arena nor printf).
+LIBQ_DIR = $(USER_DIR)/libq
+LIBQ_SRCS = $(wildcard $(LIBQ_DIR)/*.c)
+LIBQ_OBJS = $(LIBQ_SRCS:$(LIBQ_DIR)/%.c=$(USER_BUILD)/libq/%.o)
+LIBQ_HDRS = $(wildcard $(LIBQ_DIR)/*.h)
+LIBQ_A = $(USER_BUILD)/libq.a
+
 OBJECTS = $(KERNEL_SOURCES:$(KERNEL_DIR)/src/%.c=$(BUILD_DIR)/%.o) \
           $(IPC_SOURCES:$(KERNEL_DIR)/src/ipc/%.c=$(BUILD_DIR)/ipc/%.o) \
           $(RESONANCE_SOURCES:$(KERNEL_DIR)/src/resonance/%.c=$(BUILD_DIR)/resonance/%.o) \
@@ -127,10 +138,27 @@ USER_CFLAGS = -Wall -Wextra -Werror -nostdlib -ffreestanding -fno-pic -fno-pie \
               -no-pie -static -mno-red-zone -mno-mmx -mno-sse -mno-sse2 \
               -fno-stack-protector -fno-asynchronous-unwind-tables -O2
 
-$(USER_BUILD)/%.elf: $(USER_DIR)/%.c $(USER_DIR)/user.ld $(USER_DIR)/usys.h $(USER_DIR)/ghost.h $(USER_DIR)/paradox.h $(USER_DIR)/sha256.h $(USER_DIR)/swarm.h
+# libq objects. mem.o and str.o define libc-named functions, so they carry the
+# scoped anti-self-recursion guard (see mem.c); heap.o/printf.o do not — their
+# external memset/memcpy calls are legitimately satisfied by mem.o.
+$(USER_BUILD)/libq/%.o: $(LIBQ_DIR)/%.c $(LIBQ_HDRS) $(USER_DIR)/usys.h
+	@mkdir -p $(dir $@)
+	@echo "Building libq: $<..."
+	$(CC) $(USER_CFLAGS) -c $< -o $@
+
+$(USER_BUILD)/libq/mem.o: USER_CFLAGS += -fno-tree-loop-distribute-patterns -fno-builtin
+$(USER_BUILD)/libq/str.o: USER_CFLAGS += -fno-tree-loop-distribute-patterns -fno-builtin
+
+$(LIBQ_A): $(LIBQ_OBJS)
+	@echo "Archiving libq: $@..."
+	$(AR) rcs $@ $(LIBQ_OBJS)
+
+# The archive is appended AFTER $< on the link line: ld resolves left-to-right,
+# so the program's undefined symbols must precede the archive that satisfies them.
+$(USER_BUILD)/%.elf: $(USER_DIR)/%.c $(USER_DIR)/user.ld $(USER_DIR)/usys.h $(USER_DIR)/ghost.h $(USER_DIR)/paradox.h $(USER_DIR)/sha256.h $(USER_DIR)/swarm.h $(LIBQ_HDRS) $(LIBQ_A)
 	@mkdir -p $(USER_BUILD)
 	@echo "Building user program: $<..."
-	$(CC) $(USER_CFLAGS) -T $(USER_DIR)/user.ld -o $@ $<
+	$(CC) $(USER_CFLAGS) -T $(USER_DIR)/user.ld -o $@ $< $(LIBQ_A)
 
 # Wrap each ELF as an object. Run objcopy from inside the build dir so the
 # generated symbols are _binary_<name>_elf_{start,end,size}.
@@ -150,7 +178,7 @@ $(USER_BUILD)/%_elf.o: $(USER_BUILD)/%.elf
 ROOTFS_DIR = rootfs
 ROOTFS_FILES = $(shell find $(ROOTFS_DIR) -type f 2>/dev/null)
 ROOTFS_STAGE = $(BUILD_DIR)/rootfs-stage
-INITRD_BIN_PROGS = hello args
+INITRD_BIN_PROGS = hello args libqtest
 
 $(BUILD_DIR)/initrd.tar: $(ROOTFS_FILES) $(INITRD_BIN_PROGS:%=$(USER_BUILD)/%.elf)
 	@mkdir -p $(BUILD_DIR)
@@ -353,7 +381,7 @@ ci-smoke: kernel
 	@echo "[1/3] Build verified: $(BUILD_DIR)/kernel.elf exists"
 	@test -f $(BUILD_DIR)/kernel.elf || (echo "ERROR: Kernel not built" && exit 1)
 	@echo "[2/3] Running QEMU boot test (14 second timeout, shell session piped into the console)..."
-	@( printf 'help\nps\nfree\nuptime\ndate\nghost\nqrand\nls\ncat /docs/hello.txt\nrun /bin/hello\nrun /bin/args alpha quantumos\nwrite /data/note ramfs-works\nls /data\nrm /data/note\nsync\nexit\n'; sleep 13 ) | \
+	@( printf 'help\nps\nfree\nuptime\ndate\nghost\nqrand\nls\ncat /docs/hello.txt\nrun /bin/hello\nrun /bin/args alpha quantumos\nrun /bin/libqtest\nwrite /data/note ramfs-works\nls /data\nrm /data/note\nsync\nexit\n'; sleep 14 ) | \
 		timeout 14s qemu-system-x86_64 -kernel $(BUILD_DIR)/kernel.elf32 \
 		-serial stdio -m 128M -display none -no-reboot 2>&1 | tee /tmp/qemu-boot.log || true
 	@echo ""
@@ -539,6 +567,21 @@ ci-smoke: kernel
 		echo ""; echo "=== Smoke Test FAILED ==="; exit 1; \
 	fi
 	@echo "SUCCESS: argv delivered to a spawned program (argc + both args read back)"
+	@# libq foundation: 'run /bin/libqtest' must reach the sentinel — proving the
+	@# freestanding runtime (mem*/str*, plus heap/printf as they land) works at
+	@# -O2 in ring 3. Also the runtime backstop for the -O2 self-recursion trap.
+	@if ! grep -q "LIBQ: self-test OK" /tmp/qemu-boot.log 2>/dev/null; then \
+		echo "ERROR: libq self-test did not pass (LIBQ: self-test OK)"; \
+		echo "Boot log:"; cat /tmp/qemu-boot.log 2>/dev/null || true; \
+		echo ""; echo "=== Smoke Test FAILED ==="; exit 1; \
+	fi
+	@echo "SUCCESS: libq freestanding runtime self-test passed (LIBQ: self-test OK)"
+	@if ! grep -q "LIBQ printf d=-7 u=42 x=beef s=ok" /tmp/qemu-boot.log 2>/dev/null; then \
+		echo "ERROR: libq printf->SYS_WRITE path did not run (LIBQ printf d=-7 u=42 x=beef s=ok)"; \
+		echo "Boot log:"; cat /tmp/qemu-boot.log 2>/dev/null || true; \
+		echo ""; echo "=== Smoke Test FAILED ==="; exit 1; \
+	fi
+	@echo "SUCCESS: libq printf -> SYS_WRITE path exercised end-to-end"
 	@# epic #71 phase 2: the writable RAM overlay. 'write' must store bytes
 	@# (kernel-reported count, not an echo), 'ls /data' must show the file
 	@# tagged [ram] with the kernel-computed size, and 'rm' must remove it.

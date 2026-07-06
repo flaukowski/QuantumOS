@@ -9,31 +9,16 @@
  * SPDX-License-Identifier: GPL-2.0-only
  */
 
-#include "usys.h"
+#include "libq/libq.h"
 
 void _start(void) {
     write_str("HELLO: greetings from /bin/hello — an ELF loaded off the initrd");
 
+    /* The first citizen to adopt libq: the pid line now goes through the
+     * runtime's snprintf instead of a hand-rolled decimal loop. Output is
+     * byte-identical, proving a real program links libq.a and behaves the same. */
     char b[64];
-    long o = 0;
-    const char *s = "HELLO: my pid is ";
-    while (*s) {
-        b[o++] = *s++;
-    }
-    unsigned v = (unsigned)getpid();
-    char t[10];
-    int n = 0;
-    if (v == 0) {
-        t[n++] = '0';
-    }
-    while (v) {
-        t[n++] = (char)('0' + v % 10);
-        v /= 10;
-    }
-    while (n) {
-        b[o++] = t[--n];
-    }
-    b[o] = 0;
+    snprintf(b, sizeof(b), "HELLO: my pid is %u", (unsigned)getpid());
     write_str(b);
 
     exit_(42); /* the shell reports this code via SYS_WAITPID */
