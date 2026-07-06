@@ -1,0 +1,123 @@
+# Ring-3 programs: the syscall ABI and the libq runtime
+
+This is the contract for writing a user program that runs on QuantumOS —
+the stable syscall interface every ring-3 process sees, and `libq`, the
+freestanding C runtime (heap + libc-lite + printf) that programs link
+against. Native app "citizens" are built on this; it is also the substrate
+a future real-binary port (e.g. a Rust `no_std` target) would target.
+
+## The program model
+
+A user program is a freestanding, statically-linked ELF loaded at a fixed
+address. It has no libc and no CRT: it defines its own entry point
+`void _start(void)` (the linker script's `ENTRY(_start)`), does its work
+through syscalls, and ends by calling `exit_(code)`. There is no return to
+a caller — `_start` never returns (a trailing `for (;;) {}` after `exit_`
+keeps the compiler happy).
+
+Two kinds of program exist:
+
+- **Kernel-embedded services** (init, ghostd, paradoxd, swarm_svc, qsh, …):
+  linked into the kernel image and started at boot with capabilities.
+- **Filesystem programs** (`/bin/hello`, `/bin/args`, `/bin/libqtest`):
+  ride the initrd and are started from the shell with `run /bin/<name>`
+  through `SYS_SPAWN`. Their exit code comes back to the shell via
+  `SYS_WAITPID`. A spawned program reads its argument vector with
+  `get_args()`.
+
+To add a filesystem program: drop `user/<name>.c` in, add `<name>` to
+`USER_PROGS` (and to `INITRD_BIN_PROGS` for it to appear under `/bin`) in
+the Makefile. The build compiles it with the `USER_CFLAGS` (freestanding,
+`-O2`, `-Werror`) and links `libq.a` after it automatically.
+
+## Memory layout
+
+Each process gets a private address space in `[0x40000000, 0x80000000)`:
+
+| region      | address                     | notes                          |
+|-------------|-----------------------------|--------------------------------|
+| image       | `0x40000000` (`USER_VBASE`) | text, rodata, data, bss        |
+| args page   | `0x40090000`                | read-only packed argv          |
+| user stack  | `0x40100000` down, 16 KiB   | `USER_STACK_TOP`, 4 pages      |
+
+The ELF loader maps each `PT_LOAD` segment's full `p_memsz` (bss zeroed),
+so a static bss array — like the libq heap arena — is backed at exec. The
+loader does **no** overlap check, so the total image (including the heap
+arena) must fit below the args page. `user/user.ld` enforces this with a
+mandatory `ASSERT(_end <= 0x40080000)`, leaving ≥64 KiB of margin.
+
+## The syscall ABI
+
+Syscalls use `int 0x80`: the number in `rax`, up to three arguments in
+`rdi`, `rsi`, `rdx`, and the result in `rax`. `user/usys.h` provides the
+raw wrappers (`usys0`..`usys3`) and typed helpers over them; it is the
+canonical, stable definition. The number space (frozen; new syscalls
+append):
+
+| #  | name           | helper                    | purpose                          |
+|----|----------------|---------------------------|----------------------------------|
+| 1  | SYS_WRITE      | `write_str`               | write a framed console line      |
+| 2  | SYS_GETPID     | `getpid`                  | caller pid                       |
+| 3  | SYS_YIELD      | `yield`                   | cooperative reschedule           |
+| 4  | SYS_EXIT       | `exit_`                   | terminate with a code            |
+| 5  | SYS_TICKS      | `ticks`                   | monotonic tick count             |
+| 6–7| SYS_SEND/RECV  | `send_msg`/`recv_msg`     | capability-routed IPC            |
+| 8–9| SYS_HEARTBEAT… | `heartbeat`/`svc_restarts`| watchdog liveness / rebirth      |
+| 10 | SYS_QRAND      | `qrand_fill`              | quantum-seeded randomness (cap)  |
+| 11 | SYS_SEND_TO    | `send_to`                 | targeted capability IPC          |
+| 12 | SYS_COM2       | `com2_read/write_bytes`   | swarm-bridge UART (cap)          |
+| 13 | SYS_QSEED      | `qseed_value`             | boot qseed provenance (cap)      |
+| 14 | SYS_FIELD_SNAP | `field_snapshot`          | framebuffer field viz            |
+| 15 | SYS_CONS       | `cons_read/write`         | raw console I/O (cap)            |
+| 16 | SYS_SYSINFO    | `sysinfo`/`sysinfo_quiet` | ps/mem/time/quiet introspection  |
+| 17–20 | SYS_OPEN…READDIR | `open_`/`read_`/`close_`/`readdir_` | initrd + RAM overlay read |
+| 21–22 | SYS_SPAWN/WAITPID | `spawn_`/`waitpid_`  | exec a /bin ELF, reap it         |
+| 23–25 | SYS_FWRITE/UNLINK/SYNC | `fwrite_`/`unlink_`/`sync_` | RAM overlay writes + disk persist (cap) |
+| 26 | SYS_RESOLVE    | `resolve_`                | DNS hostname → ip (cap)          |
+| 27 | SYS_UDP        | `udp_`                    | ring-3 UDP sockets (cap)         |
+| 28 | SYS_TCP        | `tcp_`                    | ring-3 TCP client (cap)          |
+
+**Conventions.** A non-negative return is success (often a count or fd);
+a negative return is an errno: `-4` EPERM (no capability authorises it),
+`-6` ENOENT, `-5` EIO, `-1` EINVAL, `-2` EFAULT. Non-blocking calls
+(`SYS_RESOLVE`, `SYS_UDP`, `SYS_TCP`) return `-11` (WOULDBLOCK) while
+pending — poll again after a `yield`. Privileged operations require a
+capability the process was granted at spawn; a program without it gets
+EPERM rather than the resource. `SYS_WRITE` frames each call as
+`[user pid=N] <text>\r\n` and truncates at 127 bytes.
+
+## The libq runtime (`user/libq/`)
+
+`#include "libq/libq.h"` — the only include a program needs; it also pulls
+in `usys.h`. `libq.a` is linked automatically. The linker pulls only the
+archive members a program references, so a program that never allocates
+gets neither the heap arena nor printf in its image.
+
+- **mem** (`mem.c`): `memcpy`, `memmove`, `memset`, `memcmp`. These are
+  the functions gcc itself emits calls to for struct/array copies, so they
+  must exist as real symbols. `mem.c` and `str.c` are compiled with
+  `-fno-tree-loop-distribute-patterns -fno-builtin` so `-O2` cannot rewrite
+  a copy/fill loop into a call to the function being defined (a silent
+  infinite recursion); a pre-boot objdump gate enforces this.
+- **str** (`str.c`): `strlen`, `strcmp`, `strncmp`, `strcpy`, `strncpy`,
+  `strchr`.
+- **heap** (`heap.c`): `malloc`, `free`, `calloc`, `realloc` over a 64 KiB
+  per-process bss arena (override with `-DLIBQ_HEAP_SIZE`). First-fit
+  explicit free list with boundary tags and immediate bidirectional
+  coalescing; every payload is 16-byte aligned; `free`/`realloc` gate the
+  pointer (bounds, alignment, size/footer agreement) so a stray or
+  double-freed pointer fails safe. No `SYS_BRK` yet — the arena is fixed;
+  the growable-heap path is deferred but the API is stable across the swap.
+- **printf** (`printf.c`): `printf`, `vprintf`, `snprintf`, `vsnprintf`.
+  Integer-only (`%d %i %u %x %X %s %c %p %%`, the `0` flag, numeric width,
+  `l`/`ll`) — no floating point, because the user ABI is `-mno-sse` and a
+  float conversion would drag in soft-float. `snprintf`/`vsnprintf` are
+  pure and follow C99 truncation. `printf`/`vprintf` format into a 128-byte
+  stack buffer and hand the line to `SYS_WRITE`, so printf is
+  **line-oriented** (one framed line per call, ~127-char cap), not
+  byte-accurate stream output.
+
+`user/libqtest.c` (`/bin/libqtest`) exercises the whole runtime at `-O2` in
+ring 3 and prints `LIBQ: self-test OK`; the ci-smoke and integration boot
+gates assert it, so a regression — including a reintroduced self-recursion
+trap — turns CI red.
