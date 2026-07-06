@@ -26,32 +26,7 @@
 #include <kernel/memory.h>
 #include <kernel/boot.h>
 #include <kernel/types.h>
-
-/* ============================================================================
- * Mathematical Helpers
- * ============================================================================ */
-
-static double fast_sqrt(double x) {
-    if (x <= 0.0)
-        return 0.0;
-    double guess = x * 0.5;
-    for (int i = 0; i < 10; i++) {
-        guess = (guess + x / guess) * 0.5;
-    }
-    return guess;
-}
-
-static double fast_abs(double x) {
-    return x < 0.0 ? -x : x;
-}
-
-static double clamp(double value, double min, double max) {
-    if (value < min)
-        return min;
-    if (value > max)
-        return max;
-    return value;
-}
+#include <kernel/resonance/math_helpers.h>
 
 /* Local strncpy implementation (no libc in freestanding kernel) */
 static char *strncpy_local(char *dest, const char *src, size_t n) {

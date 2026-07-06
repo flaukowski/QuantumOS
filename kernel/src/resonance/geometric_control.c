@@ -15,79 +15,8 @@
  */
 
 #include <kernel/resonance/geometric_control.h>
+#include <kernel/resonance/math_helpers.h>
 #include <kernel/boot.h>
-
-/* ============================================================================
- * Mathematical Helpers (mirrors resonant_scheduler.c)
- * ============================================================================ */
-
-#define PI 3.14159265358979323846
-#define TWO_PI (2.0 * PI)
-
-static double fast_sin(double x) {
-    while (x > PI)
-        x -= TWO_PI;
-    while (x < -PI)
-        x += TWO_PI;
-    double x2 = x * x;
-    double x3 = x2 * x;
-    double x5 = x3 * x2;
-    double x7 = x5 * x2;
-    return x - x3 / 6.0 + x5 / 120.0 - x7 / 5040.0;
-}
-
-static double fast_cos(double x) {
-    return fast_sin(x + PI / 2.0);
-}
-
-static double fast_sqrt(double x) {
-    if (x <= 0)
-        return 0;
-    double guess = x / 2.0;
-    for (int i = 0; i < 10; i++) {
-        guess = (guess + x / guess) / 2.0;
-    }
-    return guess;
-}
-
-static double fast_asin(double x) {
-    if (x > 1.0)
-        x = 1.0;
-    if (x < -1.0)
-        x = -1.0;
-    double x2 = x * x;
-    return x * (1.0 + x2 * (1.0 / 6.0 + x2 * (3.0 / 40.0 + x2 * 15.0 / 336.0)));
-}
-
-static double fast_atan2(double y, double x) {
-    double r = fast_sqrt(x * x + y * y);
-    if (r < 1e-15)
-        return 0;
-    double sin_val = y / r;
-    if (x > 0)
-        return fast_asin(sin_val);
-    if (x < 0 && y >= 0)
-        return PI - fast_asin(sin_val);
-    if (x < 0 && y < 0)
-        return -PI - fast_asin(sin_val);
-    if (y > 0)
-        return PI / 2.0;
-    if (y < 0)
-        return -PI / 2.0;
-    return 0;
-}
-
-static double fast_abs(double x) {
-    return x < 0 ? -x : x;
-}
-
-static double clamp(double value, double min, double max) {
-    if (value < min)
-        return min;
-    if (value > max)
-        return max;
-    return value;
-}
 
 /* Simple memset for doubles */
 static void zero_doubles(double *ptr, uint32_t count) {
