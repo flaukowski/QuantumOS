@@ -75,4 +75,12 @@ int vprintf(const char *fmt, va_list ap);
 int snprintf(char *buf, size_t size, const char *fmt, ...) __attribute__((format(printf, 3, 4)));
 int vsnprintf(char *buf, size_t size, const char *fmt, va_list ap);
 
+/* Fixed-point math (no FPU in ring-3: QuantumOS saves no FPU/SSE state across a
+ * context switch, so preemptible code must not use float/double). Phase is a
+ * uint32 "turn" — the full circle is 2^32, so wraparound is free. Trig returns
+ * Q15 (a value v means v / 32768, range [-32767, 32767]). */
+int32_t fx_sin(uint32_t turns);
+int32_t fx_cos(uint32_t turns);
+uint32_t fx_isqrt(uint64_t x); /* floor(sqrt(x)) */
+
 #endif /* LIBQ_H */
