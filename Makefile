@@ -13,12 +13,14 @@ ifdef CROSS_CC
     LD = $(ARCH)-elf-ld
     OBJCOPY = $(ARCH)-elf-objcopy
     OBJDUMP = $(ARCH)-elf-objdump
+    AR = $(ARCH)-elf-ar
 else
     # Fall back to system GCC with appropriate flags for freestanding code
     CC = gcc
     LD = ld
     OBJCOPY = objcopy
     OBJDUMP = objdump
+    AR = ar
 endif
 GDB = gdb-multiarch
 
