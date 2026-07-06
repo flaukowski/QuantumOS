@@ -177,6 +177,20 @@ void _start(void) {
     }
 #pragma GCC diagnostic pop
 
+    /* ---- fx (fixed-point math) ---- */
+    if (fx_sin(0) != 0 || fx_sin(0x40000000u) != 32767 || fx_sin(0x80000000u) != 0 ||
+        fx_sin(0xC0000000u) != -32767) {
+        fail("LIBQ FAIL: fx_sin");
+    }
+    if (fx_cos(0) != 32767 || fx_cos(0x40000000u) != 0 || fx_cos(0x80000000u) != -32767) {
+        fail("LIBQ FAIL: fx_cos");
+    }
+    if (fx_isqrt(0) != 0 || fx_isqrt(1) != 1 || fx_isqrt(4) != 2 || fx_isqrt(100) != 10 ||
+        fx_isqrt(99) != 9 || fx_isqrt((uint64_t)1 << 40) != ((uint32_t)1 << 20) ||
+        fx_isqrt(0xFFFFFFFFFFFFFFFFull) != 0xFFFFFFFFu) {
+        fail("LIBQ FAIL: fx_isqrt");
+    }
+
     /* Real printf -> vsnprintf -> write_str -> SYS_WRITE path (also gated). */
     printf("LIBQ printf d=%d u=%u x=%x s=%s\n", -7, 42u, 0xBEEFu, "ok");
 

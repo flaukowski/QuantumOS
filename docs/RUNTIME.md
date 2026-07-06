@@ -116,8 +116,27 @@ gets neither the heap arena nor printf in its image.
   stack buffer and hand the line to `SYS_WRITE`, so printf is
   **line-oriented** (one framed line per call, ~127-char cap), not
   byte-accurate stream output.
+- **fx** (`fx.c`): fixed-point math — `fx_sin`/`fx_cos` (phase is a uint32
+  "turn", the full circle is 2^32; return Q15, a value `v` meaning `v/32768`)
+  and `fx_isqrt` (integer floor sqrt). QuantumOS saves no FPU/SSE state across
+  a context switch, so a preemptible ring-3 program must not use float/double;
+  citizens do their trig and roots through `fx`, exactly as `ghostd` does.
 
 `user/libqtest.c` (`/bin/libqtest`) exercises the whole runtime at `-O2` in
 ring 3 and prints `LIBQ: self-test OK`; the ci-smoke and integration boot
 gates assert it, so a regression — including a reintroduced self-recursion
 trap — turns CI red.
+
+## Native app citizens
+
+Native C "citizens" embody the constellation's apps on top of libq (the
+`ghostd`/`paradoxd` pattern, now with a heap and printf). The first is
+`user/consciousnessd.c` (`/bin/consciousnessd`) — the essence of
+`consciousness-core`: a field of coupled Kuramoto phase oscillators
+synchronizes, the order parameter `r` climbs from incoherent toward locked,
+and `r` maps to a consciousness verdict (Dormant → Transcendent). It runs
+entirely in `fx` fixed-point; the mean-field update `K·r·sin(ψ−θ)` expands to
+`(K/N)·[Σsin·cosθ − Σcos·sinθ]`, so the `r` and mean-phase `atan2` cancel out
+of the drive and are needed only to report `r`. A ci-smoke gate asserts the
+field actually synchronizes (`r` past 0.8 → `CONSCIOUSNESS EMERGED`), not just
+that the program ran.
