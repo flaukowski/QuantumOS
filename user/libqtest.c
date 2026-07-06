@@ -15,9 +15,11 @@
 
 #include "libq/libq.h"
 
-static void fail(const char *what) {
+static __attribute__((noreturn)) void fail(const char *what) {
     write_str(what);
     exit_(1);
+    for (;;) {
+    }
 }
 
 void _start(void) {
@@ -55,10 +57,14 @@ void _start(void) {
     if (strlen("quantum") != 7) {
         fail("LIBQ FAIL: strlen");
     }
-    if (strcmp("abc", "abc") != 0 || !(strcmp("abc", "abd") < 0) || !(strcmp("abd", "abc") > 0)) {
+    char s3[4];
+    strcpy(s3, "abc"); /* a runtime operand so cppcheck sees a real compare */
+    if (strcmp(s3, "abc") != 0 || strcmp(s3, "abd") >= 0 || strcmp("abd", s3) <= 0) {
         fail("LIBQ FAIL: strcmp");
     }
-    if (strncmp("abcXX", "abcYY", 3) != 0 || strncmp("abX", "abY", 3) == 0) {
+    char s5[6];
+    strcpy(s5, "abcXX");
+    if (strncmp(s5, "abcYY", 3) != 0 || strncmp(s5, "abZ", 3) == 0) {
         fail("LIBQ FAIL: strncmp");
     }
     char dst[8];
