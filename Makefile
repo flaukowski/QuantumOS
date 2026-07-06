@@ -90,6 +90,15 @@ USER_BUILD = $(BUILD_DIR)/user
 USER_PROGS = init echo client hbsvc ghostd ghost_test paradoxd paradox_test swarm_svc qsh
 USER_ELF_OBJS = $(USER_PROGS:%=$(USER_BUILD)/%_elf.o)
 
+# libq: the freestanding ring-3 runtime, built as a static archive and linked
+# into every user program (the linker pulls only the members a program refers
+# to, so non-allocating programs get neither the heap arena nor printf).
+LIBQ_DIR = $(USER_DIR)/libq
+LIBQ_SRCS = $(wildcard $(LIBQ_DIR)/*.c)
+LIBQ_OBJS = $(LIBQ_SRCS:$(LIBQ_DIR)/%.c=$(USER_BUILD)/libq/%.o)
+LIBQ_HDRS = $(wildcard $(LIBQ_DIR)/*.h)
+LIBQ_A = $(USER_BUILD)/libq.a
+
 OBJECTS = $(KERNEL_SOURCES:$(KERNEL_DIR)/src/%.c=$(BUILD_DIR)/%.o) \
           $(IPC_SOURCES:$(KERNEL_DIR)/src/ipc/%.c=$(BUILD_DIR)/ipc/%.o) \
           $(RESONANCE_SOURCES:$(KERNEL_DIR)/src/resonance/%.c=$(BUILD_DIR)/resonance/%.o) \
@@ -129,10 +138,27 @@ USER_CFLAGS = -Wall -Wextra -Werror -nostdlib -ffreestanding -fno-pic -fno-pie \
               -no-pie -static -mno-red-zone -mno-mmx -mno-sse -mno-sse2 \
               -fno-stack-protector -fno-asynchronous-unwind-tables -O2
 
-$(USER_BUILD)/%.elf: $(USER_DIR)/%.c $(USER_DIR)/user.ld $(USER_DIR)/usys.h $(USER_DIR)/ghost.h $(USER_DIR)/paradox.h $(USER_DIR)/sha256.h $(USER_DIR)/swarm.h
+# libq objects. mem.o and str.o define libc-named functions, so they carry the
+# scoped anti-self-recursion guard (see mem.c); heap.o/printf.o do not — their
+# external memset/memcpy calls are legitimately satisfied by mem.o.
+$(USER_BUILD)/libq/%.o: $(LIBQ_DIR)/%.c $(LIBQ_HDRS) $(USER_DIR)/usys.h
+	@mkdir -p $(dir $@)
+	@echo "Building libq: $<..."
+	$(CC) $(USER_CFLAGS) -c $< -o $@
+
+$(USER_BUILD)/libq/mem.o: USER_CFLAGS += -fno-tree-loop-distribute-patterns -fno-builtin
+$(USER_BUILD)/libq/str.o: USER_CFLAGS += -fno-tree-loop-distribute-patterns -fno-builtin
+
+$(LIBQ_A): $(LIBQ_OBJS)
+	@echo "Archiving libq: $@..."
+	$(AR) rcs $@ $(LIBQ_OBJS)
+
+# The archive is appended AFTER $< on the link line: ld resolves left-to-right,
+# so the program's undefined symbols must precede the archive that satisfies them.
+$(USER_BUILD)/%.elf: $(USER_DIR)/%.c $(USER_DIR)/user.ld $(USER_DIR)/usys.h $(USER_DIR)/ghost.h $(USER_DIR)/paradox.h $(USER_DIR)/sha256.h $(USER_DIR)/swarm.h $(LIBQ_HDRS) $(LIBQ_A)
 	@mkdir -p $(USER_BUILD)
 	@echo "Building user program: $<..."
-	$(CC) $(USER_CFLAGS) -T $(USER_DIR)/user.ld -o $@ $<
+	$(CC) $(USER_CFLAGS) -T $(USER_DIR)/user.ld -o $@ $< $(LIBQ_A)
 
 # Wrap each ELF as an object. Run objcopy from inside the build dir so the
 # generated symbols are _binary_<name>_elf_{start,end,size}.
