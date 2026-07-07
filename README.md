@@ -24,6 +24,7 @@ QuantumOS boots on x86-64 under QEMU (`make run`), and every claim below is gate
 - **Programs run off the filesystem** — `run /bin/hello` from the shell loads an ELF from the initrd into a fresh address space (`SYS_SPAWN`, capability-gated — only the shell may start programs), passes it an argument vector, and reports its exit code (`SYS_WAITPID`): the full boot → shell → exec → exit loop, CI-gated ([docs/PROGRAM_EXECUTION.md](docs/PROGRAM_EXECUTION.md))
 - **Persistent storage** — a polled ATA disk driver, a writable RAM filesystem overlay (`write`/`rm` from the shell, capability-gated), and `sync`, which serializes the overlay to disk as a ustar archive behind a checksummed superblock. Files written and synced in one boot are restored at the next — CI proves it by booting the *same* disk image twice and reading back in boot 2 what boot 1 wrote ([docs/PERSISTENT_STORAGE.md](docs/PERSISTENT_STORAGE.md))
 - **Networking** — a full IPv4 stack built from the NIC up: PCI enumeration, an RTL8139 driver (interrupt-driven receive, DMA ring), Ethernet/ARP, IPv4 + UDP, a DHCP client, ICMP, and a DNS resolver, then ring-3 access three ways: `SYS_RESOLVE` (kernel-side hostname lookup), **`SYS_UDP` — real UDP sockets**, and **`SYS_TCP` — a real TCP client**, so **the shell fetches a web page**. CI boots with a NIC on QEMU's user-mode network and proves the whole path end to end — ARP, the `10.0.2.15` DHCP lease, an ICMP ping, `nslookup`/`udping example.com`, and then `http`: a full three-way handshake, bidirectional data, and FIN teardown, proven **hermetically** against a loopback HTTP server (SLIRP forwards the guest's connection to the runner's `127.0.0.1`, no external network) plus a live `http example.com`. TCP is an honest client-only slice (no server, one connection, stop-and-wait) — the boundaries are documented ([docs/NETWORKING.md](docs/NETWORKING.md))
+- **A real-bootloader boot path** — `make iso` builds a GRUB ISO (BIOS/CSM, USB-flashable) with two entries: the default **console** image lands on an on-screen VGA text console — the kernel log, `qsh`, and even panic banners render on the machine's own display, so a laptop with no serial port gets a fully interactive shell on its own keyboard and screen — and a **graphical wave field** entry keeps the 1024x768 live-field boot. CI boots the ISO with `-cdrom` (the real GRUB handoff, not QEMU's `-kernel` shortcut) to the shell + a citizen gate, and separately drives `qsh` purely via injected PS/2 scancodes with no serial input at all ([docs/CONSOLE_SHELL.md](docs/CONSOLE_SHELL.md))
 - **Honest experiments** — alternate schedulers (quantum-lottery, resonant) live behind build flags and are measured against round-robin at boot; negative results are reported plainly
 
 Everything in the Vision below that is not in this list is aspiration, not implementation — the roadmap tracks the difference.
@@ -93,6 +94,26 @@ make run
 # Debug with GDB
 make debug
 ```
+
+### Boot it on real hardware (USB)
+
+```bash
+# Build the bootable ISO (BIOS/CSM; needs grub-pc-bin xorriso mtools)
+make build/x86_64/kernel.iso
+
+# Sanity-check the exact image in QEMU via the real GRUB handoff
+make ci-smoke-iso
+```
+
+Write `build/x86_64/kernel.iso` to a USB stick — `dd if=... of=/dev/sdX bs=4M`
+on Linux, or Rufus on Windows (choose **DD Image mode** when asked) — then
+boot the target machine from USB with Legacy/CSM boot enabled. The default
+GRUB entry, **QuantumOS (console)**, gives you the boot splash and then an
+interactive `qsh` on the machine's own screen and keyboard; the
+**graphical wave field** entry renders the live oscillator field at
+1024x768. Notes: BIOS boot only (no UEFI layer yet), keyboard input relies
+on the BIOS's PS/2 legacy emulation, and RAM beyond 128 MB is currently
+ignored.
 
 ### One-Command Verification
 New contributors can verify their entire setup works with a single command:
