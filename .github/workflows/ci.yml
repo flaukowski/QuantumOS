@@ -830,7 +830,9 @@ jobs:
     - name: Install dependencies
       run: |
         sudo apt-get update
-        sudo apt-get install -y build-essential qemu-system-x86 grub-pc-bin xorriso nasm
+        # mtools: required by grub-mkrescue on ubuntu-latest — without it the
+        # ISO build fails (kernel.iso is now a hard error, not a silent skip)
+        sudo apt-get install -y build-essential qemu-system-x86 grub-pc-bin xorriso mtools nasm
 
     - name: Build release
       run: |
