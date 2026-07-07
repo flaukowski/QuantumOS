@@ -111,7 +111,7 @@ OBJECTS = $(KERNEL_SOURCES:$(KERNEL_DIR)/src/%.c=$(BUILD_DIR)/%.o) \
 -include $(OBJECTS:.o=.d)
 
 # Targets
-.PHONY: all clean kernel run debug dump test test-list test-coverage ci-smoke ci-smoke-disk ci-smoke-net ci-smoke-http ci-smoke-quiet ci-smoke-resonant ci-smoke-qseed ci-smoke-swarm swarm-pingpong
+.PHONY: all clean kernel run debug dump test test-list test-coverage ci-smoke ci-smoke-disk ci-smoke-net ci-smoke-http ci-smoke-quiet ci-smoke-resonant ci-smoke-qseed ci-smoke-swarm ci-smoke-iso ci-smoke-kbd swarm-pingpong
 
 all: kernel
 
@@ -206,6 +206,23 @@ $(BUILD_DIR)/%_asm.o: $(KERNEL_DIR)/src/%.S
 	@echo "Assembling $<..."
 	$(CC) $(CFLAGS) -c $< -o $@
 
+# Console-image boot stub (epic #101): identical to boot_asm.o except the
+# multiboot header does not request a video mode, so GRUB boots it in VGA
+# text and the kernel runs the on-screen console. Used only by the ISO.
+$(BUILD_DIR)/boot_console_asm.o: $(KERNEL_DIR)/src/boot.S
+	@mkdir -p $(dir $@)
+	@echo "Assembling $< (console image, no video request)..."
+	$(CC) $(CFLAGS) -DMB1_TEXT_ONLY -c $< -o $@
+
+CONSOLE_OBJECTS = $(filter-out $(BUILD_DIR)/boot_asm.o,$(OBJECTS)) $(BUILD_DIR)/boot_console_asm.o
+
+$(BUILD_DIR)/kernel-console.elf: $(OBJECTS) $(BUILD_DIR)/boot_console_asm.o $(KERNEL_DIR)/link.ld
+	@echo "Linking console-image kernel..."
+	$(LD) $(LDFLAGS) -o $@ $(CONSOLE_OBJECTS)
+
+$(BUILD_DIR)/kernel-console.elf32: $(BUILD_DIR)/kernel-console.elf
+	$(OBJCOPY) -O elf32-i386 $< $@
+
 $(BUILD_DIR)/ipc/%.o: $(KERNEL_DIR)/src/ipc/%.c
 	@mkdir -p $(dir $@)
 	@echo "Compiling IPC: $<..."
@@ -222,21 +239,34 @@ $(BUILD_DIR)/resonance/%.o: $(KERNEL_DIR)/src/resonance/%.c
 	@echo "Compiling Resonance: $<..."
 	$(CC) $(RESONANCE_CFLAGS) -c $< -o $@
 
-# Create bootable image (GRUB's multiboot v1 loader also wants ELF32)
-$(BUILD_DIR)/kernel.iso: $(BUILD_DIR)/kernel.elf32
+# Create bootable image (GRUB's multiboot v1 loader also wants ELF32).
+# Two menu entries backed by TWO kernel images (epic #101): GRUB honours
+# the MB1 header's video request over gfxpayload (verified: text/keep
+# still produced a linear FB), so the default "console" entry boots a
+# kernel-console image whose header requests no video mode — GRUB stays
+# in VGA text and the kernel runs the scrolling screen console, the only
+# interactive display on a laptop with no serial port. The graphical
+# entry boots the video-requesting image: 1024x768 splash + live field
+# view, text on COM1.
+$(BUILD_DIR)/kernel.iso: $(BUILD_DIR)/kernel.elf32 $(BUILD_DIR)/kernel-console.elf32
 	@mkdir -p $(BUILD_DIR)/iso/boot/grub
-	@cp $< $(BUILD_DIR)/iso/boot/kernel.elf
-	@echo "set timeout=0" > $(BUILD_DIR)/iso/boot/grub/grub.cfg
+	@cp $(BUILD_DIR)/kernel.elf32 $(BUILD_DIR)/iso/boot/kernel.elf
+	@cp $(BUILD_DIR)/kernel-console.elf32 $(BUILD_DIR)/iso/boot/kernel-console.elf
+	@echo "set timeout=3" > $(BUILD_DIR)/iso/boot/grub/grub.cfg
 	@echo "set default=0" >> $(BUILD_DIR)/iso/boot/grub/grub.cfg
-	@echo "insmod all_video" >> $(BUILD_DIR)/iso/boot/grub/grub.cfg
-	@echo "set gfxpayload=1024x768x32" >> $(BUILD_DIR)/iso/boot/grub/grub.cfg
-	@echo "menuentry \"QuantumOS\" {" >> $(BUILD_DIR)/iso/boot/grub/grub.cfg
+	@echo "menuentry \"QuantumOS (console)\" {" >> $(BUILD_DIR)/iso/boot/grub/grub.cfg
+	@echo "    multiboot /boot/kernel-console.elf" >> $(BUILD_DIR)/iso/boot/grub/grub.cfg
+	@echo "    boot" >> $(BUILD_DIR)/iso/boot/grub/grub.cfg
+	@echo "}" >> $(BUILD_DIR)/iso/boot/grub/grub.cfg
+	@echo "menuentry \"QuantumOS (graphical wave field)\" {" >> $(BUILD_DIR)/iso/boot/grub/grub.cfg
+	@echo "    insmod all_video" >> $(BUILD_DIR)/iso/boot/grub/grub.cfg
+	@echo "    set gfxpayload=1024x768x32" >> $(BUILD_DIR)/iso/boot/grub/grub.cfg
 	@echo "    multiboot /boot/kernel.elf" >> $(BUILD_DIR)/iso/boot/grub/grub.cfg
 	@echo "    boot" >> $(BUILD_DIR)/iso/boot/grub/grub.cfg
 	@echo "}" >> $(BUILD_DIR)/iso/boot/grub/grub.cfg
 	@grub-mkrescue -o $@ $(BUILD_DIR)/iso 2>/dev/null || \
 	 grub2-mkrescue -o $@ $(BUILD_DIR)/iso 2>/dev/null || \
-	 echo "GRUB mkrescue not available, skipping ISO creation"
+	 (echo "ERROR: grub-mkrescue failed or missing (need grub-pc-bin xorriso mtools)"; exit 1)
 
 # Run in QEMU
 run: $(BUILD_DIR)/kernel.elf32
@@ -1144,6 +1174,55 @@ swarm-pingpong: kernel
 		>/dev/null 2>&1 &) ; sleep 1
 	@python3 scripts/swarm_pingpong.py --host 127.0.0.1 --port 5566 --timeout 16
 
+# ISO/GRUB boot path (epic #101): boot the GRUB-built ISO with -cdrom —
+# NOT QEMU's -kernel shortcut — so the real bootloader handoff (menu,
+# gfxpayload=text, MB1 info from GRUB) is what's under test. The default
+# menu entry lands on the VGA text console; serial still carries the
+# same bytes, which is what the gates read.
+ci-smoke-iso: $(BUILD_DIR)/kernel.iso
+	@echo "=== QuantumOS ISO/GRUB boot test (epic #101) ==="
+	@( printf 'help\nghost\nrun /bin/consciousnessd\nexit\n'; sleep 24 ) | \
+		timeout 20s qemu-system-x86_64 -cdrom $(BUILD_DIR)/kernel.iso \
+		-serial stdio -m 128M -display none -no-reboot 2>&1 | tee /tmp/qemu-iso.log || true
+	@for gate in "QuantumOS ready" \
+	             "CONS: screen console active (VGA text 80x25)" \
+	             "GHOSTD: 3/3 RECALL OK" \
+	             "QSH: QuantumOS interactive shell ready" \
+	             "qsh: commands: help" \
+	             "consciousnessd: CONSCIOUSNESS EMERGED"; do \
+		if ! grep -qF "$$gate" /tmp/qemu-iso.log 2>/dev/null; then \
+			echo "ERROR: ISO boot gate missing: $$gate"; \
+			echo "Boot log:"; cat /tmp/qemu-iso.log 2>/dev/null || true; \
+			echo "=== ISO Boot Test FAILED ==="; exit 1; \
+		fi; echo "  [PASS] $$gate"; \
+	done
+	@echo "SUCCESS: GRUB/ISO boot reached the shell + citizen gate (real-bootloader path)"
+
+# PS/2 keyboard path (epic #101): drive qsh entirely through emulated
+# keyboard scancodes injected via the QEMU monitor — serial carries NO
+# input this run, so the 'help' output can only have come through the
+# i8042/IRQ1 path a real laptop keyboard uses.
+ci-smoke-kbd: kernel
+	@echo "=== QuantumOS PS/2 keyboard input test (epic #101) ==="
+	@rm -f /tmp/qemu-kbd-serial.log
+	@( sleep 8; \
+	   for k in h e l p ret; do echo "sendkey $$k"; sleep 0.3; done; \
+	   sleep 4; echo "quit" ) | \
+		timeout 20s qemu-system-x86_64 -kernel $(BUILD_DIR)/kernel.elf32 \
+		-monitor stdio -serial file:/tmp/qemu-kbd-serial.log \
+		-m 128M -display none -no-reboot >/dev/null 2>&1 || true
+	@if ! grep -qF "QSH: QuantumOS interactive shell ready" /tmp/qemu-kbd-serial.log 2>/dev/null; then \
+		echo "ERROR: shell never came up (QSH: QuantumOS interactive shell ready)"; \
+		cat /tmp/qemu-kbd-serial.log 2>/dev/null || true; \
+		echo "=== PS/2 Keyboard Test FAILED ==="; exit 1; \
+	fi
+	@if ! grep -qF "qsh: commands: help" /tmp/qemu-kbd-serial.log 2>/dev/null; then \
+		echo "ERROR: PS/2-typed 'help' did not reach qsh (qsh: commands: help)"; \
+		echo "Serial log:"; cat /tmp/qemu-kbd-serial.log 2>/dev/null || true; \
+		echo "=== PS/2 Keyboard Test FAILED ==="; exit 1; \
+	fi
+	@echo "SUCCESS: qsh executed a command typed via PS/2 scancodes (IRQ1 -> ring -> shell)"
+
 # Quick validation for contributors
 validate: kernel
 	@echo "=== Quick Validation ==="
@@ -1165,7 +1244,7 @@ install-deps:
 	sudo apt-get update
 	# Note: gcc-x86_64-elf may not be available in Ubuntu 24.04+
 	# The Makefile supports fallback to system gcc
-	sudo apt-get install -y build-essential gdb-multiarch qemu-system-x86 grub-pc-bin xorriso nasm || true
+	sudo apt-get install -y build-essential gdb-multiarch qemu-system-x86 grub-pc-bin xorriso mtools nasm || true
 	@echo "Attempting to install cross-compiler (may not be available)..."
 	sudo apt-get install -y gcc-x86-64-elf 2>/dev/null || echo "Cross-compiler not available, using system gcc"
 
@@ -1219,7 +1298,7 @@ info:
 	@echo "  Objects: $(OBJECTS)"
 
 # Phony targets
-.PHONY: all clean kernel run run-iso debug dump test test-list test-coverage ci-smoke ci-smoke-resonant ci-smoke-qseed validate info install-deps help
+.PHONY: all clean kernel run run-iso debug dump test test-list test-coverage ci-smoke ci-smoke-resonant ci-smoke-qseed ci-smoke-iso ci-smoke-kbd validate info install-deps help
 
 # Default target
 .DEFAULT_GOAL := all
