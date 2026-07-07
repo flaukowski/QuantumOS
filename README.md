@@ -11,6 +11,10 @@
 
 > *"The future of computing is quantum, and the future of operating systems must be quantum-aware."*
 
+![QuantumOS graphical boot: the wave-interference splash animation, then the live 256-oscillator memory field](docs/assets/wave-field-boot.gif)
+
+*A real boot (GRUB ISO, graphical entry): the splash's two-source interference pattern animates as subsystems come up, then the kernel idle loop renders `ghostd`'s live oscillator field.*
+
 ## ✅ What runs today
 
 QuantumOS boots on x86-64 under QEMU (`make run`), and every claim below is gated in CI (`make ci-smoke`):
