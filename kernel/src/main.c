@@ -202,6 +202,16 @@ static void kernel_init(void) {
 
     boot_log("Kernel initialization complete");
     splash_ready();
+
+    // Text-mode boots hand the display from the splash to the scrolling
+    // VGA console: on a machine with no serial port (epic #101) this is
+    // the only way to SEE the shell. Framebuffer boots keep the live
+    // field view; their text stays on COM1.
+    if (!fb_available()) {
+        vga_console_enable();
+        boot_log("CONS: screen console active (VGA text 80x25)");
+    }
+
     boot_log("QuantumOS ready");
 
     // Idle loop for the kernel process. Reaps terminated processes
@@ -510,6 +520,13 @@ void boot_log(const char *message) {
     early_console_write("[BOOT] ");
     early_console_write(message);
     early_console_write("\r\n");
+    // Tee to the screen console (no-op until enabled): on serial-less
+    // real hardware this is the only place the kernel log is visible.
+    if (vga_console_active()) {
+        vga_console_puts("[BOOT] ");
+        vga_console_puts(message);
+        vga_console_putc('\n');
+    }
 }
 
 // Steady-state / demo boot logging — silenced under a `quiet` boot. See boot.h.

@@ -19,6 +19,7 @@
 
 #include <kernel/console.h>
 #include <kernel/boot.h>
+#include <kernel/vga.h>
 
 /* 16550 register offsets (same layout as com2_uart.c) */
 #define UART_THR 0 /* Transmit Holding Register (write, DLAB=0) */
@@ -122,6 +123,12 @@ void console_com1_irq(void) {
  * real 115200-baud byte time yet still a small bounded stall. */
 #define THR_DRAIN_SPINS 2000000u
 
+/* Sticky: set once COM1's THR fails to drain within the spin cap. A
+ * machine with no UART behind 0x3F8 must not pay the full spin per byte
+ * forever (with interrupts disabled) when the screen console can carry
+ * the output alone. */
+static uint8_t com1_dead;
+
 uint32_t console_write(const uint8_t *buf, uint32_t len) {
     if (!buf) {
         return 0;
@@ -129,18 +136,28 @@ uint32_t console_write(const uint8_t *buf, uint32_t len) {
     uint64_t flags = irq_save();
     uint32_t written = 0;
     for (uint32_t i = 0; i < len; i++) {
-        uint32_t spins = 0;
-        while (!(io_inb(COM1_PORT_BASE + UART_LSR) & LSR_THR_EMPTY)) {
-            if (++spins >= THR_DRAIN_SPINS) {
-                /* UART wedged — give up rather than hang the kernel with
-                 * interrupts disabled. Report what actually made it out. */
-                irq_restore(flags);
-                return written;
+        /* Screen first — plain memory writes, cannot wedge. No-op until
+         * the VGA console is enabled; on a serial-less machine it IS the
+         * shell's display. */
+        vga_console_putc((char)buf[i]);
+        if (!com1_dead) {
+            uint32_t spins = 0;
+            while (!(io_inb(COM1_PORT_BASE + UART_LSR) & LSR_THR_EMPTY)) {
+                if (++spins >= THR_DRAIN_SPINS) {
+                    /* UART wedged — stop paying for it rather than hang
+                     * the kernel with interrupts disabled. The screen
+                     * tee above keeps the console alive. */
+                    com1_dead = 1;
+                    break;
+                }
+            }
+            if (!com1_dead) {
+                io_outb(COM1_PORT_BASE + UART_THR, buf[i]);
             }
         }
-        io_outb(COM1_PORT_BASE + UART_THR, buf[i]);
         written++;
     }
+    vga_console_sync(); /* one HW-cursor move per write, not per byte */
     irq_restore(flags);
     return written;
 }

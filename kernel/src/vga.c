@@ -5,6 +5,7 @@
  */
 
 #include <kernel/vga.h>
+#include <kernel/fb.h>
 
 static volatile uint16_t *const VGA_MEM = (uint16_t *)0xB8000;
 
@@ -202,4 +203,162 @@ void vga_boot_ready(void) {
     for (int i = 0; i < VGA_WIDTH; i++)
         vga_put(i, 20, ' ', VGA_BLACK, VGA_BLACK);
     vga_print_center(20, ">>  Q U A N T U M   O S   R E A D Y  <<", VGA_YELLOW, VGA_BLACK);
+}
+
+/* ---- scrolling text console (epic #101) ----
+ *
+ * Callers already serialize against interrupts (console_write holds an
+ * IRQ-save guard; boot_log runs its serial half with IF managed by
+ * early_console_write), so these routines do plain memory writes and
+ * keep no locks of their own. Worst case under a race is a torn line on
+ * screen, never corruption beyond the 0xB8000 cell array.
+ *
+ * The console WRAPS instead of scrolling: past the bottom row the pen
+ * returns to row 0, clearing the row it enters plus the row below as a
+ * moving blank separator, teletype-style. Two cheaper-looking options
+ * were tried and rejected with evidence:
+ *   - memmove scroll: ~4000 0xB8000 accesses per line, each an MMIO
+ *     callback under QEMU TCG, all with interrupts disabled — it stole
+ *     enough CPU to starve the ring-3 services and break the
+ *     paradoxd/ghostd coupling CI gate.
+ *   - CRTC start-address panning: QEMU's text renderer places the
+ *     origin at 2x the programmed start value while real VGA uses 1x
+ *     (character units), so no single value renders correctly on both.
+ * Wrapping costs a flat 160 cell writes per line and needs no CRTC
+ * state, so it behaves identically on QEMU and real hardware. */
+
+static int cons_active;
+static int cons_x, cons_y;
+
+static void cursor_show(void) {
+    outb(0x3D4, 0x0A);
+    outb(0x3D5, 0x0E); /* cursor start scanline 14, enable (bit 5 clear) */
+    outb(0x3D4, 0x0B);
+    outb(0x3D5, 0x0F); /* cursor end scanline 15 — thin underline */
+}
+
+static void crtc_word(uint8_t idx_hi, uint8_t idx_lo, uint16_t value) {
+    outb(0x3D4, idx_hi);
+    outb(0x3D5, (uint8_t)(value >> 8));
+    outb(0x3D4, idx_lo);
+    outb(0x3D5, (uint8_t)(value & 0xFF));
+}
+
+static void cons_cell(int x, int y, char ch) {
+    VGA_MEM[y * VGA_WIDTH + x] = cell(ch, VGA_LIGHT_GREY, VGA_BLACK);
+}
+
+static void cons_clear_row(int y) {
+    int row = y * VGA_WIDTH;
+    for (int i = 0; i < VGA_WIDTH; i++) {
+        VGA_MEM[row + i] = cell(' ', VGA_LIGHT_GREY, VGA_BLACK);
+    }
+}
+
+/* Advance the pen one row, wrapping to the top past the bottom. The
+ * entered row is cleared, and so is the one below it — a moving blank
+ * separator that marks where the newest line sits. */
+static void cons_next_row(void) {
+    cons_y = (cons_y + 1) % VGA_HEIGHT;
+    cons_clear_row(cons_y);
+    cons_clear_row((cons_y + 1) % VGA_HEIGHT);
+}
+
+void vga_console_enable(void) {
+    vga_clear(VGA_BLACK);
+    cons_x = 0;
+    cons_y = 0;
+    cursor_show();
+    cons_active = 1;
+    vga_console_sync();
+}
+
+int vga_console_active(void) {
+    return cons_active;
+}
+
+void vga_console_putc(char c) {
+    if (!cons_active) {
+        return;
+    }
+    switch (c) {
+    case '\r':
+        cons_x = 0;
+        break;
+    case '\n':
+        cons_x = 0;
+        cons_next_row();
+        break;
+    case '\b':
+        if (cons_x > 0) {
+            cons_x--;
+            cons_cell(cons_x, cons_y, ' ');
+        }
+        break;
+    case '\t':
+        do {
+            cons_cell(cons_x, cons_y, ' ');
+            cons_x++;
+        } while ((cons_x & 3) && cons_x < VGA_WIDTH);
+        break;
+    default:
+        if ((uint8_t)c < 32 || (uint8_t)c > 126) {
+            return; /* other control bytes: not a screen concern */
+        }
+        cons_cell(cons_x, cons_y, c);
+        cons_x++;
+        break;
+    }
+    if (cons_x >= VGA_WIDTH) {
+        cons_x = 0;
+        cons_next_row();
+    }
+    /* NOTE: the hardware cursor is NOT moved here. Each move is 4 port
+     * writes, and under TCG every port write is a trap — per-character
+     * that slowed console output enough to break timing-sensitive CI
+     * gates. Callers batch it: vga_console_sync() once per write. */
+}
+
+void vga_console_sync(void) {
+    if (cons_active) {
+        crtc_word(0x0E, 0x0F, (uint16_t)(cons_y * VGA_WIDTH + cons_x));
+    }
+}
+
+/* Whole-string write under an IRQ guard: boot_log tees from both thread
+ * and interrupt context, and an unguarded interleave tears lines on
+ * screen (the shared pen position advances mid-line). console_write
+ * holds its own guard already — nesting is safe (flags restore). */
+void vga_console_puts(const char *s) {
+    if (!s) {
+        return;
+    }
+    uint64_t flags;
+    __asm__ volatile("pushfq; pop %0; cli" : "=r"(flags) : : "memory");
+    while (*s) {
+        vga_console_putc(*s++);
+    }
+    vga_console_sync();
+    __asm__ volatile("push %0; popfq" : : "r"(flags) : "memory");
+}
+
+static void panic_row(int y, const char *s) {
+    int len = str_len(s);
+    int start = (VGA_WIDTH - len) / 2;
+    for (int x = 0; x < VGA_WIDTH; x++) {
+        char ch = ' ';
+        if (x >= start && x - start < len && start >= 0) {
+            ch = s[x - start];
+        }
+        VGA_MEM[y * VGA_WIDTH + x] = cell(ch, VGA_WHITE, VGA_RED);
+    }
+}
+
+void vga_panic_banner(const char *msg) {
+    if (fb_available()) {
+        return; /* graphics mode: 0xB8000 is not the display */
+    }
+    panic_row(0, "*** KERNEL PANIC ***");
+    panic_row(1, msg ? msg : "(no message)");
+    panic_row(2, "system halted");
 }

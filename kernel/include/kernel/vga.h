@@ -50,4 +50,20 @@ void vga_boot_splash(void);                          /* draw the static frame + 
 void vga_boot_stage(const char *label, int percent); /* advance bar, animate */
 void vga_boot_ready(void);                           /* final "READY" flourish */
 
+/* Scrolling text console (epic #101). On serial-less real hardware the
+ * VGA text buffer is the machine's only display: once enabled (text-mode
+ * boots only, after the splash), boot_log and SYS_CONS writes tee here
+ * alongside COM1. Inactive until vga_console_enable() — the QEMU/CI
+ * serial contract is unchanged. */
+void vga_console_enable(void);
+int vga_console_active(void);
+void vga_console_putc(char c); /* does not move the HW cursor — batch via sync */
+void vga_console_puts(const char *s);
+void vga_console_sync(void); /* move the HW cursor to the pen position */
+
+/* Panic banner: independent of console state so a failure at any boot
+ * stage is visible on screen, not just COM1. Skips itself when a linear
+ * framebuffer owns the display. Called from boot_panic (boot.S). */
+void vga_panic_banner(const char *msg);
+
 #endif /* VGA_H */

@@ -10,8 +10,17 @@
 #define BOOT_STACK_SIZE 16384
 
 #define MB1_MAGIC 0x1BADB002
+#ifdef MB1_TEXT_ONLY
+/* Console-image build (epic #101): no video request, so GRUB leaves the
+ * machine in VGA text mode and the kernel takes the screen-console path.
+ * GRUB honours the header's video request over gfxpayload (verified
+ * empirically: gfxpayload=text/keep still produced a linear FB), so a
+ * separate image is the only reliable way to get a text-mode GRUB boot. */
+#define MB1_FLAGS 0x00000003
+#else
 /* bit0 page-align modules, bit1 memory info, bit2 request video mode */
 #define MB1_FLAGS 0x00000007
+#endif
 
 /* Multiboot v1 header — must be in the first 8 KB of the image; link.ld
  * places .multiboot_header first. With the video bit set we also supply
@@ -141,12 +150,20 @@ long_mode_entry:
 # Boot panic routine — C ABI: message in %rdi
 .global boot_panic
 boot_panic:
+    push %rbx         # keep message across calls (also 16-aligns %rsp)
+    mov %rdi, %rbx
+
     # Print panic message
     call early_console_write
 
     # Print newline
     mov $panic_newline, %rdi
     call early_console_write
+
+    # Paint the on-screen panic banner (vga.c) — on a machine with no
+    # serial port this is the only visible trace of an early failure
+    mov %rbx, %rdi
+    call vga_panic_banner
 
     # Halt system
     cli

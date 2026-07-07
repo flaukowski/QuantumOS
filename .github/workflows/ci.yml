@@ -518,6 +518,27 @@ jobs:
     - name: Prove a quiet boot yields a clean, usable console
       run: make ci-smoke-quiet
 
+  real-hw-boot:
+    name: Real-Hardware Boot Path (GRUB ISO + PS/2 keyboard — epic #101)
+    runs-on: ubuntu-latest
+    needs: [build]
+    # Two gates for the serial-less laptop path: (1) boot the GRUB-built ISO
+    # with -cdrom — the real bootloader handoff, not QEMU's -kernel shortcut —
+    # to the shell + a citizen gate, with the VGA screen console active;
+    # (2) drive qsh entirely through PS/2 scancodes injected via the QEMU
+    # monitor, proving the i8042/IRQ1 input path a laptop keyboard uses.
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+    - name: Install dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y build-essential qemu-system-x86 nasm grub-pc-bin xorriso mtools
+    - name: Boot the GRUB ISO to the shell (console image, VGA text)
+      run: make ci-smoke-iso
+    - name: Type into qsh via PS/2 scancodes
+      run: make ci-smoke-kbd
+
   persistence:
     name: Persistence Test (two boots, one disk — epic #71)
     runs-on: ubuntu-latest
