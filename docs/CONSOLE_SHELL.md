@@ -163,10 +163,75 @@ still answers *and* that the heartbeat/chatter is gone. (The kannaka lab
 harness exposes this as `lab-qos-boot --quiet`, which pairs with
 `--network` for a clean networked shell on a cloud box.)
 
+## The screen console: output on real hardware (epic #101)
+
+On a laptop with no serial port, everything above still *works* — and is
+completely invisible: input arrives via the PS/2 keyboard, but the boot
+log, `qsh`, and even panics used to speak COM1-only. The screen console
+(`kernel/src/vga.c`) makes the machine's own display a first-class
+output device.
+
+**API** (`kernel/include/kernel/vga.h`):
+
+| Function | Role |
+|---|---|
+| `vga_console_enable()` | Take over the 80x25 text screen from the boot splash; called after `splash_ready()` on text-mode boots only (`!fb_available()`) |
+| `vga_console_active()` | True once enabled — the tee points check this |
+| `vga_console_putc(c)` | Write one char (`\n`/`\r`/`\b`/tab handled). Does NOT move the HW cursor — see `vga_console_sync` |
+| `vga_console_puts(s)` | Whole string under an IRQ guard (interrupt-context `boot_log`s would otherwise tear lines), then one cursor sync |
+| `vga_console_sync()` | Move the HW cursor to the pen position — 4 port writes, batched once per write because every port write is a trap under QEMU TCG |
+| `vga_panic_banner(msg)` | Red panic banner, independent of console state; called from `boot_panic` (boot.S) so early bring-up failures are visible without a serial cable. Skipped when a linear framebuffer owns the display |
+
+**Tee points**: `console_write()` (the `SYS_CONS` sink) and `boot_log()`
+write serial first, then the screen when the console is active. Serial
+remains authoritative — every CI gate reads it, none changed.
+`console_write` also *latches off* a dead COM1 (transmit register never
+drains within the spin cap): a machine with no UART behind 0x3F8 pays
+the spin once, not per byte forever, and the screen carries on alone.
+
+**Why it wraps instead of scrolling** — two designs were rejected with
+evidence. A memmove scroll costs ~4000 `0xB8000` accesses per line, each
+an MMIO callback under QEMU TCG, all with interrupts off: it starved the
+ring-3 services outright (ghostd's field never synchronized, heartbeats
+missed, watchdog reborn-storms) and broke the paradoxd/ghostd coupling
+CI gate on ~half of runs. CRTC start-address panning is cheap but QEMU's
+text renderer places the origin at **2x** the programmed start value
+while real VGA uses 1x (character units) — verified by poking the CRTC
+from the QEMU monitor and screendumping — so no single value renders
+correctly on both. The wrap console (pen returns to the top and clears
+ahead of itself; a moving blank separator marks the newest line) costs a
+flat 160 cell writes per line and no CRTC state at all.
+
+**Booting into it**: `make iso` builds a GRUB ISO with two menu entries
+backed by two images of the same kernel. GRUB honours the multiboot
+header's video request over `gfxpayload` (verified: `text`/`keep` still
+produced a linear framebuffer), so the default **QuantumOS (console)**
+entry boots `kernel-console.elf` — built with `-DMB1_TEXT_ONLY`, no
+video request → VGA text → screen console. The **graphical wave field**
+entry boots the video-requesting image (1024x768 splash + live field
+view; its text stays on COM1).
+
+**CI gates** (the `Real-Hardware Boot Path` job):
+
+- `make ci-smoke-iso` — boots the ISO with `-cdrom` (the real GRUB
+  handoff, not QEMU's `-kernel` shortcut) and asserts the boot gates,
+  `CONS: screen console active (VGA text 80x25)`, the shell session, and
+  a citizen gate, all from one boot.
+- `make ci-smoke-kbd` — drives `qsh` purely via PS/2 scancodes injected
+  through the QEMU monitor (`sendkey`); serial carries **no input** that
+  run, so the executed `help` proves the i8042/IRQ1 path a real laptop
+  keyboard uses.
+
 ## Known limits / follow-ups
 
-- Serial-first: shell output is not yet mirrored to the VGA text screen
-  or framebuffer console (follow-up: a proper text console layer).
+- The graphical (framebuffer) boot has no text console yet — its shell
+  output stays on COM1; the screen console is text-mode boots only.
+- USB keyboards rely on the BIOS's PS/2 legacy emulation (CSM boots);
+  there is no native USB HID driver. The ISO is BIOS-boot only — no
+  UEFI layer yet.
+- The multiboot memory map is not read; the PMM assumes 128 MB
+  (`memory.c` hardcodes it), so RAM beyond that is ignored on real
+  machines.
 - Peer IPC capabilities (qsh ↔ ghostd) are not re-minted on watchdog
   restart — only declared *resource* caps are. A reborn shell keeps its
   console but loses `ghost` until this service.c limitation is fixed

@@ -1264,6 +1264,8 @@ help:
 	@echo "  run            - Run kernel in QEMU (interactive)"
 	@echo "  run-iso        - Run kernel from ISO in QEMU"
 	@echo "  ci-smoke       - CI smoke test (build + headless boot + validate)"
+	@echo "  ci-smoke-iso   - Boot the GRUB ISO via -cdrom to the shell (epic #101)"
+	@echo "  ci-smoke-kbd   - Drive qsh via PS/2 scancodes only (epic #101)"
 	@echo "  validate       - Quick validation (build + API check)"
 	@echo "  debug          - Debug kernel with GDB"
 	@echo "  dump           - Show kernel information"
