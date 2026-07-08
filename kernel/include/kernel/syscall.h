@@ -162,18 +162,23 @@
 #define UDP_OP_CLOSE 3
 
 #define SYS_TCP                                                                                    \
-    28 /* rdi = op, rsi = tcp_req_t ptr; ring-3 TCP CLIENT (epic
-                         * #82). Ops: TCP_OP_CONNECT (active open to ip:port,
-                         * WOULD_BLOCK while the handshake runs, 0 once
-                         * ESTABLISHED, EIO on refuse/timeout), TCP_OP_SEND
-                         * (<= MSS bytes, WOULD_BLOCK while a segment is
-                         * outstanding), TCP_OP_RECV (bytes from the receive
-                         * ring, 0 = peer closed / EOF, WOULD_BLOCK when empty),
-                         * TCP_OP_CLOSE (graceful FIN, poll to CLOSED),
-                         * TCP_OP_STATUS. One connection at a time; all TCP I/O
-                         * runs in the IF=1 net thread. Gated on
-                         * CAP_RESOURCE_DEVICE over DEVICE_ID_NET (EPERM
-                         * without) — held only by qsh. */
+    28 /* rdi = op, rsi = tcp_req_t ptr; ring-3 TCP (epics #82
+                         * client, #98 server). Ops: TCP_OP_CONNECT (active
+                         * open to ip:port, WOULD_BLOCK while the handshake
+                         * runs, 0 once ESTABLISHED, EIO on refuse/timeout),
+                         * TCP_OP_SEND (<= MSS bytes, WOULD_BLOCK while a
+                         * segment is outstanding), TCP_OP_RECV (bytes from
+                         * the receive ring, 0 = peer closed / EOF,
+                         * WOULD_BLOCK when empty), TCP_OP_CLOSE (graceful
+                         * FIN, poll to CLOSED), TCP_OP_STATUS, TCP_OP_LISTEN
+                         * (passive open on req.port — poll to 0 = armed),
+                         * TCP_OP_ACCEPT (poll: 0 = peer connected, EIO =
+                         * recover with CLOSE + re-LISTEN). One client and
+                         * one server connection at a time, one connection
+                         * per pid; all TCP I/O runs in the IF=1 net thread.
+                         * Gated on CAP_RESOURCE_DEVICE over DEVICE_ID_NET
+                         * (EPERM without) — held only by grant_net services
+                         * (qsh, fieldsyncd, httpd). */
 
 /* SYS_TCP operations (rdi). */
 #define TCP_OP_CONNECT 0
@@ -181,6 +186,8 @@
 #define TCP_OP_RECV 2
 #define TCP_OP_CLOSE 3
 #define TCP_OP_STATUS 4
+#define TCP_OP_LISTEN 5
+#define TCP_OP_ACCEPT 6
 
 #define SYS_IMPRINT                                                                                \
     29 /* rdi = field_imprint_req ptr; store a pattern into a

@@ -55,6 +55,8 @@
 #define TCP_RECV 2
 #define TCP_CLOSE 3
 #define TCP_STATUS 4
+#define TCP_LISTEN 5
+#define TCP_ACCEPT 6
 
 /* SYS_WAITPID: the target is still running. */
 #define WAITPID_RUNNING 256
@@ -275,15 +277,20 @@ static inline long udp_(long op, udp_req_t *req) {
     return usys2(SYS_UDP, op, (long)req);
 }
 
-/* SYS_TCP request block (epic #82). Reuses the udp_req_t layout (the
- * single connection means the `sock` field is unused).
+/* SYS_TCP request block (epics #82 client, #98 server). Reuses the
+ * udp_req_t layout (the single connection per side means the `sock`
+ * field is unused).
  *   CONNECT:  in ip/port (dst)          -> 0 connected, -11 connecting
  *   SEND:     in buf, len (<= 1460)      -> bytes accepted, -11 tx busy
  *   RECV:     in buf, len (buf size)     -> byte count, 0 = EOF, -11 empty
  *   CLOSE:    (none)                     -> 0 closed, -11 closing
  *   STATUS:   (none)                     -> 0 established, -11 connecting
+ *   LISTEN:   in port                    -> 0 armed, -11 arming/draining
+ *   ACCEPT:   (none)                     -> 0 peer connected, -11 waiting,
+ *                                           -5 recover: CLOSE + re-LISTEN
  * Errors: -4 EPERM (no network capability), -1 EINVAL, -2 EFAULT,
- * -5 EIO (refused/reset/timeout/no NIC). */
+ * -5 EIO (refused/reset/timeout/no NIC). One connection per pid: a
+ * listener may not CONNECT and a client may not LISTEN. */
 typedef udp_req_t tcp_req_t;
 
 static inline long tcp_(long op, tcp_req_t *req) {

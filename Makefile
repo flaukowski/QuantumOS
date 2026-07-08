@@ -87,7 +87,7 @@ ASSEMBLY_SOURCES = $(wildcard $(KERNEL_DIR)/src/*.S)
 # objects (symbols _binary_<name>_elf_start/_end)
 USER_DIR = user
 USER_BUILD = $(BUILD_DIR)/user
-USER_PROGS = init echo client hbsvc ghostd ghost_test paradoxd paradox_test swarm_svc qsh quantumd kannakad fieldsyncd
+USER_PROGS = init echo client hbsvc ghostd ghost_test paradoxd paradox_test swarm_svc qsh quantumd kannakad fieldsyncd httpd
 USER_ELF_OBJS = $(USER_PROGS:%=$(USER_BUILD)/%_elf.o)
 
 # libq: the freestanding ring-3 runtime, built as a static archive and linked
@@ -111,7 +111,7 @@ OBJECTS = $(KERNEL_SOURCES:$(KERNEL_DIR)/src/%.c=$(BUILD_DIR)/%.o) \
 -include $(OBJECTS:.o=.d)
 
 # Targets
-.PHONY: all clean kernel run debug dump test test-list test-coverage ci-smoke ci-smoke-disk ci-smoke-net ci-smoke-http ci-smoke-quiet ci-smoke-resonant ci-smoke-qseed ci-smoke-swarm ci-smoke-iso ci-smoke-kbd ci-smoke-noserial ci-smoke-screen swarm-pingpong
+.PHONY: all clean kernel run debug dump test test-list test-coverage ci-smoke ci-smoke-disk ci-smoke-net ci-smoke-http ci-smoke-httpd ci-smoke-quiet ci-smoke-resonant ci-smoke-qseed ci-smoke-swarm ci-smoke-iso ci-smoke-kbd ci-smoke-noserial ci-smoke-screen swarm-pingpong
 
 all: kernel
 
@@ -1097,6 +1097,93 @@ ci-smoke-http: kernel
 	@echo "SUCCESS: fetched http://example.com/ over TCP — QuantumOS reads the web"
 	@echo ""
 	@echo "=== TCP Test PASSED ==="
+
+# CI Smoke Test (TCP server + httpd — epic #98): the host fetches a live
+# status page FROM QuantumOS. QEMU SLIRP hostfwd maps host 127.0.0.1:18081
+# to the guest's DHCP address :8080, where the ring-3 httpd service holds
+# the kernel's single passive-open listener. Design notes baked in from the
+# epic-98 attack panel:
+#  - SLIRP accepts the HOST side of a hostfwd connection immediately, even
+#    before the guest listens — a pre-listen curl burns its full --max-time
+#    (never a fast refused). So the retry loops are WALL-CLOCK deadlines
+#    with a QEMU-liveness check, not iteration counts.
+#  - After each serve, the singleton server conn spends ~1s in TIME_WAIT
+#    before re-listening; a SYN in that gap is silently dropped. BOTH curls
+#    therefore run retry loops.
+#  - Anti-vacuity: success requires the body sentinel ("QuantumOS status"),
+#    a served= counter that STRICTLY RISES across the two fetches (a static
+#    page or a stranger's server cannot satisfy it; strictly-greater, not
+#    +1, because a timed-out attempt may have been served invisibly), and
+#    uptime=[1-9] on the SECOND body (guaranteed >=1s after boot by the
+#    TIME_WAIT gap itself — the first body may honestly read uptime=0s).
+#  - QEMU is killed and reaped INSIDE the single recipe block before the
+#    assertion lines read the logs (each later @-line is its own shell).
+ci-smoke-httpd: kernel
+	@echo "=== QuantumOS TCP Server Smoke Test (httpd status page) ==="
+	@echo "[1/2] Boot with hostfwd, fetch the status page twice from the host..."
+	@set -e; \
+	 rm -f /tmp/qemu-httpd.log /tmp/qos-httpd-1.txt /tmp/qos-httpd-2.txt; \
+	 ( sleep 120 ) | timeout 125s qemu-system-x86_64 \
+		-kernel $(BUILD_DIR)/kernel.elf32 \
+		-netdev user,id=n0,hostfwd=tcp:127.0.0.1:18081-:8080 \
+		-device rtl8139,netdev=n0 \
+		-serial stdio -m 128M -display none -no-reboot > /tmp/qemu-httpd.log 2>&1 & \
+	 QPID=$$!; \
+	 trap 'kill $$QPID 2>/dev/null || true' EXIT; \
+	 deadline=$$(( $$(date +%s) + 75 )); ok1=0; \
+	 while [ $$(date +%s) -lt $$deadline ]; do \
+	   kill -0 $$QPID 2>/dev/null || break; \
+	   body=$$(curl -s --max-time 2 http://127.0.0.1:18081/ 2>/dev/null || true); \
+	   if printf '%s' "$$body" | grep -q "QuantumOS status"; then \
+	     printf '%s\n' "$$body" > /tmp/qos-httpd-1.txt; ok1=1; break; \
+	   fi; \
+	   sleep 0.5; \
+	 done; \
+	 if [ $$ok1 != 1 ]; then \
+	   echo "ERROR: first fetch never returned the status page"; \
+	   echo "Boot log:"; cat /tmp/qemu-httpd.log 2>/dev/null || true; \
+	   echo "=== TCP Server Test FAILED ==="; exit 1; \
+	 fi; \
+	 s1=$$(grep -oE 'served=[0-9]+' /tmp/qos-httpd-1.txt | head -1 | cut -d= -f2); \
+	 [ -n "$$s1" ] || { echo "ERROR: first body carried no served= counter"; \
+	   cat /tmp/qos-httpd-1.txt; exit 1; }; \
+	 deadline=$$(( $$(date +%s) + 40 )); ok2=0; \
+	 while [ $$(date +%s) -lt $$deadline ]; do \
+	   kill -0 $$QPID 2>/dev/null || break; \
+	   body=$$(curl -s --max-time 2 http://127.0.0.1:18081/ 2>/dev/null || true); \
+	   s2=$$(printf '%s' "$$body" | grep -oE 'served=[0-9]+' | head -1 | cut -d= -f2); \
+	   if [ -n "$$s2" ] && [ "$$s2" -gt "$$s1" ]; then \
+	     printf '%s\n' "$$body" > /tmp/qos-httpd-2.txt; ok2=1; break; \
+	   fi; \
+	   sleep 0.5; \
+	 done; \
+	 kill $$QPID 2>/dev/null || true; wait $$QPID 2>/dev/null || true; \
+	 if [ $$ok2 != 1 ]; then \
+	   echo "ERROR: second fetch never showed a RISING served counter (re-listen broken?)"; \
+	   echo "First body:"; cat /tmp/qos-httpd-1.txt 2>/dev/null || true; \
+	   echo "Boot log:"; cat /tmp/qemu-httpd.log 2>/dev/null || true; \
+	   echo "=== TCP Server Test FAILED ==="; exit 1; \
+	 fi
+	@echo ""
+	@echo "[2/2] Validating..."
+	@# Service actually started (failure-mode discriminator vs network issues).
+	@if ! grep -q "httpd (ring 3) serving the status page" /tmp/qemu-httpd.log 2>/dev/null; then \
+		echo "ERROR: httpd service never started"; \
+		cat /tmp/qemu-httpd.log 2>/dev/null || true; \
+		echo "=== TCP Server Test FAILED ==="; exit 1; \
+	fi
+	@echo "SUCCESS: httpd service up with the network capability"
+	@# Live value: uptime computed at request time, strictly positive on the
+	@# second serve (>= 1s guaranteed by the TIME_WAIT gap between serves).
+	@if ! grep -qE "uptime=[1-9][0-9]*s" /tmp/qos-httpd-2.txt 2>/dev/null; then \
+		echo "ERROR: second body has no live uptime"; \
+		cat /tmp/qos-httpd-2.txt 2>/dev/null || true; \
+		echo "=== TCP Server Test FAILED ==="; exit 1; \
+	fi
+	@echo "SUCCESS: passive open + accept + live body + rising served counter"
+	@echo "         (host curl -> SLIRP hostfwd -> QuantumOS httpd, twice)"
+	@echo ""
+	@echo "=== TCP Server Test PASSED ==="
 
 # CI Smoke Test (guest-to-guest networking, epic #97 prerequisite): boot TWO
 # QuantumOS guests joined by a QEMU socket netdev (a raw L2 segment with NO
