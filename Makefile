@@ -111,7 +111,7 @@ OBJECTS = $(KERNEL_SOURCES:$(KERNEL_DIR)/src/%.c=$(BUILD_DIR)/%.o) \
 -include $(OBJECTS:.o=.d)
 
 # Targets
-.PHONY: all clean kernel run debug dump test test-list test-coverage ci-smoke ci-smoke-disk ci-smoke-net ci-smoke-http ci-smoke-quiet ci-smoke-resonant ci-smoke-qseed ci-smoke-swarm ci-smoke-iso ci-smoke-kbd ci-smoke-noserial swarm-pingpong
+.PHONY: all clean kernel run debug dump test test-list test-coverage ci-smoke ci-smoke-disk ci-smoke-net ci-smoke-http ci-smoke-quiet ci-smoke-resonant ci-smoke-qseed ci-smoke-swarm ci-smoke-iso ci-smoke-kbd ci-smoke-noserial ci-smoke-screen swarm-pingpong
 
 all: kernel
 
@@ -1258,6 +1258,25 @@ ci-smoke-noserial: kernel
 		 echo "=== Serial-less Boot Test FAILED ==="; exit 1)
 	@echo "SUCCESS: kernel booted fully with NO COM1 UART (attestation verified via COM2)"
 
+# Screen-truth gate (epic #101): after a normal boot, dump the live VGA
+# text cells through the QEMU monitor and assert a ring-3 SYS_WRITE line
+# ("[user pid=") is actually ON SCREEN. Serial gates cannot see this —
+# the third real-laptop finding was citizens running to a clean exit 0
+# while their SYS_WRITE output went only to a serial port that did not
+# exist. The console tee makes it visible; this proves it stays visible.
+ci-smoke-screen: kernel
+	@echo "=== QuantumOS on-screen output test (epic #101) ==="
+	@rm -f /tmp/qemu-screen-mon.sock
+	@(timeout 18s qemu-system-x86_64 -kernel $(BUILD_DIR)/kernel.elf32 \
+		-serial file:/tmp/qemu-screen-com1.log \
+		-monitor unix:/tmp/qemu-screen-mon.sock,server,nowait \
+		-m 128M -display none -no-reboot >/dev/null 2>&1 &) ; sleep 12
+	@python3 scripts/check_vga_text.py /tmp/qemu-screen-mon.sock "[user pid=" || \
+		(echo "ERROR: ring-3 SYS_WRITE output is not reaching the VGA screen"; \
+		 echo "=== On-Screen Output Test FAILED ==="; exit 1)
+	@sleep 7
+	@echo "SUCCESS: ring-3 SYS_WRITE output is visible on the machine's own display"
+
 # Quick validation for contributors
 validate: kernel
 	@echo "=== Quick Validation ==="
@@ -1302,6 +1321,7 @@ help:
 	@echo "  ci-smoke-iso   - Boot the GRUB ISO via -cdrom to the shell (epic #101)"
 	@echo "  ci-smoke-kbd   - Drive qsh via PS/2 scancodes only (epic #101)"
 	@echo "  ci-smoke-noserial - Boot with NO COM1 device at all (epic #101)"
+	@echo "  ci-smoke-screen - Assert ring-3 output is ON the VGA screen (epic #101)"
 	@echo "  validate       - Quick validation (build + API check)"
 	@echo "  debug          - Debug kernel with GDB"
 	@echo "  dump           - Show kernel information"
@@ -1336,7 +1356,7 @@ info:
 	@echo "  Objects: $(OBJECTS)"
 
 # Phony targets
-.PHONY: all clean kernel run run-iso debug dump test test-list test-coverage ci-smoke ci-smoke-resonant ci-smoke-qseed ci-smoke-iso ci-smoke-kbd ci-smoke-noserial validate info install-deps help
+.PHONY: all clean kernel run run-iso debug dump test test-list test-coverage ci-smoke ci-smoke-resonant ci-smoke-qseed ci-smoke-iso ci-smoke-kbd ci-smoke-noserial ci-smoke-screen validate info install-deps help
 
 # Default target
 .DEFAULT_GOAL := all
