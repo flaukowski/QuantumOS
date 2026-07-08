@@ -286,6 +286,65 @@ network** — gated on `qsh: http 10.0.2.2 -> HTTP/1.[01] 200` and
 real-world capstone (`qsh: http example.com -> HTTP/1.[01] 200`), the same
 non-hermetic runner-egress class as the `example.com` DNS gate.
 
+## A TCP server: listen/accept + httpd (epic #98)
+
+`SYS_TCP` grows two ops, and the OS grows its first inbound service. A
+second static TCB (`tcb_srv`) carries the single **passive-open**
+connection alongside the client's — the two are disjoint by construction
+(the client's local port is ephemeral ≥ 49152, the server's is its listen
+port), so `qsh`'s outbound `http` and an inbound request coexist in one
+boot. The state machine gains `LISTEN` and `SYN_RCVD`; the demux, service
+loop and reset primitives are per-connection (`tcp_rx_one` /
+`tcp_service_one`), so a client parked in ERROR can never deafen the
+server.
+
+- **`TCP_OP_LISTEN` (5)** — arm the listener on `req.port`. Re-postable:
+  the caller polls until 0 (armed), so a lost arming store simply
+  re-posts. WOULD_BLOCK also covers a previous connection still draining
+  (including a dead owner's — process cleanup posts the abort, the next
+  poll claims the freed TCB). One connection per pid: a listener may not
+  CONNECT and vice versa.
+- **`TCP_OP_ACCEPT` (6)** — poll for a peer: 0 once ESTABLISHED **or
+  CLOSE_WAIT** (a client that sends `GET`+FIN in the completing ACK's
+  segment has already half-closed by the first accept poll — its request
+  bytes are in the ring), WOULD_BLOCK while listening or mid-handshake,
+  EIO anywhere else (recover with CLOSE, then re-LISTEN). SEND is legal
+  in CLOSE_WAIT for the same reason: a server must be able to answer a
+  peer that half-closed behind its request.
+
+The passive open runs entirely in the net-thread demux: a clean SYN
+(`SYN && !ACK && !RST`, checked **after** the checksum so a corrupt SYN
+can't burn the slot) captures the peer's address — and the arriving
+frame's **source MAC** as the reply nexthop, so demux never touches the
+blocking ARP pump — then answers SYN|ACK and waits in SYN_RCVD. A lost
+SYN|ACK is retransmitted; exhaustion **re-arms LISTEN** (never ERROR — a
+dedicated `tcp_rearm_listen` preserves owner and port), as does an RST
+during the handshake, so at most one half-open exists and it always
+self-heals. Both reset primitives store `state` **last** behind the
+publish barrier: a syscall preempting the zero-loop still sees the old
+busy state and keeps polling instead of posting into a half-zeroed TCB.
+
+**httpd** (`user/httpd.c`) is the ring-3 consumer: a monitored `grant_net`
+service that loops listen → accept → read the request under a **total**
+deadline (captured once, never reset on progress — a byte-dribbling
+slow-loris is cut off, not refreshed) → serve one HTTP/1.0 response →
+close → re-listen. Every body value is computed at request time (uptime
+from `SYS_TICKS`, memory from `SYS_SYSINFO`, a rising `served=` counter).
+Its `grant_net` is honestly coarser than the job (it also gates UDP/DNS/
+outbound connects), so the program deliberately contains no outbound
+operation and discards the request bytes unparsed. Without a NIC it logs
+once and idles — the default boot is unchanged.
+
+**CI (`ci-smoke-httpd`)** boots with SLIRP
+`hostfwd=tcp:127.0.0.1:18081-:8080` and fetches the page **twice from the
+host**. Both curls run wall-clock-deadline retry loops (SLIRP accepts the
+host side immediately even pre-listen, so a failed attempt burns its full
+`--max-time`; and each serve is followed by ~1s of TIME_WAIT before the
+re-listen). The gate is non-vacuous three ways: the body sentinel, a
+`served=` counter that must **strictly rise** across the fetches (no
+static page or stranger's server can satisfy it), and `uptime=[1-9]` on
+the second body.
+
 ## Source layout (after the transport split)
 
 The stack started life as a single `kernel/src/net.c`. As the ring-3
@@ -297,8 +356,9 @@ same code, three translation units plus a shared internal header:
 - **`kernel/src/net_udp.c`** — the ring-3 UDP sockets (epic #80): the
   socket table, the SENDTO tx ring, the `net_udp_*` syscall API, and the
   net-thread rx demux / closing-slot retire / tx drain.
-- **`kernel/src/net_tcp.c`** — the ring-3 TCP client (epic #82): the
-  single TCB and its net-thread state machine, plus the `net_tcp_*` API.
+- **`kernel/src/net_tcp.c`** — the ring-3 TCP client (epic #82) and
+  server (epic #98): the client and server TCBs and their net-thread
+  state machine, plus the `net_tcp_*` API.
 - **`kernel/include/kernel/net_internal.h`** — the shared internal
   surface: the `eth`/`ip`/`udp` wire structs (with `_Static_assert` size
   guards), the `htons`/`htonl`/`ip_eq` helpers, the netif globals, and the
@@ -384,11 +444,14 @@ couples `ghostd`'s *living* attractor field; the kernel holographic field
 
 ## Known limits / follow-ups (the honest boundary)
 
-- **TCP is client only.** No listen/accept (no server), one connection at
-  a time, stop-and-wait send (one outstanding segment ≤ MSS), in-order
-  receive only (out-of-order segments are dropped; the peer retransmits),
-  no congestion control, a shortened ~1 s TIME_WAIT (not 2 MSL), and no
-  TLS. A complete, honest fetch-a-page client — not a general stack.
+- **TCP is one client + one server connection.** One active-open and one
+  passive-open at a time (epic #98), one connection per pid; the server
+  accepts serially (a SYN while busy is dropped and the peer's retry
+  lands after the re-listen). Stop-and-wait send (one outstanding
+  segment ≤ MSS), in-order receive only (out-of-order segments are
+  dropped; the peer retransmits), no congestion control, a shortened
+  ~1 s TIME_WAIT (not 2 MSL), and no TLS. A complete, honest
+  fetch-a-page client and serve-a-page server — not a general stack.
 - UDP: 4 sockets, 4-deep rings, 1472-byte datagrams (no IP
   fragmentation), no UDP TX checksum (0 is legal for IPv4), no
   broadcast/multicast send.

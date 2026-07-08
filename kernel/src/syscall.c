@@ -51,6 +51,7 @@ extern const uint8_t _binary_qsh_elf_start[], _binary_qsh_elf_end[];
 extern const uint8_t _binary_quantumd_elf_start[], _binary_quantumd_elf_end[];
 extern const uint8_t _binary_kannakad_elf_start[], _binary_kannakad_elf_end[];
 extern const uint8_t _binary_fieldsyncd_elf_start[], _binary_fieldsyncd_elf_end[];
+extern const uint8_t _binary_httpd_elf_start[], _binary_httpd_elf_end[];
 
 /* Argument vector ABI (epic #62). MUST stay byte-identical to user_args_t
  * in user/usys.h — there is no shared header across the ring boundary. The
@@ -75,6 +76,7 @@ void user_swarm_demo_init(uint32_t ghostd_pid);
 void user_shell_init(uint32_t ghostd_pid);
 void user_quantum_demo_init(void);
 void user_fieldsync_demo_init(uint32_t ghostd_pid);
+void user_httpd_init(void);
 void user_kannaka_demo_init(void);
 
 /* int 0x80 stub (kernel/src/interrupts.S) */
@@ -908,6 +910,12 @@ static uint64_t sys_tcp(uint32_t pid, uint64_t op, uint64_t req_ptr) {
 
     case TCP_OP_STATUS:
         return tcp_map_err(net_tcp_status(pid));
+
+    case TCP_OP_LISTEN:
+        return tcp_map_err(net_tcp_listen(pid, req.port));
+
+    case TCP_OP_ACCEPT:
+        return tcp_map_err(net_tcp_accept(pid));
 
     default:
         return SYSCALL_EINVAL;
@@ -1772,8 +1780,39 @@ void user_paradox_demo_init(uint32_t ghostd_pid) {
     /* epic #97: bring up fieldsyncd, the UDP field-coupling bridge. */
     user_fieldsync_demo_init(ghostd_pid);
 
+    /* epic #98: bring up httpd, the TCP status-page server. */
+    user_httpd_init();
+
     /* ghostd phase 4: bring up swarm_svc, the COM2 serial swarm bridge. */
     user_swarm_demo_init(ghostd_pid);
+}
+
+/* Bring up httpd — the HTTP status-page server (epic #98). It holds ONLY
+ * the network cap. That grant is honestly coarser than the job: grant_net
+ * also gates SYS_UDP / SYS_RESOLVE / outbound TCP connects, so httpd's
+ * code deliberately contains no outbound operation and discards the
+ * request bytes unparsed — an audit of user/httpd.c should keep it that
+ * way. Needs no IPC wiring (the body is built from uncapped SYS_TICKS /
+ * SYS_SYSINFO). Without a NIC it logs once and idles; the default boot
+ * is unchanged. Monitored. */
+void user_httpd_init(void) {
+    service_definition_t httpd_def = {
+        .name = "httpd",
+        .entry = NULL,
+        .user_elf_start = _binary_httpd_elf_start,
+        .user_elf_end = _binary_httpd_elf_end,
+        .dependencies = {NULL},
+        .max_restarts = 2,
+        .grant_net = 1,
+    };
+    uint32_t sid = 0;
+    if (service_register(&httpd_def, &sid) != SVC_SUCCESS ||
+        service_start("httpd", NULL) != SVC_SUCCESS) {
+        boot_log("Warning: httpd service failed to start");
+        return;
+    }
+    service_monitor(sid, true);
+    boot_log("epic98: httpd (ring 3) serving the status page on :8080");
 }
 
 /* Bring up fieldsyncd — the UDP field-coupling bridge (epic #97). It holds

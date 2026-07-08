@@ -126,9 +126,24 @@ int net_udp_dst_ok(const uint8_t *dip);
  * another owner holds the connection. */
 long net_tcp_connect(uint32_t pid, const uint8_t *ip, uint16_t port);
 
+/* Passive open (epic #98): arm the single listener on `port`. WOULDBLOCK
+ * while arming or while a previous connection drains — poll until 0
+ * (armed, or already carrying a connection on that port). EINVAL if a
+ * live foreign owner holds the listener or the caller owns the client
+ * connection (one connection per pid), ENONET with no NIC. */
+long net_tcp_listen(uint32_t pid, uint16_t port);
+
+/* Poll the armed listener for a peer. 0 once connected (ESTABLISHED or
+ * CLOSE_WAIT — the request bytes are readable even if the peer already
+ * half-closed), WOULDBLOCK while listening / mid-handshake, EIO in any
+ * other state (recover with CLOSE, then re-LISTEN), EINVAL if `pid` is
+ * not the listener's owner. */
+long net_tcp_accept(uint32_t pid);
+
 /* Queue up to MSS bytes (kernel memory) for transmission. Returns bytes
  * accepted, WOULDBLOCK while a segment is still outstanding, EINVAL if
- * not ESTABLISHED or not the owner, EIO on a broken connection. */
+ * not ESTABLISHED/CLOSE_WAIT or not an owner, EIO on a broken
+ * connection. */
 long net_tcp_send(uint32_t pid, const uint8_t *buf, uint16_t len);
 
 /* Copy received bytes into `buf` (kernel memory, up to maxlen). Returns
