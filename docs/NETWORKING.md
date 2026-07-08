@@ -309,6 +309,41 @@ The transports keep all their state `static` in their own file, so the
 concurrency invariants (the volatile publish discipline on the UDP tx ring
 and the TCP TCB) are unchanged — the split is a pure code move.
 
+## Guest-to-guest networking: static IP + an ARP responder (epic #97)
+
+Everything above rides QEMU's user-mode network (SLIRP), which hands the
+guest a DHCP lease, a gateway, DNS — and crucially **answers ARP on the
+guest's behalf**. Two QuantumOS instances on a raw L2 segment
+(`-netdev socket`) have none of that: no DHCP server, no gateway, and no
+ARP proxy. Two gaps had to close before they could exchange a packet:
+
+- **Static addressing.** The boot cmdline gains a token-anchored `ip=A.B.C.D`
+  (parsed like `qseed=`/`quiet`): it sets `my_ip`, raises a `static_link`
+  flag, and **skips the DHCP client entirely**. The five places that used
+  to hard-check `dhcp_have_lease` — routing (`net_next_hop`), readiness
+  (`net_ready`), DNS (`dns_resolve`), destination validation
+  (`net_udp_dst_ok`), and the boot self-test — now consult
+  `net_has_addr()` (`dhcp_have_lease || static_link`), so a static address
+  behaves like a leased one. Static mode has no gateway, so `net_next_hop`
+  returns *unroutable* (NULL) for an off-link destination and the caller
+  drops it rather than ARPing a nonexistent `10.0.2.2` forever. The
+  self-test prints `NET: static ip A.B.C.D` and skips its SLIRP-oriented
+  ARP/DHCP/ping/DNS phases (each would otherwise burn a doomed multi-second
+  timeout).
+- **An ARP responder.** `net_rx` now answers an inbound ARP *request* for
+  our own address with a reply (and learns the requester's MAC for free).
+  SLIRP never sends us requests, so this is inert on every existing gate —
+  but it is exactly what lets a peer resolve our link address.
+
+The shell gains `net2 <peer-ip>`: bind UDP `:9999`, send a probe to the
+peer, and poll for the peer's probe. `make ci-smoke-2net` boots **two**
+guests joined by a `-netdev socket` (distinct static IPs, distinct MACs),
+runs `net2` on each, and asserts **both** logs show `NET2: probe from
+<peer>`. Because each guest's source IP differs from its own, a received
+datagram can only mean our ARP responder answered and the on-link route
+delivered — it is impossible to fake by loopback. This is the wire that
+epic #97 (two kernels coupling their oscillator fields) will run over.
+
 ## Known limits / follow-ups (the honest boundary)
 
 - **TCP is client only.** No listen/accept (no server), one connection at
@@ -321,3 +356,6 @@ and the TCP TCB) are unchanged — the split is a pure code move.
   broadcast/multicast send.
 - Single rtl8139, IPv4 only. Only `qsh` holds the network capability
   today; one kernel resolve and one TCP connection in flight at a time.
+- Static mode is a single flat /24 with no gateway (no off-link routing)
+  and no DNS server on the peer segment; it is the two-guest enabler, not
+  a general static-networking configuration.

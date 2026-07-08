@@ -296,6 +296,109 @@ static void cmd_fieldtest(void) {
     }
 }
 
+/* net2 <peer-ip>: prove guest-to-guest UDP (epic #97 wire). Bind port
+ * 9999, send a probe to peer:9999, and poll our own :9999 for the peer's
+ * probe. Symmetric — both guests run it, each sends and receives, so
+ * there is no listener-ordering race. A received datagram from the
+ * peer's IP (which differs from ours) can only mean the ARP responder
+ * answered and the on-link route worked: it cannot be loopback. */
+#define NET2_PORT 9999
+static void cmd_net2(const char *peer) {
+    unsigned char pip[4];
+    /* Parse a dotted-quad (no DNS on a raw peer L2). */
+    int oi = 0, val = -1;
+    for (const char *h = peer;; h++) {
+        char c = *h;
+        if (c >= '0' && c <= '9') {
+            val = (val < 0 ? 0 : val) * 10 + (c - '0');
+        } else if (c == '.' || c == '\0' || c == ' ') {
+            if (val < 0 || val > 255 || oi >= 4) {
+                oi = -1;
+                break;
+            }
+            pip[oi++] = (unsigned char)val;
+            val = -1;
+            if (c != '.') {
+                break;
+            }
+        } else {
+            oi = -1;
+            break;
+        }
+    }
+    if (oi != 4) {
+        out("qsh: net2: usage: net2 <peer-ip>\r\n");
+        return;
+    }
+
+    udp_req_t req;
+    for (unsigned i = 0; i < sizeof(req); i++) {
+        ((unsigned char *)&req)[i] = 0;
+    }
+    req.port = NET2_PORT;
+    long sock = udp_(UDP_BIND, &req);
+    if (sock < 0) {
+        out(sock == -4 ? "qsh: net2: denied (no network capability)\r\n"
+                       : "qsh: net2: bind failed (no network?)\r\n");
+        return;
+    }
+
+    static unsigned char probe[8] = {'Q', 'O', 'S', 'P', 'R', 'O', 'B', 'E'};
+    long got = -1;
+    /* Send-then-poll, retransmitting each round: the peer may not be up
+     * yet, and UDP is lossy — keep offering until we hear back or time
+     * out (~25 s at 100 Hz). The window must span the whole two-guest run
+     * so it covers boot skew: whichever guest boots first keeps listening
+     * until the slower one starts sending. */
+    for (long t0 = ticks(); ticks() - t0 < 2500 && got < 0;) {
+        udp_req_t s;
+        for (unsigned i = 0; i < sizeof(s); i++) {
+            ((unsigned char *)&s)[i] = 0;
+        }
+        s.sock = sock;
+        for (int i = 0; i < 4; i++) {
+            s.ip[i] = pip[i];
+        }
+        s.port = NET2_PORT;
+        s.buf = probe;
+        s.len = sizeof(probe);
+        udp_(UDP_SENDTO, &s); /* WOULDBLOCK ok — we retry */
+
+        for (int spin = 0; spin < 40 && got < 0; spin++) {
+            heartbeat();
+            udp_req_t r;
+            for (unsigned i = 0; i < sizeof(r); i++) {
+                ((unsigned char *)&r)[i] = 0;
+            }
+            static unsigned char rbuf[64];
+            r.sock = sock;
+            r.buf = rbuf;
+            r.len = sizeof(rbuf);
+            long n = udp_(UDP_RECVFROM, &r);
+            if (n > 0) {
+                got = n;
+                char b[80];
+                int o = ghost_put(b, 0, "NET2: probe from ");
+                for (int i = 0; i < 4; i++) {
+                    o = ghost_put_u(b, o, r.ip[i]);
+                    if (i < 3) {
+                        b[o++] = '.';
+                    }
+                }
+                o = ghost_put(b, o, "\r\n");
+                out_bytes(b, o);
+            } else {
+                yield();
+            }
+        }
+    }
+    req.sock = sock;
+    udp_(UDP_CLOSE, &req);
+    if (got < 0) {
+        out("NET2: no probe received (peer down?)\r\n");
+    }
+}
+
 /* nslookup <host>: resolve a hostname to an IPv4 address via SYS_RESOLVE
  * (the shell's network capability at work). The kernel does the lookup
  * in its net thread; we poll, yielding+heartbeating so a slow lookup
@@ -1106,6 +1209,10 @@ static void execute(const char *line) {
         out("qsh: recall: usage: recall <probe text>\r\n");
     } else if (is_cmd(line, "fieldtest")) {
         cmd_fieldtest();
+    } else if ((a = arg_of(line, "net2")) != 0) {
+        cmd_net2(a);
+    } else if (is_cmd(line, "net2")) {
+        out("qsh: net2: usage: net2 <peer-ip>\r\n");
     } else if ((a = arg_of(line, "nslookup")) != 0) {
         cmd_nslookup(a);
     } else if (is_cmd(line, "nslookup")) {

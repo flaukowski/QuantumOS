@@ -476,6 +476,64 @@ static void parse_boot_cmdline(uint32_t info_addr) {
         g_boot_quiet = 1;
     }
 
+    /* Static IP (epic #97): `ip=A.B.C.D` at a token boundary configures a
+     * static address and skips the DHCP client — the enabler for two
+     * QuantumOS guests on a raw L2 segment with no DHCP server. Matched
+     * only at a whitespace boundary so it can never trip on a substring. */
+    for (const char *p = cmd; *p; p++) {
+        if (p != cmd && p[-1] != ' ' && p[-1] != '\t') {
+            continue;
+        }
+        static const char ipkey[] = "ip=";
+        int k = 0;
+        while (ipkey[k] && p[k] == ipkey[k]) {
+            k++;
+        }
+        if (ipkey[k] != '\0') {
+            continue;
+        }
+        const char *h = p + k;
+        uint8_t octets[4];
+        int oi = 0;
+        int val = -1;
+        int ok = 1;
+        for (;;) {
+            char c = *h;
+            if (c >= '0' && c <= '9') {
+                if (val < 0) {
+                    val = 0;
+                }
+                val = val * 10 + (c - '0');
+                if (val > 255) {
+                    ok = 0;
+                    break;
+                }
+                h++;
+            } else if (c == '.' || c == '\0' || c == ' ' || c == '\t') {
+                if (val < 0 || oi >= 4) {
+                    ok = 0;
+                    break;
+                }
+                octets[oi++] = (uint8_t)val;
+                val = -1;
+                if (c != '.') {
+                    break; /* end of token */
+                }
+                h++;
+            } else {
+                ok = 0;
+                break;
+            }
+        }
+        if (ok && oi == 4) {
+            net_set_static_ip(octets);
+            boot_log("NET: static ip configured from cmdline (ip=)");
+        } else {
+            boot_log("NET: malformed ip= on cmdline — ignored");
+        }
+        break;
+    }
+
     static const char key[] = "qseed=";
     for (const char *p = cmd; *p; p++) {
         // match key
