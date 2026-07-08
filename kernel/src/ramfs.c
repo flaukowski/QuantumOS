@@ -299,6 +299,42 @@ int persist_sync(void) {
         return -1;
     }
 
+    /* SAFETY GUARD (learned the moment QuantumOS booted from USB on a
+     * real laptop): sync writes the superblock to LBA 0 of the primary
+     * ATA disk — on real hardware that can be the machine's INTERNAL
+     * drive, and LBA 0 is its partition table. Only ever write to a
+     * volume that is already OURS (QDSK magic) or provably BLANK (an
+     * all-zero sector 0, e.g. a fresh CI image). Anything else is
+     * someone's disk: refuse loudly, destroy nothing. */
+    {
+        uint8_t sb0[ATA_SECTOR_SIZE];
+        if (ata_read(0, sb0, 1) != 0) {
+            boot_log("SYNC: cannot read sector 0 — not flushed");
+            return -1;
+        }
+        int is_qdsk = 1;
+        const char *magic = QDSK_MAGIC;
+        for (int i = 0; i < QDSK_MAGIC_LEN; i++) {
+            if (sb0[i] != (uint8_t)magic[i]) {
+                is_qdsk = 0;
+                break;
+            }
+        }
+        if (!is_qdsk) {
+            int blank = 1;
+            for (int i = 0; i < ATA_SECTOR_SIZE; i++) {
+                if (sb0[i] != 0) {
+                    blank = 0;
+                    break;
+                }
+            }
+            if (!blank) {
+                boot_log("SYNC: disk carries a foreign volume - refusing to overwrite");
+                return -1;
+            }
+        }
+    }
+
     /* Size the archive: header + block-aligned data per file, plus the
      * two terminating zero blocks. */
     uint32_t tar_bytes = 2 * TAR_BLOCK_SZ;
