@@ -1098,6 +1098,59 @@ ci-smoke-http: kernel
 	@echo ""
 	@echo "=== TCP Test PASSED ==="
 
+# CI Smoke Test (guest-to-guest networking, epic #97 prerequisite): boot TWO
+# QuantumOS guests joined by a QEMU socket netdev (a raw L2 segment with NO
+# SLIRP, so no DHCP and no ARP proxy), each with a distinct static IP and a
+# distinct MAC. Each runs `net2 <peer>`, sending a UDP probe to the other and
+# polling for the other's probe. A received datagram whose source is the
+# PEER's IP (different from our own) can only mean our ARP responder answered
+# the peer's request and the on-link route delivered — it is impossible to
+# fake by loopback. Both logs must show it: one-sided success is a failure.
+# The `-netdev socket,udp=` mode is order-independent (no listener/connect
+# race); frames sent before both guests are up are simply lost, which UDP
+# tolerates by design.
+ci-smoke-2net: kernel
+	@echo "=== QuantumOS Guest-to-Guest Networking Test (two nodes, one wire) ==="
+	@# One shell for the whole dance (make runs each recipe line in its own
+	@# shell, so the two background QEMUs and the wait MUST share this block).
+	@# No set -e: `timeout` returns 124 when it reaps the guest, the normal
+	@# end of a headless boot — the grep gates below are the verdict.
+	@rm -f /tmp/qos-2net-a.log /tmp/qos-2net-b.log; \
+	 ( printf 'net2 10.0.0.2\n'; sleep 30 ) | timeout 34s qemu-system-x86_64 \
+		-kernel $(BUILD_DIR)/kernel.elf32 -append "ip=10.0.0.1 quiet" \
+		-netdev socket,id=n0,udp=127.0.0.1:7811,localaddr=127.0.0.1:7810 \
+		-device rtl8139,netdev=n0,mac=52:54:00:00:97:01 \
+		-serial stdio -m 128M -display none -no-reboot > /tmp/qos-2net-a.log 2>&1 & \
+	 APID=$$!; \
+	 ( printf 'net2 10.0.0.1\n'; sleep 30 ) | timeout 34s qemu-system-x86_64 \
+		-kernel $(BUILD_DIR)/kernel.elf32 -append "ip=10.0.0.2 quiet" \
+		-netdev socket,id=n0,udp=127.0.0.1:7810,localaddr=127.0.0.1:7811 \
+		-device rtl8139,netdev=n0,mac=52:54:00:00:97:02 \
+		-serial stdio -m 128M -display none -no-reboot > /tmp/qos-2net-b.log 2>&1 & \
+	 BPID=$$!; \
+	 wait $$APID || true; wait $$BPID || true
+	@if ! grep -q "NET: static ip 10.0.0.1" /tmp/qos-2net-a.log 2>/dev/null || \
+	    ! grep -q "NET: static ip 10.0.0.2" /tmp/qos-2net-b.log 2>/dev/null; then \
+		echo "ERROR: static IP provenance missing on one or both guests"; \
+		echo "--- A ---"; cat /tmp/qos-2net-a.log 2>/dev/null || true; \
+		echo "--- B ---"; cat /tmp/qos-2net-b.log 2>/dev/null || true; \
+		echo "=== 2-Node Test FAILED ==="; exit 1; \
+	fi
+	@echo "SUCCESS: both guests configured static IPs with no DHCP server"
+	@if ! grep -q "NET2: probe from 10.0.0.2" /tmp/qos-2net-a.log 2>/dev/null; then \
+		echo "ERROR: guest A never received guest B's probe"; \
+		echo "--- A ---"; cat /tmp/qos-2net-a.log 2>/dev/null || true; \
+		echo "=== 2-Node Test FAILED ==="; exit 1; \
+	fi
+	@if ! grep -q "NET2: probe from 10.0.0.1" /tmp/qos-2net-b.log 2>/dev/null; then \
+		echo "ERROR: guest B never received guest A's probe"; \
+		echo "--- B ---"; cat /tmp/qos-2net-b.log 2>/dev/null || true; \
+		echo "=== 2-Node Test FAILED ==="; exit 1; \
+	fi
+	@echo "SUCCESS: both guests exchanged UDP datagrams over a raw L2 — ARP responder + static route PROVEN"
+	@echo ""
+	@echo "=== 2-Node Test PASSED ==="
+
 # CI Smoke Test (quiet boot): boot with `-append quiet` and prove the interactive
 # console is CLEAN — the periodic timer-tick heartbeat and the demo services'
 # steady-state chatter are silenced — WHILE the shell still comes up and answers

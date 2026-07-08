@@ -24,6 +24,13 @@
 /* Bring up the network stack over the NIC (no-op if no NIC). */
 void net_init(void);
 
+/* Configure a STATIC IPv4 address (epic #97), from the `ip=` boot token.
+ * Called BEFORE net_init (cmdline is parsed early); net_init applies the
+ * pending address after the MAC is read. Static mode skips the DHCP
+ * client entirely — the enabler for two guests on a raw L2 segment with
+ * no DHCP server. Idempotent; a later call overrides. */
+void net_set_static_ip(const uint8_t ip[4]);
+
 /* Boot self-test: ARP-resolve the gateway, obtain a DHCP lease, ping the
  * gateway, and resolve a hostname — proving the stack end to end. Runs in
  * the net kernel thread (interrupts live), not inline in early boot. */

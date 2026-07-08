@@ -302,13 +302,19 @@ int net_udp_dst_ok(const uint8_t *dip) {
     if (dip[0] >= 224) { /* multicast + reserved */
         return 0;
     }
-    if (dhcp_have_lease && ip_eq(dip, my_ip)) {
+    if (net_has_addr() && ip_eq(dip, my_ip)) {
         return 0; /* no loopback — the NIC doesn't echo its own TX */
     }
-    if (dhcp_have_lease && dip[0] == my_ip[0] && dip[1] == my_ip[1] && dip[2] == my_ip[2] &&
+    if (net_has_addr() && dip[0] == my_ip[0] && dip[1] == my_ip[1] && dip[2] == my_ip[2] &&
         dip[3] == 255) {
         return 0; /* on-link directed broadcast — unARPable, would stall
                    * the TX drain ~2s in a doomed arp_resolve */
+    }
+    /* Static mode has no gateway: an off-link unicast is unroutable and
+     * would ARP the void — reject it at the syscall boundary (EINVAL). */
+    if (static_link && !dhcp_have_lease &&
+        !(dip[0] == my_ip[0] && dip[1] == my_ip[1] && dip[2] == my_ip[2])) {
+        return 0;
     }
     return 1;
 }

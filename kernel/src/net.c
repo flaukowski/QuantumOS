@@ -42,6 +42,29 @@ uint8_t self_mac[ETH_ADDR_LEN];
 uint8_t my_ip[4];
 int dhcp_have_lease;
 
+/* Static-IP mode (epic #97): set when the `ip=` boot token configured an
+ * address. When set, my_ip is authoritative, the DHCP client is skipped,
+ * and net_has_addr() is true without a lease. `static_pending` bridges
+ * the parse-before-net_init ordering. */
+int static_link;
+static int static_pending;
+static uint8_t static_ip[4];
+
+/* True once the stack has a usable source address — by DHCP lease OR by
+ * static configuration. The five sites that used to hard-check
+ * dhcp_have_lease (routing, DNS, dst validation, readiness, self-test)
+ * all consult this so static mode behaves like a leased one. */
+int net_has_addr(void) {
+    return dhcp_have_lease || static_link;
+}
+
+void net_set_static_ip(const uint8_t ip[4]) {
+    for (int i = 0; i < 4; i++) {
+        static_ip[i] = ip[i];
+    }
+    static_pending = 1;
+}
+
 /* ---- packet headers (all packed). eth_hdr_t / ip_hdr_t / udp_hdr_t are
  * shared and live in net_internal.h; arp_pkt_t and dhcp_hdr_t are used
  * only by the control plane and stay here. ---- */
@@ -99,9 +122,14 @@ static uint8_t dhcp_server_id[4];
  * wait loop (ARP, DHCP, ICMP, DNS) can ever destroy a user datagram —
  * rtl8139_receive is destructive and has no putback. No code in this
  * file may call rtl8139_receive directly except this function. */
+static void arp_maybe_reply(const uint8_t *frame, uint16_t len);
+
 static uint16_t net_rx(uint8_t *buf, uint16_t max) {
     uint16_t n = rtl8139_receive(buf, max);
     if (n > 0) {
+        /* Answer peer ARP requests before demux — on a two-guest socket
+         * L2 there is no SLIRP to do it for us (epic #97). */
+        arp_maybe_reply(buf, n);
         udp_rx_demux(buf, n);
         tcp_rx_demux(buf, n);
     }
@@ -179,6 +207,58 @@ void net_init(void) {
     rtl8139_get_mac(self_mac);
     dhcp_have_lease = 0;
     dhcp_state = 0;
+    /* Apply a `ip=` static address parsed before net_init ran. */
+    if (static_pending) {
+        for (int i = 0; i < 4; i++) {
+            my_ip[i] = static_ip[i];
+        }
+        static_link = 1;
+    }
+}
+
+/* Answer an inbound ARP REQUEST for our own address (epic #97). SLIRP
+ * always did this FOR the guest, so nothing here ever needed it — but two
+ * QuantumOS guests on a raw socket L2 must resolve each other themselves.
+ * Called from net_rx for every ARP frame; a non-request or a request for
+ * someone else's IP is ignored. Also learns the requester's MAC for free
+ * so the reply's eventual return traffic needs no second round trip. */
+static void arp_maybe_reply(const uint8_t *frame, uint16_t len) {
+    if (!net_has_addr() || len < sizeof(eth_hdr_t) + sizeof(arp_pkt_t)) {
+        return;
+    }
+    const eth_hdr_t *eth = (const eth_hdr_t *)frame;
+    if (ntohs(eth->type) != ETH_TYPE_ARP) {
+        return;
+    }
+    const arp_pkt_t *arp = (const arp_pkt_t *)(frame + sizeof(eth_hdr_t));
+    if (ntohs(arp->oper) != ARP_OP_REQUEST || !ip_eq(arp->tpa, my_ip)) {
+        return;
+    }
+    /* Learn the asker so our reply's return path is warm. */
+    arp_cache_put(arp->spa, arp->sha);
+
+    uint8_t out[sizeof(eth_hdr_t) + sizeof(arp_pkt_t)];
+    eth_hdr_t *reth = (eth_hdr_t *)out;
+    arp_pkt_t *rarp = (arp_pkt_t *)(out + sizeof(eth_hdr_t));
+    for (int i = 0; i < ETH_ADDR_LEN; i++) {
+        reth->dst[i] = arp->sha[i];
+        reth->src[i] = self_mac[i];
+    }
+    reth->type = htons(ETH_TYPE_ARP);
+    rarp->htype = htons(ARP_HTYPE_ETH);
+    rarp->ptype = htons(ARP_PTYPE_IP);
+    rarp->hlen = ETH_ADDR_LEN;
+    rarp->plen = 4;
+    rarp->oper = htons(ARP_OP_REPLY);
+    for (int i = 0; i < ETH_ADDR_LEN; i++) {
+        rarp->sha[i] = self_mac[i];
+        rarp->tha[i] = arp->sha[i];
+    }
+    for (int i = 0; i < 4; i++) {
+        rarp->spa[i] = my_ip[i];
+        rarp->tpa[i] = arp->spa[i];
+    }
+    rtl8139_transmit(out, sizeof(out));
 }
 
 /* ---- ARP ---- */
@@ -454,6 +534,9 @@ static int arp_resolve(const uint8_t *ip, const uint8_t *sender_ip, uint8_t *out
 /* Cache-first MAC lookup (net thread only): hit is instant; a miss runs
  * one bounded arp_resolve and remembers the answer. */
 int resolve_mac(const uint8_t *ip, uint8_t *out_mac) {
+    if (!ip) {
+        return 0; /* net_next_hop returned "unroutable" (static, off-link) */
+    }
     if (arp_cache_get(ip, out_mac)) {
         return 1;
     }
@@ -659,7 +742,7 @@ static int dns_parse(const uint8_t *frame, uint16_t len, uint16_t txid, uint8_t 
  * syscall). Returns 0 and fills out_ip on success, -1 on failure.
  * Requires a NIC and a DHCP lease (for the unicast source address). */
 static int dns_resolve(const char *host, uint16_t txid, uint8_t *out_ip) {
-    if (!rtl8139_present() || !dhcp_have_lease) {
+    if (!rtl8139_present() || !net_has_addr()) {
         return -1;
     }
     uint8_t dns_mac[ETH_ADDR_LEN];
@@ -692,8 +775,15 @@ static int dns_resolve(const char *host, uint16_t txid, uint8_t *out_ip) {
 /* On-link (SLIRP's 10.0.2.0/24) destinations get ARPed directly; anything
  * else routes via the gateway's MAC. Shared by the UDP drain and TCP. */
 const uint8_t *net_next_hop(const uint8_t *dip) {
-    if (dhcp_have_lease && dip[0] == my_ip[0] && dip[1] == my_ip[1] && dip[2] == my_ip[2]) {
+    /* On-link (same /24) once we have ANY source address — DHCP or static. */
+    if (net_has_addr() && dip[0] == my_ip[0] && dip[1] == my_ip[1] && dip[2] == my_ip[2]) {
         return dip;
+    }
+    /* Static mode has NO gateway (raw peer L2): an off-link destination is
+     * unroutable — return NULL so callers drop rather than ARP the
+     * nonexistent 10.0.2.2 forever. DHCP mode keeps the SLIRP gateway. */
+    if (static_link && !dhcp_have_lease) {
+        return 0;
     }
     return IP_GATEWAY;
 }
@@ -717,7 +807,7 @@ static uint8_t resolve_ip[4];
 static uint16_t resolve_txid = 0x2000;
 
 int net_ready(void) {
-    return rtl8139_present() && dhcp_have_lease;
+    return rtl8139_present() && net_has_addr();
 }
 
 int net_nic_present(void) {
@@ -822,6 +912,17 @@ static void log_ip(const char *label, const uint8_t *ip) {
 void net_selftest(void) {
     if (!rtl8139_present()) {
         boot_log("NET: no NIC — self-test skipped");
+        return;
+    }
+
+    /* Static mode (epic #97): there is no SLIRP gateway, DHCP server, or
+     * DNS on a raw peer L2 — the SLIRP-oriented phases below would each
+     * burn a multi-second doomed timeout. Announce the static address
+     * (un-typeable provenance) and skip them. The ARP RESPONDER
+     * (net_rx/arp_maybe_reply) is already live, so a peer can reach us. */
+    if (static_link) {
+        log_ip("NET: static ip ", my_ip);
+        boot_log("NET: static mode — DHCP/gateway self-test skipped");
         return;
     }
 

@@ -86,6 +86,8 @@ _Static_assert(sizeof(udp_hdr_t) == 8, "udp_hdr_t must be 8 bytes on the wire");
 extern uint8_t self_mac[ETH_ADDR_LEN];
 extern uint8_t my_ip[4];
 extern int dhcp_have_lease;
+extern int static_link; /* epic #97: static-IP mode (no DHCP, no gateway) */
+int net_has_addr(void); /* dhcp_have_lease || static_link */
 extern const uint8_t IP_ZERO[4];
 extern const uint8_t IP_BCAST[4];
 
