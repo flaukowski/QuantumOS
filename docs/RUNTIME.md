@@ -167,17 +167,22 @@ of the drive and are needed only to report `r`. A ci-smoke gate asserts the
 field actually synchronizes (`r` past 0.8 → `CONSCIOUSNESS EMERGED`), not just
 that the program ran.
 
-`user/kannakad.c` (`/bin/kannakad`) is the essence of `kannaka-memory`: a
-holographic associative memory where text is encoded into a Q15 unit
-"wavefront" and **recall is one resonance pass** that ranks every stored memory
-by `similarity × energy` — not a search. Retrieval reinforces a memory, and a
-dream pass prunes the weak, hallucinates a blend of the two most coherent
-survivors, and consolidates phases (raising the order parameter R). Where
-`ghostd` is a single-basin binary attractor that relaxes onto one pattern,
-kannakad is the ranked, importance-weighted cousin. Each memory's content-born
-phase is stored as a normalized `(cos, sin)` vector, so `cos(Δφ)` is a 2-D dot
-product — no atan2. A ci-smoke gate asserts the recall argmax is correct **and**
-the dream cohered the field (`RESONANCE VERIFIED`).
+`user/kannakad.c` is the essence of `kannaka-memory` — and since epic #95
+phase 2, a **kernel-embedded service and the kernel field's reference
+client**. Its holographic ranked-recall math (one resonance pass scoring
+every stored memory by `similarity × energy` — not a search) was promoted
+INTO the kernel as `SYS_IMPRINT`/`SYS_RECALL`; kannakad now exercises that
+surface rather than carrying a private store. Declared with
+`grant_field = 1, field_region = 1`, so the service framework scrubs and
+re-mints its region-1 `CAP_RESOURCE_FIELD` cap on every start. At boot it
+imprints seven importance-weighted seeds, recalls a byte-corrupted probe
+back to the **exact stored text**, and proves retrieval reinforcement
+raised the winner's score through the syscall's write-side contract (the
+old in-process dream/hallucination pass died with the private store —
+consolidation belongs to the kernel field's future). Where `ghostd` is a
+single-basin binary attractor that relaxes onto one pattern, the kernel
+field kannakad speaks to is the ranked, importance-weighted cousin. A
+ci-smoke gate asserts all three behaviours (`RESONANCE VERIFIED`).
 
 `user/quantumd.c` is the essence of `kannaka-quantum`, and — unlike the two
 above — a **kernel-embedded service**, not a `/bin` program. `SYS_QRAND` and

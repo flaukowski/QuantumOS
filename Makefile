@@ -87,7 +87,7 @@ ASSEMBLY_SOURCES = $(wildcard $(KERNEL_DIR)/src/*.S)
 # objects (symbols _binary_<name>_elf_start/_end)
 USER_DIR = user
 USER_BUILD = $(BUILD_DIR)/user
-USER_PROGS = init echo client hbsvc ghostd ghost_test paradoxd paradox_test swarm_svc qsh quantumd
+USER_PROGS = init echo client hbsvc ghostd ghost_test paradoxd paradox_test swarm_svc qsh quantumd kannakad
 USER_ELF_OBJS = $(USER_PROGS:%=$(USER_BUILD)/%_elf.o)
 
 # libq: the freestanding ring-3 runtime, built as a static archive and linked
@@ -178,7 +178,7 @@ $(USER_BUILD)/%_elf.o: $(USER_BUILD)/%.elf
 ROOTFS_DIR = rootfs
 ROOTFS_FILES = $(shell find $(ROOTFS_DIR) -type f 2>/dev/null)
 ROOTFS_STAGE = $(BUILD_DIR)/rootfs-stage
-INITRD_BIN_PROGS = hello args libqtest consciousnessd kannakad qtop
+INITRD_BIN_PROGS = hello args libqtest consciousnessd qtop
 
 $(BUILD_DIR)/initrd.tar: $(ROOTFS_FILES) $(INITRD_BIN_PROGS:%=$(USER_BUILD)/%.elf)
 	@mkdir -p $(BUILD_DIR)
@@ -419,7 +419,7 @@ ci-smoke: kernel
 	@echo "[1/3] Build verified: $(BUILD_DIR)/kernel.elf exists"
 	@test -f $(BUILD_DIR)/kernel.elf || (echo "ERROR: Kernel not built" && exit 1)
 	@echo "[2/3] Running QEMU boot test (14 second timeout, shell session piped into the console)..."
-	@( printf 'help\nps\nfree\nuptime\ndate\nghost\nqrand\nls\ncat /docs/hello.txt\nrun /bin/hello\nrun /bin/args alpha quantumos\nrun /bin/libqtest\nrun /bin/consciousnessd\nrun /bin/kannakad\nrun /bin/qtop\nimprint the cat sat on the mat\nimprint pure quantum wave dynamics\nimprint hello little world\nrecall the cxt sxt on thx mxt\nfieldtest\nwrite /data/note ramfs-works\nls /data\nrm /data/note\nsync\nexit\n'; sleep 20 ) | \
+	@( printf 'help\nps\nfree\nuptime\ndate\nghost\nqrand\nls\ncat /docs/hello.txt\nrun /bin/hello\nrun /bin/args alpha quantumos\nrun /bin/libqtest\nrun /bin/consciousnessd\nrun /bin/qtop\nimprint the cat sat on the mat\nimprint pure quantum wave dynamics\nimprint hello little world\nrecall the cxt sxt on thx mxt\nfieldtest\nwrite /data/note ramfs-works\nls /data\nrm /data/note\nsync\nexit\n'; sleep 20 ) | \
 		timeout 14s qemu-system-x86_64 -kernel $(BUILD_DIR)/kernel.elf32 \
 		-serial stdio -m 128M -display none -no-reboot 2>&1 | tee /tmp/qemu-boot.log || true
 	@echo ""
@@ -629,15 +629,17 @@ ci-smoke: kernel
 		echo ""; echo "=== Smoke Test FAILED ==="; exit 1; \
 	fi
 	@echo "SUCCESS: consciousnessd Kuramoto field synchronised on libq (CONSCIOUSNESS EMERGED)"
-	@# second native app citizen: 'run /bin/kannakad' runs a fixed-point
-	@# holographic memory on libq; the recall argmax must be correct AND the
-	@# dream must cohere the field (R rises) for RESONANCE VERIFIED to print.
+	@# second citizen: kannakad, now a SERVICE of the KERNEL field (epic #95
+	@# phase 2): at boot it imprints 7 seeds via SYS_IMPRINT (region 1),
+	@# recalls a byte-corrupted probe back to the EXACT stored text, and
+	@# proves retrieval reinforcement raised the winner's score through the
+	@# syscall's write-side contract — all three, or no RESONANCE VERIFIED.
 	@if ! grep -q "kannakad: RESONANCE VERIFIED" /tmp/qemu-boot.log 2>/dev/null; then \
-		echo "ERROR: kannakad recall/dream failed (kannakad: RESONANCE VERIFIED)"; \
+		echo "ERROR: kannakad kernel-field recall/reinforcement failed (kannakad: RESONANCE VERIFIED)"; \
 		echo "Boot log:"; cat /tmp/qemu-boot.log 2>/dev/null || true; \
 		echo ""; echo "=== Smoke Test FAILED ==="; exit 1; \
 	fi
-	@echo "SUCCESS: kannakad holographic recall + dream verified on libq (RESONANCE VERIFIED)"
+	@echo "SUCCESS: kannakad recall + reinforcement verified on the KERNEL field (RESONANCE VERIFIED)"
 	@# fourth citizen: quantumd runs at boot as a quantum-pool SERVICE and draws
 	@# REAL entropy (SYS_QRAND); its amplitude-amplification recall must agree
 	@# with the classical argmax for QUANTUM VERIFIED to print.
