@@ -62,8 +62,10 @@ jobs:
 
       - name: Boot QuantumOS in the browser and assert it works
         working-directory: web
+        # COI_OFF=1: serve WITHOUT COOP/COEP headers, exactly like GitHub Pages,
+        # so the gate exercises the real coi-serviceworker path a visitor hits.
         run: |
-          node serve.cjs 8905 &
+          COI_OFF=1 node serve.cjs 8905 &
           sleep 2
           PORT=8905 node ci-boot-gate.mjs
 
