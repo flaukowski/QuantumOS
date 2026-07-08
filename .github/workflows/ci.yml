@@ -542,6 +542,8 @@ jobs:
       run: make ci-smoke-noserial
     - name: Assert ring-3 output is visible on the VGA screen
       run: make ci-smoke-screen
+    - name: Every framebuffer banner character has a glyph
+      run: python3 scripts/check_fb_font.py
 
   persistence:
     name: Persistence Test (two boots, one disk — epic #71)
