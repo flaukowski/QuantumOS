@@ -27,7 +27,9 @@ page.on("pageerror", (e) => console.log("[pageerror]", e.message));
 page.on("console", (m) => { if (m.type() === "error") console.log("[page-error]", m.text()); });
 await page.goto(URL, { waitUntil: "domcontentloaded" });
 
-const screenText = () => page.evaluate(() => document.querySelector("#screen")?.innerText || "");
+// The page accumulates the FULL serial stream into window.__serial (xterm's
+// own buffer is only the visible viewport, so it scrolls the banner away).
+const serial = () => page.evaluate(() => window.__serial || "");
 const t0 = Date.now();
 
 // 1. Boots to the qsh banner (the page flips window.__booted on detection).
@@ -36,32 +38,31 @@ for (let i = 0; i < 90; i++) {
   if (await page.evaluate(() => !!window.__booted)) { booted = true; break; }
   await new Promise((r) => setTimeout(r, 1000));
 }
-if (!booted) fail("never reached the qsh banner", (await screenText()).slice(-1500));
+if (!booted) fail("never reached the qsh banner", (await serial()).slice(-1500));
 console.log(`OK: booted to qsh in ${((Date.now() - t0) / 1000).toFixed(1)}s`);
 
 // 2. The loader was replaced by the live prompt.
 if (!(await page.evaluate(() => document.getElementById("loader")?.hasAttribute("hidden")))) {
   fail("boot banner seen but the loading overlay never cleared");
 }
-if (!(await screenText()).includes(BANNER)) fail("banner not present in the terminal buffer");
+if (!(await serial()).includes(BANNER)) fail("banner not present in the serial stream");
 
 // 3. A ring-3 service ran during boot (proves user-mode, not just the banner).
-if (!BOOT_CITIZEN.test(await screenText())) fail("no ring-3 service line in the boot output", (await screenText()).slice(-1500));
+if (!BOOT_CITIZEN.test(await serial())) fail("no ring-3 service line in the boot output", (await serial()).slice(-1500));
 console.log("OK: a ring-3 service ran during boot");
 
 // 4. Interactivity: real keystrokes reach the guest and produce output. The
-//    `ghost` verdicts never print during a plain boot, so their appearance
-//    after typing proves the keystrokes reached the guest. (xterm's innerText
-//    is only the visible viewport, so scan the whole current screen, not an
-//    offset into it.)
+//    `ghost` verdicts never print during a plain boot, so a verdict appearing
+//    in the bytes emitted AFTER we type proves the keystrokes reached the guest.
 await page.click("#screen");
+const beforeGhost = (await serial()).length;
 await page.keyboard.type("ghost\n");
 let interactive = false;
 for (let i = 0; i < 25; i++) {
-  if (GHOST_VERDICT.test(await screenText())) { interactive = true; break; }
+  if (GHOST_VERDICT.test((await serial()).slice(beforeGhost))) { interactive = true; break; }
   await new Promise((r) => setTimeout(r, 1000));
 }
-if (!interactive) fail("typed 'ghost' but no ghost output appeared", (await screenText()).slice(-1500));
+if (!interactive) fail("typed 'ghost' but no ghost output appeared", (await serial()).slice(-1500));
 console.log("OK: typed 'ghost' — the guest answered (interactive)");
 
 console.log("=== Browser Demo boot gate PASSED ===");

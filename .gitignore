@@ -15,3 +15,7 @@ __pycache__/
 web/qemu/qemu-system-x86_64.wasm
 web/kernel.elf32
 web/node_modules/
+
+# Epic #100: the multiboot option ROMs are demo assets (override *.bin)
+!web/qemu/multiboot.bin
+!web/qemu/multiboot_dma.bin

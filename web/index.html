@@ -284,19 +284,22 @@
     },
   });
 
-  // Detect the boot banner to swap the loader for the live prompt.
-  let banner = "";
+  // Accumulate the full serial stream (xterm's own buffer is only the visible
+  // viewport). Used to detect the boot banner and by the CI gate. Capped so a
+  // long session can't grow it without bound.
+  window.__serial = "";
   const origWrite = term.write.bind(term);
   term.write = (data, cb) => {
-    if (!window.__booted) {
-      try { banner += (typeof data === "string" ? data : new TextDecoder().decode(data)); } catch (e) {}
-      if (banner.includes("QSH: QuantumOS interactive shell ready")) {
-        window.__booted = true;
-        loader.setAttribute("hidden", "");
-        dot.classList.add("live");
-        statusLabel.textContent = "running — click and type";
-        setTimeout(() => { term.focus(); }, 50);
-      }
+    try {
+      window.__serial += (typeof data === "string" ? data : new TextDecoder().decode(data));
+      if (window.__serial.length > 400000) window.__serial = window.__serial.slice(-200000);
+    } catch (e) {}
+    if (!window.__booted && window.__serial.includes("QSH: QuantumOS interactive shell ready")) {
+      window.__booted = true;
+      loader.setAttribute("hidden", "");
+      dot.classList.add("live");
+      statusLabel.textContent = "running — click and type";
+      setTimeout(() => { term.focus(); }, 50);
     }
     return origWrite(data, cb);
   };
