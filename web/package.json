@@ -1,0 +1,13 @@
+{
+  "name": "quantumos-browser-demo",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Epic #100 — QuantumOS booting in the browser via qemu-wasm; boot-gate harness.",
+  "scripts": {
+    "serve": "node serve.cjs",
+    "gate": "node ci-boot-gate.mjs"
+  },
+  "devDependencies": {
+    "playwright": "^1.47.0"
+  }
+}

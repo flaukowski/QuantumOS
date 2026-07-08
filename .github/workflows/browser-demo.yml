@@ -1,0 +1,99 @@
+# Browser demo (epic #100): boot QuantumOS in qemu-wasm in a real headless
+# Chromium as a gate, then publish the demo to GitHub Pages.
+#
+# The gate is the honest proof: it loads the same static page a visitor loads,
+# waits for the kernel to reach the qsh prompt inside qemu-wasm, checks a
+# ring-3 service ran, and types `ghost` to confirm the terminal is interactive.
+# qemu-wasm needs SharedArrayBuffer, so the local server sends COOP/COEP
+# headers (on Pages, coi-serviceworker.js does the same).
+name: Browser Demo (epic #100)
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "web/**"
+      - "kernel/**"
+      - "Makefile"
+      - ".github/workflows/browser-demo.yml"
+  pull_request:
+    paths:
+      - "web/**"
+      - "kernel/**"
+      - "Makefile"
+      - ".github/workflows/browser-demo.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: browser-demo-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  boot-gate:
+    name: Boot Gate (qemu-wasm in headless Chromium)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install kernel toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential nasm
+
+      - name: Build the multiboot kernel
+        run: make BUILD_TYPE=debug kernel
+
+      - name: Assemble the site (kernel + fetched qemu-wasm)
+        run: |
+          cp build/x86_64/kernel.elf32 web/kernel.elf32
+          bash web/qemu/fetch-wasm.sh
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install demo deps + Chromium
+        working-directory: web
+        run: |
+          npm install
+          npx playwright install --with-deps chromium
+
+      - name: Boot QuantumOS in the browser and assert it works
+        working-directory: web
+        run: |
+          node serve.cjs 8905 &
+          sleep 2
+          PORT=8905 node ci-boot-gate.mjs
+
+      - name: Stage the Pages site (runtime files only)
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        run: |
+          mkdir -p _site
+          cp web/index.html web/coi-serviceworker.js web/NOTICE _site/
+          cp web/kernel.elf32 _site/
+          cp -r web/qemu web/vendor _site/
+          rm -f _site/qemu/fetch-wasm.sh
+
+      - name: Upload Pages artifact
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+
+  deploy:
+    name: Deploy to GitHub Pages
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: boot-gate
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - name: Deploy
+        id: deploy
+        uses: actions/deploy-pages@v4

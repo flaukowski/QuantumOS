@@ -1,0 +1,33 @@
+QuantumOS in-browser demo (web/) — third-party components
+=========================================================
+
+This directory bundles third-party software to run QuantumOS in a browser.
+
+qemu-system-x86_64.wasm
+  An unmodified qemu-system-x86_64 compiled to WebAssembly by ktock/qemu-wasm
+  (https://github.com/ktock/qemu-wasm), which is QEMU (https://www.qemu.org).
+  License: GNU General Public License v2. QEMU is © its many authors. The
+  binary is fetched at build time (web/qemu/fetch-wasm.sh), not committed here.
+  Corresponding source: https://github.com/ktock/qemu-wasm and https://www.qemu.org.
+
+qemu/out.js, qemu-system-x86_64.worker.js, load-rom.js, load-rom.data
+  Emscripten runtime + preloaded BIOS package (SeaBIOS bios-256k.bin,
+  vgabios-stdvga.bin, kvmvapic.bin, linuxboot_dma.bin) for the above build.
+  Same GPLv2 provenance (ktock/qemu-wasm demo assets).
+
+qemu/multiboot.bin, qemu/multiboot_dma.bin
+  QEMU multiboot option ROMs, required for the `-kernel` multiboot handoff.
+  From QEMU's pc-bios. License: BSD (QEMU option-ROM sources), GPLv2-compatible.
+
+vendor/xterm.js, vendor/xterm.css
+  xterm.js terminal (https://github.com/xtermjs/xterm.js). License: MIT.
+
+vendor/xterm-pty.js
+  xterm-pty (https://github.com/mame/xterm-pty). License: MIT.
+
+coi-serviceworker.js
+  gzuidhof/coi-serviceworker (https://github.com/gzuidhof/coi-serviceworker),
+  enables SharedArrayBuffer on static hosts via COOP/COEP. License: MIT.
+
+QuantumOS itself (the kernel booted here) is GPL-2.0-only; see the repository
+root LICENSE.

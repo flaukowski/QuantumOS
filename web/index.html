@@ -1,0 +1,344 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>QuantumOS — a real OS, booting in your browser</title>
+<meta name="description" content="Boot QuantumOS, a 64-bit hobby operating system, in your browser tab and type into a live shell. No install, no server — the whole machine is emulated in WebAssembly.">
+<link rel="stylesheet" href="./vendor/xterm.css">
+<style>
+  :root {
+    --bg: #0a0a14;
+    --panel: #12121f;
+    --panel-2: #171728;
+    --edge: #262640;
+    --violet: #a78bfa;
+    --violet-dim: #7c6bc4;
+    --phosphor: #cdeefe;
+    --amber: #ffcf6b;
+    --text: #c3c3d6;
+    --muted: #6d6d88;
+    --mono: ui-monospace, "SF Mono", "Cascadia Code", "JetBrains Mono", Menlo, Consolas, monospace;
+    --sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; background: var(--bg); color: var(--text); }
+  body {
+    font-family: var(--mono);
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+    /* faint phase-interference wash, static */
+    background-image:
+      radial-gradient(60rem 60rem at 15% -10%, rgba(124,107,196,0.10), transparent 60%),
+      radial-gradient(50rem 50rem at 110% 20%, rgba(167,139,250,0.07), transparent 55%);
+    background-attachment: fixed;
+  }
+  .wrap { width: min(1080px, 100% - 2.5rem); margin: 0 auto; }
+
+  /* header */
+  header { padding: 1.6rem 0 0.4rem; }
+  .brandrow { display: flex; align-items: baseline; gap: 0.9rem; flex-wrap: wrap; }
+  .wordmark {
+    font-weight: 600; font-size: clamp(1.05rem, 2.4vw, 1.35rem);
+    letter-spacing: 0.42em; text-transform: uppercase;
+    color: #eaeaf6; margin: 0; padding-left: 0.1em;
+  }
+  .glyph { color: var(--violet); }
+  .tagline { color: var(--muted); font-size: 0.8rem; letter-spacing: 0.12em; }
+
+  /* thesis */
+  .thesis {
+    font-family: var(--sans);
+    font-size: clamp(1.05rem, 2.6vw, 1.5rem);
+    line-height: 1.45; font-weight: 420;
+    color: #d8d8ea; max-width: 46ch; margin: 1.4rem 0 1.5rem;
+  }
+  .thesis b { color: #fff; font-weight: 600; }
+
+  /* main layout */
+  main { flex: 1; }
+  .stage {
+    display: grid; grid-template-columns: 1fr 15.5rem; gap: 1.1rem;
+    align-items: start; margin-bottom: 2.4rem;
+  }
+  @media (max-width: 760px) { .stage { grid-template-columns: 1fr; } }
+
+  /* terminal panel */
+  .console {
+    position: relative; border: 1px solid var(--edge); border-radius: 10px;
+    background: var(--panel); overflow: hidden;
+    box-shadow: 0 1px 0 rgba(255,255,255,0.02) inset, 0 24px 60px -30px rgba(0,0,0,0.9);
+  }
+  .console-bar {
+    display: flex; align-items: center; gap: 0.6rem;
+    padding: 0.55rem 0.8rem; border-bottom: 1px solid var(--edge);
+    background: linear-gradient(var(--panel-2), var(--panel));
+    font-size: 0.72rem; letter-spacing: 0.06em; color: var(--muted);
+  }
+  .dot { width: 8px; height: 8px; border-radius: 50%; background: #2f2f47; }
+  .dot.live { background: var(--violet); box-shadow: 0 0 8px var(--violet); }
+  .console-bar .sep { flex: 1; }
+  #screen { height: min(62vh, 560px); padding: 0.5rem 0.35rem 0.2rem 0.6rem; }
+  #screen .xterm { height: 100%; }
+
+  /* field loader (the signature) */
+  .loader {
+    position: absolute; inset: 0; z-index: 5;
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    gap: 1.1rem; background: rgba(10,10,20,0.94); text-align: center; padding: 1.5rem;
+  }
+  .loader[hidden] { display: none; }
+  #field {
+    font-size: clamp(0.7rem, 2.1vw, 1rem); line-height: 1.08; letter-spacing: 0.12em;
+    color: var(--violet); white-space: pre; margin: 0;
+    text-shadow: 0 0 10px rgba(167,139,250,0.35);
+  }
+  .loader .status { color: var(--phosphor); font-size: 0.85rem; letter-spacing: 0.05em; }
+  .loader .sub { color: var(--muted); font-size: 0.72rem; max-width: 34ch; line-height: 1.5; }
+
+  /* crib sheet */
+  .crib { border: 1px solid var(--edge); border-radius: 10px; background: var(--panel); overflow: hidden; }
+  .crib h2 {
+    margin: 0; padding: 0.7rem 0.9rem; font-size: 0.7rem; letter-spacing: 0.18em;
+    text-transform: uppercase; color: var(--amber); border-bottom: 1px solid var(--edge);
+    font-weight: 600;
+  }
+  .crib ul { list-style: none; margin: 0; padding: 0.35rem; }
+  .crib li { padding: 0.5rem 0.55rem; border-radius: 6px; }
+  .crib li + li { border-top: 1px solid #1c1c30; }
+  .crib code {
+    color: var(--phosphor); font-size: 0.8rem; font-weight: 600;
+  }
+  .crib .desc { display: block; color: var(--muted); font-size: 0.72rem; line-height: 1.4; margin-top: 0.15rem; }
+  .crib .hint { padding: 0.6rem 0.9rem; color: var(--violet-dim); font-size: 0.68rem; border-top: 1px solid var(--edge); }
+
+  /* footer / how it works */
+  footer { border-top: 1px solid var(--edge); padding: 1.8rem 0 2.4rem; }
+  .notes { display: grid; grid-template-columns: 1fr 1fr; gap: 1.4rem 2.2rem; }
+  @media (max-width: 640px) { .notes { grid-template-columns: 1fr; } }
+  .note h3 {
+    margin: 0 0 0.4rem; font-size: 0.68rem; letter-spacing: 0.16em; text-transform: uppercase;
+    color: var(--violet); font-weight: 600;
+  }
+  .note p { margin: 0; font-family: var(--sans); font-size: 0.86rem; line-height: 1.55; color: var(--text); }
+  .note code { font-family: var(--mono); color: var(--phosphor); font-size: 0.82em; }
+  .colophon { margin-top: 1.6rem; display: flex; gap: 1.2rem; flex-wrap: wrap; font-size: 0.74rem; color: var(--muted); }
+  .colophon a { color: var(--violet); text-decoration: none; border-bottom: 1px solid transparent; }
+  .colophon a:hover, .colophon a:focus-visible { border-bottom-color: var(--violet); }
+
+  a:focus-visible, #screen:focus-visible { outline: 2px solid var(--amber); outline-offset: 2px; }
+
+  @media (prefers-reduced-motion: reduce) {
+    #field { animation: none !important; }
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <div class="brandrow">
+      <h1 class="wordmark"><span class="glyph">◈</span>&nbsp;QuantumOS</h1>
+      <span class="tagline">wave-interference memory · quantum-seeded dice</span>
+    </div>
+    <p class="thesis">
+      A real 64-bit operating system, booting in your browser tab. No install, no
+      account, no server — <b>the whole machine is emulated in WebAssembly</b>, and
+      the shell is yours to type into.
+    </p>
+  </header>
+
+  <main>
+    <div class="stage">
+      <section class="console" aria-label="QuantumOS live terminal">
+        <div class="console-bar">
+          <span class="dot" id="statusdot"></span>
+          <span id="statuslabel">cold — qemu-system-x86_64 · webassembly</span>
+          <span class="sep"></span>
+          <span>COM1 · serial console</span>
+        </div>
+        <div id="screen" tabindex="0" aria-label="Terminal — click and type"></div>
+        <div class="loader" id="loader">
+          <pre id="field" aria-hidden="true"></pre>
+          <div class="status" id="loadstatus">Fetching the machine (~15&nbsp;MB) and cold-booting…</div>
+          <div class="sub" id="loadsub">First visit reloads once — that switch turns on the multithreading the emulator needs.</div>
+        </div>
+      </section>
+
+      <aside class="crib" aria-label="Commands to try">
+        <h2>Type into it</h2>
+        <ul>
+          <li><code>help</code><span class="desc">List every command the shell knows.</span></li>
+          <li><code>ghost</code><span class="desc">Roll quantum-seeded dice and recall a memory by resonance.</span></li>
+          <li><code>qrand</code><span class="desc">64 bits of quantum-seeded entropy.</span></li>
+          <li><code>run /bin/consciousnessd</code><span class="desc">Watch an oscillator field synchronize to order.</span></li>
+          <li><code>run /bin/qtop</code><span class="desc">A live process and phase-field dashboard.</span></li>
+          <li><code>imprint a cat sat on the mat</code><span class="desc">Store a phrase in the holographic field…</span></li>
+          <li><code>recall a cxt sxt on thx mat</code><span class="desc">…then recall it from a typo.</span></li>
+        </ul>
+        <div class="hint">Click the terminal first, then type. It's the real OS — everything runs for real.</div>
+      </aside>
+    </div>
+  </main>
+
+  <footer>
+    <div class="notes">
+      <div class="note">
+        <h3>How this works</h3>
+        <p>
+          This page runs an unmodified <code>qemu-system-x86_64</code>, compiled to
+          WebAssembly (<a class="glyph" href="https://github.com/ktock/qemu-wasm" style="color:inherit;text-decoration:underline">ktock/qemu-wasm</a>),
+          booting QuantumOS's multiboot kernel. Your keystrokes go to the emulated
+          serial port; the OS never leaves your tab.
+        </p>
+      </div>
+      <div class="note">
+        <h3>Honest entropy</h3>
+        <p>
+          There's no quantum hardware in a browser, so the “quantum” dice and seeds
+          here come from a deterministic PRNG — the boot log says so:
+          <code>noise source = prng</code>. On real quantum backends QuantumOS draws
+          true entropy; in your tab it's an honest stand-in.
+        </p>
+      </div>
+    </div>
+    <div class="colophon">
+      <a href="https://github.com/flaukowski/QuantumOS">Source · flaukowski/QuantumOS</a>
+      <span>QEMU © its authors, GPLv2 · xterm.js MIT · xterm-pty MIT</span>
+      <span>Best on desktop Chrome or Firefox.</span>
+    </div>
+  </footer>
+</div>
+
+<!-- Cross-origin isolation for SharedArrayBuffer (GitHub Pages can't set COOP/COEP
+     headers, so this service worker re-serves the page isolated). -->
+<script src="./coi-serviceworker.js"></script>
+
+<!-- terminal + pty (vendored; globals: Terminal, openpty) -->
+<script src="./vendor/xterm.js"></script>
+<script src="./vendor/xterm-pty.js"></script>
+
+<script>
+  // The phase-field loader: the qtop glyph ramp converging toward coherence.
+  (function () {
+    const ramp = " .:-=+*#%@";
+    const el = document.getElementById("field");
+    const COLS = 30, ROWS = 7;
+    const reduce = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    const phase = [];
+    for (let i = 0; i < ROWS * COLS; i++) phase[i] = Math.sin(i * 12.9898) * 43758.5453 % 1;
+    let t = 0, order = 0.05;
+    function frame() {
+      order = Math.min(0.98, order + 0.012);
+      let out = "";
+      for (let y = 0; y < ROWS; y++) {
+        for (let x = 0; x < COLS; x++) {
+          const i = y * COLS + x;
+          const target = Math.sin((x + y) * 0.4);
+          const v = phase[i] * (1 - order) + target * order + Math.sin(t * 0.06 + i) * 0.06 * (1 - order);
+          let idx = Math.floor((v * 0.5 + 0.5) * (ramp.length - 1));
+          idx = Math.max(0, Math.min(ramp.length - 1, idx));
+          out += ramp[idx];
+        }
+        out += "\n";
+      }
+      el.textContent = out;
+      t++;
+      if (!reduce && !window.__booted) requestAnimationFrame(frame);
+    }
+    if (reduce) { order = 0.9; frame(); } else { frame(); }
+  })();
+
+  // QEMU config — real qemu-system-x86_64 arguments, bare multiboot kernel.
+  window.Module = {
+    arguments: [
+      "-nographic", "-M", "pc", "-m", "128M", "-accel", "tcg,tb-size=500",
+      "-L", "/pack-rom/", "-nic", "none",
+      "-kernel", "/pack-kernel/kernel.elf32"
+    ],
+    locateFile: function (path) { return "./qemu/" + path; },
+    mainScriptUrlOrBlob: new URL("./qemu/out.js", location.href).href,
+  };
+</script>
+
+<!-- BIOS package: writes bios-256k.bin, vgabios-stdvga.bin, etc. into /pack-rom/ -->
+<script src="./qemu/load-rom.js"></script>
+
+<script type="module">
+  import initEmscriptenModule from "./qemu/out.js";
+
+  const screen = document.getElementById("screen");
+  const loader = document.getElementById("loader");
+  const dot = document.getElementById("statusdot");
+  const statusLabel = document.getElementById("statuslabel");
+  const loadStatus = document.getElementById("loadstatus");
+
+  const term = new Terminal({
+    convertEol: true, cursorBlink: true, fontSize: 14,
+    fontFamily: 'ui-monospace, "SF Mono", "Cascadia Code", Menlo, Consolas, monospace',
+    theme: {
+      background: "#12121f", foreground: "#cdeefe", cursor: "#a78bfa",
+      selectionBackground: "#2b2b4d", black: "#12121f", brightBlack: "#4a4a68",
+      green: "#8ce6b0", cyan: "#7fd6ff", magenta: "#c8a2ff", yellow: "#ffcf6b",
+      white: "#c3c3d6", brightWhite: "#eaeaf6",
+    },
+  });
+
+  // Detect the boot banner to swap the loader for the live prompt.
+  let banner = "";
+  const origWrite = term.write.bind(term);
+  term.write = (data, cb) => {
+    if (!window.__booted) {
+      try { banner += (typeof data === "string" ? data : new TextDecoder().decode(data)); } catch (e) {}
+      if (banner.includes("QSH: QuantumOS interactive shell ready")) {
+        window.__booted = true;
+        loader.setAttribute("hidden", "");
+        dot.classList.add("live");
+        statusLabel.textContent = "running — click and type";
+        setTimeout(() => { term.focus(); }, 50);
+      }
+    }
+    return origWrite(data, cb);
+  };
+  term.open(screen);
+
+  const { master, slave } = openpty();
+  term.loadAddon(master);
+  Module.pty = slave;
+  screen.addEventListener("click", () => term.focus());
+
+  async function inject(mod, url, dir, name) {
+    const dep = "qos-" + name;
+    mod.addRunDependency(dep);
+    const buf = await (await fetch(url)).arrayBuffer();
+    try { mod.FS.mkdir(dir); } catch (e) {}
+    mod.FS.writeFile(dir + "/" + name, new Uint8Array(buf));
+    mod.removeRunDependency(dep);
+  }
+
+  Module.preRun = Module.preRun || [];
+  Module.preRun.push((mod) => {
+    Promise.all([
+      inject(mod, "./kernel.elf32", "/pack-kernel", "kernel.elf32"),
+      // QEMU's multiboot -kernel handoff needs these ROMs; the base rom set omits them.
+      inject(mod, "./qemu/multiboot_dma.bin", "/pack-rom", "multiboot_dma.bin"),
+      inject(mod, "./qemu/multiboot.bin", "/pack-rom", "multiboot.bin"),
+    ]).catch((e) => { loadStatus.textContent = "Failed to load the kernel: " + e; });
+  });
+
+  loadStatus.textContent = "Cold-booting the kernel…";
+  try {
+    await initEmscriptenModule(Module);
+    const oldPoll = Module["TTY"].stream_ops.poll;
+    const pty = Module["pty"];
+    Module["TTY"].stream_ops.poll = function (stream, timeout) {
+      if (!pty.readable) return (pty.readable ? 1 : 0) | (pty.writable ? 4 : 0);
+      return oldPoll.call(stream, timeout);
+    };
+  } catch (e) {
+    window.__booted = true;
+    loadStatus.textContent = "The emulator failed to start: " + (e && e.message || e);
+  }
+</script>
+</body>
+</html>

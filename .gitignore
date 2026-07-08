@@ -10,3 +10,8 @@ build/
 .DS_Store
 Thumbs.db
 __pycache__/
+
+# Epic #100 browser demo: large wasm (fetched at build) + kernel build artifact
+web/qemu/qemu-system-x86_64.wasm
+web/kernel.elf32
+web/node_modules/
