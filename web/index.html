@@ -255,6 +255,9 @@
     arguments: [
       "-nographic", "-M", "pc", "-m", "128M", "-accel", "tcg,tb-size=500",
       "-L", "/pack-rom/", "-nic", "none",
+      // `quiet` silences the steady-state timer-tick / heartbeat chatter that
+      // would otherwise scroll over what a visitor types at the prompt.
+      "-append", "quiet",
       "-kernel", "/pack-kernel/kernel.elf32"
     ],
     locateFile: function (path) { return "./qemu/" + path; },
