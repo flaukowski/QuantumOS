@@ -106,7 +106,9 @@ def _assert_tamper_refuses(raw, ftype, label):
 
 
 def main():
-    vm = QosVM()
+    # QOS_KERNEL lets CI point at the downloaded artifact (its build/ path is
+    # unpredictable); locally QosVM finds the standard build output itself.
+    vm = QosVM(kernel=os.environ.get("QOS_KERNEL") or None)
     try:
         # 1. boot + verified identity + qseed binding.
         ident = vm.boot(qseed=QSEED, timeout=45)

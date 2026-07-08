@@ -312,7 +312,18 @@ def _repo_root():
 
 
 def _default_kernel():
-    return os.path.join(_repo_root(), "build", "x86_64", "kernel.elf32")
+    """The standard build path, or — if the artifact landed elsewhere (the CI
+    integration job unpacks it under an unpredictable build/ subdir) — the
+    first kernel.elf32 found under build/."""
+    root = _repo_root()
+    std = os.path.join(root, "build", "x86_64", "kernel.elf32")
+    if os.path.exists(std):
+        return std
+    build = os.path.join(root, "build")
+    for dirpath, _dirs, files in os.walk(build):
+        if "kernel.elf32" in files:
+            return os.path.join(dirpath, "kernel.elf32")
+    return std  # not found — boot() raises a clear error naming this path
 
 
 QSH_BANNER = "QSH: QuantumOS interactive shell ready"

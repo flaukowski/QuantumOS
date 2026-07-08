@@ -830,7 +830,10 @@ jobs:
     # PR_SET_PDEATHSIG), so `timeout -k` leaves no orphan and no shell
     # trap is needed.
     - name: MCP server lifecycle (epic #99)
-      run: timeout -k 5 150s python3 scripts/test_qos_mcp.py
+      run: |
+        KERNEL_ELF=$(find build/ -name "kernel.elf32" | head -1)
+        echo "Using kernel: $KERNEL_ELF"
+        QOS_KERNEL="$KERNEL_ELF" timeout -k 5 150s python3 scripts/test_qos_mcp.py
 
     - name: Upload integration test results
       uses: actions/upload-artifact@v4
