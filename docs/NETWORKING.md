@@ -344,6 +344,44 @@ datagram can only mean our ARP responder answered and the on-link route
 delivered — it is impossible to fake by loopback. This is the wire that
 epic #97 (two kernels coupling their oscillator fields) will run over.
 
+## Two kernels, one field: UDP coupling (epic #97)
+
+With the wire in place, two QuantumOS instances **couple their `ghostd`
+oscillator fields over UDP** — distributed phase synchronization between
+two running kernels. A new ring-3 service, **`fieldsyncd`**, holds the
+network capability and an IPC send-cap to its local `ghostd` (the
+`paradoxd`↔`ghostd` precedent, now over the wire). Once a second, it asks
+`ghostd` for a phase snapshot (`GHOST_SNAPSHOT`), sends the 256 phases to
+the peer named by the `peer=` boot token, and forwards every datagram it
+receives to `ghostd` as a `GHOST_COUPLE` message. `ghostd` folds the
+remote phases into its field with a Kuramoto nudge (a fresh target per
+frame, so it never overshoots a stale one) and measures the **cross-node
+order parameter R_x**. Phases travel as one byte each — the top byte of
+`ghostd`'s uint32 "turns" — so a phase difference is exact modular u8
+arithmetic with no sign-extension trap.
+
+The gate that proves it, `make ci-smoke-fieldsync`, is deliberately
+**non-vacuous** (the design review's central demand: two identical frozen
+fields would read R_x = 1.0 from t=0 and prove nothing). Each guest boots
+with a **different `qseed`**, so when coupling engages `ghostd` seeds its
+field divergently — R_x therefore *starts low* (the fields are genuinely
+uncorrelated) and can only rise because `fieldsyncd` is carrying the
+peer's phases. The gate asserts, on **both** nodes: a `frame from <peer>`
+(real reception), a sub-0.50 R_x sample (divergent start), a
+`SYNCHRONIZED (R_x>=0.80)` line (convergence), **and** that the node's own
+`GHOSTD: 3/3 RECALL OK` still passes (coupling is additive — it does not
+break local associative memory). Observed: R_x climbs 0.11 → 0.03 → 0.99
+within a few exchanges; both fields lock.
+
+Honest scope: `fieldsyncd` does **not** verify the peer's identity
+in-guest — frames carry a boot-identity commitment the *host* attestation
+verifier checks; full in-guest mutual Lamport verification is a one-time
+signature and out of scope. Peer IPC caps are not re-minted on a watchdog
+restart (a known `service.c` limitation), so a reborn `fieldsyncd` logs
+that its `ghostd` wiring was lost rather than spinning silently. This
+couples `ghostd`'s *living* attractor field; the kernel holographic field
+(epic #95) has no continuous dynamics and is not part of this.
+
 ## Known limits / follow-ups (the honest boundary)
 
 - **TCP is client only.** No listen/accept (no server), one connection at

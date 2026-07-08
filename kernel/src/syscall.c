@@ -50,6 +50,7 @@ extern const uint8_t _binary_swarm_svc_elf_start[], _binary_swarm_svc_elf_end[];
 extern const uint8_t _binary_qsh_elf_start[], _binary_qsh_elf_end[];
 extern const uint8_t _binary_quantumd_elf_start[], _binary_quantumd_elf_end[];
 extern const uint8_t _binary_kannakad_elf_start[], _binary_kannakad_elf_end[];
+extern const uint8_t _binary_fieldsyncd_elf_start[], _binary_fieldsyncd_elf_end[];
 
 /* Argument vector ABI (epic #62). MUST stay byte-identical to user_args_t
  * in user/usys.h — there is no shared header across the ring boundary. The
@@ -73,6 +74,7 @@ void user_paradox_demo_init(uint32_t ghostd_pid);
 void user_swarm_demo_init(uint32_t ghostd_pid);
 void user_shell_init(uint32_t ghostd_pid);
 void user_quantum_demo_init(void);
+void user_fieldsync_demo_init(uint32_t ghostd_pid);
 void user_kannaka_demo_init(void);
 
 /* int 0x80 stub (kernel/src/interrupts.S) */
@@ -444,6 +446,12 @@ static uint64_t sys_sysinfo(uint32_t pid, uint64_t op, uint64_t user_ptr, uint64
      * console logging. Answered before the buffer checks. */
     if (op == SYSINFO_QUIET) {
         return (uint64_t)boot_is_quiet();
+    }
+    /* SYSINFO_PEER (epic #97): the packed `peer=` IP (0 = none). Bare
+     * query, no buffer — grants no authority, just config a coupling
+     * service reads to learn who to talk to. */
+    if (op == SYSINFO_PEER) {
+        return (uint64_t)net_get_peer_ip();
     }
     if (len == 0) {
         return 0;
@@ -1761,8 +1769,46 @@ void user_paradox_demo_init(uint32_t ghostd_pid) {
 
     boot_log("ghostOS: paradoxd (ring 3) coupled to ghostd via capabilities");
 
+    /* epic #97: bring up fieldsyncd, the UDP field-coupling bridge. */
+    user_fieldsync_demo_init(ghostd_pid);
+
     /* ghostd phase 4: bring up swarm_svc, the COM2 serial swarm bridge. */
     user_swarm_demo_init(ghostd_pid);
+}
+
+/* Bring up fieldsyncd — the UDP field-coupling bridge (epic #97). It holds
+ * the network cap (grant_net, for SYS_UDP) and an IPC send-cap to ghostd
+ * (with a reply cap back), so it can pull phase snapshots from the local
+ * field and fold a peer's phases in — mirroring paradoxd's IPC coupling
+ * but over the wire. With no `peer=` configured it idles; the default
+ * boot is unchanged. Monitored. */
+void user_fieldsync_demo_init(uint32_t ghostd_pid) {
+    service_definition_t fieldsyncd_def = {
+        .name = "fieldsyncd",
+        .entry = NULL,
+        .user_elf_start = _binary_fieldsyncd_elf_start,
+        .user_elf_end = _binary_fieldsyncd_elf_end,
+        .dependencies = {NULL},
+        .max_restarts = 2,
+        .grant_net = 1,
+    };
+    uint32_t sid = 0, fs_pid = 0;
+    if (service_register(&fieldsyncd_def, &sid) == SVC_SUCCESS &&
+        service_start("fieldsyncd", NULL) == SVC_SUCCESS) {
+        service_info_t info;
+        if (service_status(sid, &info) == SVC_SUCCESS) {
+            fs_pid = info.pid;
+        }
+    }
+    if (fs_pid == 0) {
+        boot_log("Warning: fieldsyncd service failed to start");
+        return;
+    }
+    uint32_t cap = CAP_ID_INVALID;
+    cap_create(fs_pid, CAP_RESOURCE_IPC, ghostd_pid, CAP_READ | CAP_WRITE, 0, &cap);
+    cap_create(ghostd_pid, CAP_RESOURCE_IPC, fs_pid, CAP_READ | CAP_WRITE, 0, &cap);
+    service_monitor(sid, true);
+    boot_log("epic97: fieldsyncd (ring 3) bridges ghostd's field to a UDP peer");
 }
 
 /* Bring up swarm_svc — the COM2 serial swarm bridge (ghostd phase 4, #51) —

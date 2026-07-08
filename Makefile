@@ -87,7 +87,7 @@ ASSEMBLY_SOURCES = $(wildcard $(KERNEL_DIR)/src/*.S)
 # objects (symbols _binary_<name>_elf_start/_end)
 USER_DIR = user
 USER_BUILD = $(BUILD_DIR)/user
-USER_PROGS = init echo client hbsvc ghostd ghost_test paradoxd paradox_test swarm_svc qsh quantumd kannakad
+USER_PROGS = init echo client hbsvc ghostd ghost_test paradoxd paradox_test swarm_svc qsh quantumd kannakad fieldsyncd
 USER_ELF_OBJS = $(USER_PROGS:%=$(USER_BUILD)/%_elf.o)
 
 # libq: the freestanding ring-3 runtime, built as a static archive and linked
@@ -1150,6 +1150,71 @@ ci-smoke-2net: kernel
 	@echo "SUCCESS: both guests exchanged UDP datagrams over a raw L2 — ARP responder + static route PROVEN"
 	@echo ""
 	@echo "=== 2-Node Test PASSED ==="
+
+# CI Smoke Test (field coupling, epic #97): two QuantumOS guests couple their
+# ghostd oscillator fields over UDP. Each is booted with a DIFFERENT qseed, so
+# ghostd seeds its field divergently when coupling engages — the cross-node
+# order parameter R_x therefore STARTS low (the two fields are uncorrelated)
+# and can only RISE because fieldsyncd is carrying the peer's phases over the
+# wire. This is the anti-vacuous design the review demanded: two identical
+# frozen fields would read R_x=1.0 from t=0 and prove nothing, so the gate
+# asserts BOTH a low early sample AND convergence on BOTH nodes. The local
+# recall gates (GHOSTD 3/3, kannakad) must also still pass on each guest.
+ci-smoke-fieldsync: kernel
+	@echo "=== QuantumOS Two-Node Field Coupling Test (two kernels, one field) ==="
+	@rm -f /tmp/qos-fs-a.log /tmp/qos-fs-b.log; \
+	 ( sleep 30 ) | timeout 34s qemu-system-x86_64 \
+		-kernel $(BUILD_DIR)/kernel.elf32 \
+		-append "ip=10.0.0.1 peer=10.0.0.2 qseed=1111111111111111" \
+		-netdev socket,id=n0,udp=127.0.0.1:7811,localaddr=127.0.0.1:7810 \
+		-device rtl8139,netdev=n0,mac=52:54:00:00:97:01 \
+		-serial stdio -m 128M -display none -no-reboot > /tmp/qos-fs-a.log 2>&1 & \
+	 APID=$$!; \
+	 ( sleep 30 ) | timeout 34s qemu-system-x86_64 \
+		-kernel $(BUILD_DIR)/kernel.elf32 \
+		-append "ip=10.0.0.2 peer=10.0.0.1 qseed=8888888888888888" \
+		-netdev socket,id=n0,udp=127.0.0.1:7810,localaddr=127.0.0.1:7811 \
+		-device rtl8139,netdev=n0,mac=52:54:00:00:97:02 \
+		-serial stdio -m 128M -display none -no-reboot > /tmp/qos-fs-b.log 2>&1 & \
+	 BPID=$$!; \
+	 wait $$APID || true; wait $$BPID || true
+	@# 1. Each node received the OTHER's phase frames (real reception, peer IP).
+	@if ! grep -q "FIELDSYNC: frame from 10.0.0.2" /tmp/qos-fs-a.log 2>/dev/null || \
+	    ! grep -q "FIELDSYNC: frame from 10.0.0.1" /tmp/qos-fs-b.log 2>/dev/null; then \
+		echo "ERROR: a node never received the peer's phase frames"; \
+		echo "--- A ---"; grep FIELDSYNC /tmp/qos-fs-a.log 2>/dev/null | tail -8 || true; \
+		echo "--- B ---"; grep FIELDSYNC /tmp/qos-fs-b.log 2>/dev/null | tail -8 || true; \
+		echo "=== Field Coupling Test FAILED ==="; exit 1; \
+	fi
+	@echo "SUCCESS: both nodes received the peer's field phases over UDP"
+	@# 2. Non-vacuity: each field STARTED divergent — a sub-0.50 R_x sample.
+	@if ! grep -qE "FIELDSYNC: R_x=0\.[0-4][0-9] " /tmp/qos-fs-a.log 2>/dev/null || \
+	    ! grep -qE "FIELDSYNC: R_x=0\.[0-4][0-9] " /tmp/qos-fs-b.log 2>/dev/null; then \
+		echo "ERROR: no low R_x sample — fields were not divergent, gate would be vacuous"; \
+		echo "--- A ---"; grep "R_x=" /tmp/qos-fs-a.log 2>/dev/null | head -6 || true; \
+		echo "--- B ---"; grep "R_x=" /tmp/qos-fs-b.log 2>/dev/null | head -6 || true; \
+		echo "=== Field Coupling Test FAILED ==="; exit 1; \
+	fi
+	@echo "SUCCESS: both fields started divergent (low R_x) — the gate is non-vacuous"
+	@# 3. Both nodes SYNCHRONIZED (R_x rose past 0.80 through the coupling).
+	@if ! grep -q "FIELDSYNC: SYNCHRONIZED (R_x>=0.80)" /tmp/qos-fs-a.log 2>/dev/null || \
+	    ! grep -q "FIELDSYNC: SYNCHRONIZED (R_x>=0.80)" /tmp/qos-fs-b.log 2>/dev/null; then \
+		echo "ERROR: the two fields did not synchronize"; \
+		echo "--- A ---"; grep "R_x=" /tmp/qos-fs-a.log 2>/dev/null | tail -6 || true; \
+		echo "--- B ---"; grep "R_x=" /tmp/qos-fs-b.log 2>/dev/null | tail -6 || true; \
+		echo "=== Field Coupling Test FAILED ==="; exit 1; \
+	fi
+	@echo "SUCCESS: both fields synchronized over the wire (R_x >= 0.80)"
+	@# 4. The local recall gates MUST still pass on both nodes — coupling must
+	@#    not have broken ghostd's own associative memory.
+	@if ! grep -q "GHOSTD: 3/3 RECALL OK" /tmp/qos-fs-a.log 2>/dev/null || \
+	    ! grep -q "GHOSTD: 3/3 RECALL OK" /tmp/qos-fs-b.log 2>/dev/null; then \
+		echo "ERROR: coupling broke a node's local ghostd recall"; \
+		echo "=== Field Coupling Test FAILED ==="; exit 1; \
+	fi
+	@echo "SUCCESS: local ghostd recall still passes on both nodes — coupling is additive"
+	@echo ""
+	@echo "=== Field Coupling Test PASSED — TWO KERNELS, ONE FIELD ==="
 
 # CI Smoke Test (quiet boot): boot with `-append quiet` and prove the interactive
 # console is CLEAN — the periodic timer-tick heartbeat and the demo services'
