@@ -820,6 +820,18 @@ jobs:
           exit 1
         fi
 
+    # MCP server lifecycle (epic #99): the full agent-facing loop
+    # (boot -> attested identity -> ghostd status -> imprint/recall ->
+    # run a citizen -> crypto-tamper refusal -> shutdown) driven through
+    # qos_bridge, the same code path the FastMCP tools delegate to. Run
+    # against the downloaded kernel artifact, stdlib-only (no `mcp`
+    # package, no pip), matching this job's direct-python idiom. The test
+    # owns and reaps its own QEMU (finally + atexit + signal handler +
+    # PR_SET_PDEATHSIG), so `timeout -k` leaves no orphan and no shell
+    # trap is needed.
+    - name: MCP server lifecycle (epic #99)
+      run: timeout -k 5 150s python3 scripts/test_qos_mcp.py
+
     - name: Upload integration test results
       uses: actions/upload-artifact@v4
       with:

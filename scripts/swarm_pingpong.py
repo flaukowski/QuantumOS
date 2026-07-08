@@ -13,57 +13,19 @@ then run this client. It reads and verifies the boot attestation, then sends a
 PING and confirms a PONG comes back, and sends a DATA/STATUS request routed to
 ghostd and prints the field order parameter it returns. Exit 0 on success.
 
-Stdlib only. The two-way path is proven locally this way; CI gates the one-way
-attestation via verify_attestation.py (see README / the PR).
+Stdlib only. The framing lives in qos_bridge.py (epic #99), the single shared
+implementation — this file keeps only the interactive PING/STATUS exercise.
 """
 
 import argparse
-import hashlib
 import socket
 import sys
 import time
 
-MAGIC = 0xA5
-FRAME_PING = 0x03
-FRAME_PONG = 0x04
-FRAME_DATA = 0x02
-FRAME_PKDIGEST = 0x10
-FRAME_ATTEST = 0x11
-FRAME_SIG = 0x12
-SWARM_OP_STATUS = 0x01
-
-
-def crc8(data: bytes) -> int:
-    crc = 0
-    for byte in data:
-        crc ^= byte
-        for _ in range(8):
-            crc = ((crc << 1) ^ 0x07) & 0xFF if (crc & 0x80) else (crc << 1) & 0xFF
-    return crc
-
-
-def frame(ftype: int, payload: bytes) -> bytes:
-    hdr = bytes([ftype, len(payload) & 0xFF, (len(payload) >> 8) & 0xFF]) + payload
-    return bytes([MAGIC]) + hdr + bytes([crc8(hdr)])
-
-
-def parse(buf: bytearray):
-    """Pop complete valid frames from the front of buf; return list of (type,payload)."""
-    out = []
-    while True:
-        while buf and buf[0] != MAGIC:
-            del buf[0]
-        if len(buf) < 4:
-            return out
-        length = buf[2] | (buf[3] << 8)
-        total = 4 + length + 1
-        if len(buf) < total:
-            return out
-        if crc8(bytes(buf[1:4 + length])) == buf[4 + length]:
-            out.append((buf[1], bytes(buf[4:4 + length])))
-            del buf[:total]
-        else:
-            del buf[0]
+from qos_bridge import (
+    FRAME_ATTEST, FRAME_SIG, FRAME_PING, FRAME_PONG, FRAME_DATA,
+    SWARM_OP_STATUS, frame, FrameParser,
+)
 
 
 def main() -> int:
@@ -86,8 +48,7 @@ def main() -> int:
         return 1
     sock.settimeout(1.0)
 
-    buf = bytearray()
-    frames = []
+    parser = FrameParser()
     have_attest = have_sig = have_ping = have_status = False
     attest_msg = None
     sent_ping = sent_status = False
@@ -107,9 +68,7 @@ def main() -> int:
             continue
         if not chunk:
             break
-        buf.extend(chunk)
-        for ftype, payload in parse(buf):
-            frames.append((ftype, payload))
+        for ftype, payload in parser.feed(chunk):
             if ftype == FRAME_ATTEST:
                 attest_msg = payload.decode("ascii", "replace")
                 have_attest = True
