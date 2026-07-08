@@ -49,6 +49,7 @@ extern const uint8_t _binary_paradox_test_elf_start[], _binary_paradox_test_elf_
 extern const uint8_t _binary_swarm_svc_elf_start[], _binary_swarm_svc_elf_end[];
 extern const uint8_t _binary_qsh_elf_start[], _binary_qsh_elf_end[];
 extern const uint8_t _binary_quantumd_elf_start[], _binary_quantumd_elf_end[];
+extern const uint8_t _binary_kannakad_elf_start[], _binary_kannakad_elf_end[];
 
 /* Argument vector ABI (epic #62). MUST stay byte-identical to user_args_t
  * in user/usys.h — there is no shared header across the ring boundary. The
@@ -72,6 +73,7 @@ void user_paradox_demo_init(uint32_t ghostd_pid);
 void user_swarm_demo_init(uint32_t ghostd_pid);
 void user_shell_init(uint32_t ghostd_pid);
 void user_quantum_demo_init(void);
+void user_kannaka_demo_init(void);
 
 /* int 0x80 stub (kernel/src/interrupts.S) */
 extern void isr128(void);
@@ -1522,6 +1524,7 @@ void user_init(void) {
     user_ipc_demo_init();
     user_ghost_demo_init();
     user_quantum_demo_init();
+    user_kannaka_demo_init();
 }
 
 /* Bring up quantumd — a quantum-pool service (kannaka-quantum, a fourth
@@ -1546,6 +1549,32 @@ void user_quantum_demo_init(void) {
         boot_log("kannaka-quantum: quantumd (ring 3) drawing real quantum entropy");
     } else {
         boot_log("Warning: quantumd service failed to start");
+    }
+}
+
+/* Bring up kannakad — the kannaka-memory citizen, rebased onto the KERNEL
+ * holographic field (epic #95 phase 2). grant_field mints its region-1
+ * CAP_RESOURCE_FIELD cap (scrubbing the region) on every start, so a
+ * watchdog rebirth re-seeds a clean field rather than colliding with its
+ * own stale imprints. Monitored: it heartbeats after its one-shot demo. */
+void user_kannaka_demo_init(void) {
+    service_definition_t kannakad_def = {
+        .name = "kannakad",
+        .entry = NULL, /* user-process service */
+        .user_elf_start = _binary_kannakad_elf_start,
+        .user_elf_end = _binary_kannakad_elf_end,
+        .dependencies = {NULL},
+        .max_restarts = 2,
+        .grant_field = 1,
+        .field_region = 1,
+    };
+    uint32_t sid = 0;
+    if (service_register(&kannakad_def, &sid) == SVC_SUCCESS &&
+        service_start("kannakad", NULL) == SVC_SUCCESS) {
+        service_monitor(sid, true);
+        boot_log("kannaka-memory: kannakad (ring 3) recalling via the kernel field");
+    } else {
+        boot_log("Warning: kannakad service failed to start");
     }
 }
 
