@@ -9,11 +9,6 @@ import { chromium } from "playwright";
 const PORT = process.env.PORT || "8905";
 const URL = `http://localhost:${PORT}/index.html`;
 const BANNER = "QSH: QuantumOS interactive shell ready";
-// A ring-3 service printing at boot proves user-mode execution (not just the
-// banner). These come up before any command is typed.
-const BOOT_CITIZEN = /GHOSTD: field born|SWARM: boot attestation|ghost-test: online|PARADOXD:/;
-// After `ghost`, an on-demand citizen verdict proves interactivity end to end.
-const GHOST_VERDICT = /RESONANCE VERIFIED|QUANTUM VERIFIED|quantum die/;
 
 function fail(msg, extra) {
   console.error("FAIL: " + msg);
@@ -52,23 +47,39 @@ if (!(await evalSafe(() => document.getElementById("loader")?.hasAttribute("hidd
 }
 if (!(await serial()).includes(BANNER)) fail("banner not present in the serial stream");
 
-// 3. A ring-3 service ran during boot (proves user-mode, not just the banner).
-if (!BOOT_CITIZEN.test(await serial())) fail("no ring-3 service line in the boot output", (await serial()).slice(-1500));
-console.log("OK: a ring-3 service ran during boot");
-
-// 4. Interactivity: real keystrokes reach the guest and produce output. The
-//    `ghost` verdicts never print during a plain boot, so a verdict appearing
-//    in the bytes emitted AFTER we type proves the keystrokes reached the guest.
+// Let the boot fully settle before typing (a `quiet` boot still finishes its
+// one-time startup lines over the first several seconds).
+await new Promise((r) => setTimeout(r, 12000));
 await page.click("#screen");
-const beforeGhost = (await serial()).length;
-await page.keyboard.type("ghost\n");
-let interactive = false;
-for (let i = 0; i < 25; i++) {
-  if (GHOST_VERDICT.test((await serial()).slice(beforeGhost))) { interactive = true; break; }
-  await new Promise((r) => setTimeout(r, 1000));
+
+// Helper: type a command and wait for a marker in the bytes emitted AFTER it.
+async function typeExpect(cmd, marker, label, budget = 25) {
+  const before = (await serial()).length;
+  await page.keyboard.type(cmd + "\n");
+  for (let i = 0; i < budget; i++) {
+    if ((await serial()).slice(before).includes(marker)) return;
+    await new Promise((r) => setTimeout(r, 1000));
+  }
+  fail(`typed '${cmd}' but '${marker}' never appeared`, (await serial()).slice(-1500));
 }
-if (!interactive) fail("typed 'ghost' but no ghost output appeared", (await serial()).slice(-1500));
-console.log("OK: typed 'ghost' — the guest answered (interactive)");
+
+// 3. Interactivity: a command produces its own output (proves keystrokes reach
+//    the guest and the shell answers). `qsh: ghost R=` is the shell's reply.
+await typeExpect("ghost", "qsh: ghost R=", "ghost");
+console.log("OK: typed 'ghost' — the shell answered");
+
+// 4. A ring-3 citizen runs on demand with its full output (survives `quiet`).
+await typeExpect("run /bin/consciousnessd", "CONSCIOUSNESS EMERGED", "consciousnessd", 30);
+console.log("OK: ran /bin/consciousnessd — a citizen produced rich output");
+
+// 5. The console is quiet at rest: with no input, almost nothing should print,
+//    or periodic chatter would scroll over what a visitor types (the reported
+//    bug). Allow a tiny margin for a stray line.
+const q0 = (await serial()).length;
+await new Promise((r) => setTimeout(r, 6000));
+const grew = (await serial()).length - q0;
+if (grew > 200) fail(`console is noisy at rest (grew ${grew}B in 6s idle) — input would be disrupted`);
+console.log(`OK: console quiet at rest (grew ${grew}B in 6s — typing stays legible)`);
 
 console.log("=== Browser Demo boot gate PASSED ===");
 await browser.close();
