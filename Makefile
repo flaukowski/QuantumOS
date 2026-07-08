@@ -111,7 +111,7 @@ OBJECTS = $(KERNEL_SOURCES:$(KERNEL_DIR)/src/%.c=$(BUILD_DIR)/%.o) \
 -include $(OBJECTS:.o=.d)
 
 # Targets
-.PHONY: all clean kernel run debug dump test test-list test-coverage ci-smoke ci-smoke-disk ci-smoke-net ci-smoke-http ci-smoke-httpd ci-smoke-quiet ci-smoke-resonant ci-smoke-qseed ci-smoke-swarm ci-smoke-iso ci-smoke-kbd ci-smoke-noserial ci-smoke-screen swarm-pingpong
+.PHONY: all clean kernel run debug dump test test-list test-coverage ci-smoke ci-smoke-disk ci-smoke-net ci-smoke-http ci-smoke-httpd ci-smoke-quiet ci-smoke-resonant ci-smoke-qseed ci-smoke-swarm ci-smoke-mcp ci-smoke-iso ci-smoke-kbd ci-smoke-noserial ci-smoke-screen swarm-pingpong
 
 all: kernel
 
@@ -1493,6 +1493,24 @@ swarm-pingpong: kernel
 		-serial tcp:127.0.0.1:5566,server -m 128M -display none -no-reboot \
 		>/dev/null 2>&1 &) ; sleep 1
 	@python3 scripts/swarm_pingpong.py --host 127.0.0.1 --port 5566 --timeout 16
+
+# CI Smoke Test (MCP server — epic #99): drive the full agent-facing lifecycle
+# through qos_bridge (the exact code path the FastMCP tools delegate to), so a
+# real MCP agent's boot->status->imprint->recall->run->tamper->shutdown is
+# proven end to end. The test OWNS its QEMU process (Python, not a shell
+# background job — the #98 single-owner lesson one level up): it binds a
+# listener, launches QEMU as a serial CLIENT for COM2 (byte-0 attestation
+# capture, no free-port race), drains COM1 on a thread (no pipe deadlock), and
+# reaps QEMU in a finally + atexit + a SIGTERM/SIGINT handler + PR_SET_PDEATHSIG
+# (so a `timeout -k` SIGTERM, then SIGKILL, still leaves no orphan — no shell
+# trap is needed, and a trap matching the qemu cmdline would self-match this
+# recipe's own shell). Stdlib-only (no `mcp` package) so it runs in the
+# integration job with no pip. Anti-vacuous: verified+qseed-bound attestation,
+# live>=3 ghostd field, TWO discriminated recalls, hello's unique exit-42, and
+# a CRC-valid crypto-tamper that must be refused.
+ci-smoke-mcp: kernel
+	@echo "=== QuantumOS MCP Server Lifecycle Test (epic #99) ==="
+	timeout -k 5 150s python3 scripts/test_qos_mcp.py
 
 # ISO/GRUB boot path (epic #101): boot the GRUB-built ISO with -cdrom —
 # NOT QEMU's -kernel shortcut — so the real bootloader handoff (menu,
