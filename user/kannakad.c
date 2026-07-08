@@ -42,7 +42,7 @@ static long field_imprint_text(const char *text, int milli) {
     }
     req.region = KAN_REGION;
     unsigned n = 0;
-    while (text[n] && n < FIELD_PAT_MAX) {
+    while (n < FIELD_PAT_MAX && text[n]) {
         req.pattern[n] = (unsigned char)text[n];
         n++;
     }
@@ -59,7 +59,7 @@ static long field_recall_text(const char *probe, field_recall_out_t *out) {
     req.region = KAN_REGION;
     req.k = 3;
     unsigned n = 0;
-    while (probe[n] && n < FIELD_PAT_MAX) {
+    while (n < FIELD_PAT_MAX && probe[n]) {
         req.probe[n] = (unsigned char)probe[n];
         n++;
     }
