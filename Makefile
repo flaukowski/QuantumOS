@@ -825,6 +825,29 @@ ci-smoke: kernel
 DISK_IMG = $(BUILD_DIR)/disk.img
 ci-smoke-disk: kernel
 	@echo "=== QuantumOS Persistence Smoke Test (two boots, one disk) ==="
+	@# SAFETY gate first: a disk carrying a FOREIGN volume (fake MBR in
+	@# sector 0) must never be written — on real hardware LBA 0 is the
+	@# machine's partition table. The image must be BYTE-IDENTICAL
+	@# after a sync attempt, and the refusal must be logged.
+	@rm -f /tmp/qemu-foreign.img
+	@dd if=/dev/zero of=/tmp/qemu-foreign.img bs=1M count=2 2>/dev/null
+	@printf 'FAKE-MBR-DO-NOT-TOUCH' | dd of=/tmp/qemu-foreign.img conv=notrunc 2>/dev/null
+	@md5sum /tmp/qemu-foreign.img | cut -d" " -f1 > /tmp/qemu-foreign.before
+	@( printf 'write /data/x probe\nsync\n'; sleep 8 ) | \
+		timeout 10s qemu-system-x86_64 -kernel $(BUILD_DIR)/kernel.elf32 \
+		-drive file=/tmp/qemu-foreign.img,format=raw,if=ide -serial stdio -m 128M \
+		-display none -no-reboot 2>&1 | tee /tmp/qemu-disk-boot0.log || true
+	@if ! grep -q "SYNC: disk carries a foreign volume - refusing to overwrite" /tmp/qemu-disk-boot0.log 2>/dev/null; then \
+		echo "ERROR: sync did not refuse a foreign volume"; \
+		echo "Boot log:"; cat /tmp/qemu-disk-boot0.log 2>/dev/null || true; \
+		echo ""; echo "=== Persistence Test FAILED ==="; exit 1; \
+	fi
+	@md5sum /tmp/qemu-foreign.img | cut -d" " -f1 > /tmp/qemu-foreign.after
+	@if ! cmp -s /tmp/qemu-foreign.before /tmp/qemu-foreign.after; then \
+		echo "ERROR: sync MODIFIED a foreign volume despite refusing"; \
+		echo ""; echo "=== Persistence Test FAILED ==="; exit 1; \
+	fi
+	@echo "SUCCESS: foreign volume refused and left byte-identical — SAFE FOR REAL DISKS"
 	@rm -f $(DISK_IMG)
 	@dd if=/dev/zero of=$(DISK_IMG) bs=1M count=2 2>/dev/null
 	@echo "[boot 1] write /data/note + sync to a fresh disk..."
