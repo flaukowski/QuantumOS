@@ -15,6 +15,7 @@
 #include <kernel/memory.h>
 #include <kernel/ata.h>
 #include <kernel/tar.h>
+#include <kernel/field.h>
 #include <kernel/boot.h>
 
 typedef struct {
@@ -186,7 +187,30 @@ int ramfs_get(int idx, const char **name_out, const uint8_t **data_out, uint32_t
 #define QDSK_TARBYTES_OFF 8   /* u32: archive byte count */
 #define QDSK_FILECOUNT_OFF 12 /* u32: files in the archive (informational) */
 #define QDSK_CHECKSUM_OFF 16  /* u32: additive checksum over the archive */
+/* Field section descriptor (epic #96). Offsets 20..31 stay zero for
+ * compatibility slack; pre-#96 superblocks are all-zero past byte 19
+ * (the sync path zeroes the whole sector), so field_lba == 0 is a
+ * reliable "no field section" sentinel — LBA 0 is the superblock itself
+ * and can never be a legitimate blob location. */
+#define QDSK_FIELD_LBA_OFF 32   /* u32: blob location (the FIXED home) */
+#define QDSK_FIELD_BYTES_OFF 36 /* u32: blob byte count (exact) */
+#define QDSK_FIELD_CSUM_OFF 40  /* u32: additive checksum over the blob */
 #define TAR_BLOCK_SZ 512
+
+/* The field blob lives at a FIXED home at the TOP of the disk (just
+ * below the RW self-test scratch sector), away from the growing
+ * archive: a crash between sync A and sync B must never leave the old
+ * superblock pointing at field sectors a LARGER archive of sync B has
+ * already overwritten. Constant location also makes the corruption CI
+ * gate a deterministic dd offset. */
+static uint32_t field_home_lba(void) {
+    return ata_sector_count() - 1 - FIELD_BLOB_SECTORS;
+}
+
+/* Shared bounce for the blob (5 sectors). Boot restore is
+ * single-threaded and sync runs cli'd in syscall context, so one static
+ * buffer serves both — and unlike a kmalloc, it cannot fail. */
+static uint8_t field_blob_buf[FIELD_BLOB_SECTORS * ATA_SECTOR_SIZE];
 
 /* Simple additive checksum over the archive. Written into the
  * superblock only after the archive itself is on disk, so a torn sync
@@ -290,9 +314,9 @@ int persist_sync(void) {
     }
 
     uint32_t tar_sectors = tar_bytes / ATA_SECTOR_SIZE;
-    /* Fit check: superblock + archive, leaving the last sector free for
-     * the boot-time RW self-test scratch. */
-    if (1 + tar_sectors + 1 > ata_sector_count()) {
+    /* Fit check: superblock + archive must end BELOW the field blob's
+     * fixed home (which itself sits below the RW self-test scratch). */
+    if (1 + tar_sectors > field_home_lba()) {
         boot_log("SYNC: archive does not fit on disk — not flushed");
         return -1;
     }
@@ -324,16 +348,27 @@ int persist_sync(void) {
 
     uint32_t csum = archive_checksum(buf, tar_bytes);
 
-    /* Archive first (flushed to disk by ata_write), superblock last: a
-     * crash before the superblock leaves the OLD superblock pointing at
-     * the OLD intact archive; a torn archive write is caught by the
-     * checksum mismatch at restore. */
+    /* Sections first (each flushed durable by ata_write), superblock
+     * LAST — the single commit point. Any tear before the superblock
+     * leaves the old superblock authoritative; whatever partial bytes
+     * landed in either section fail that section's checksum at restore.
+     * The honest guarantee is DETECT-AND-COLD-START, never garbage:
+     * sections are overwritten in place, so a tear can lose the old
+     * snapshot — it can never be misread as truth. */
     if (ata_write(1, buf, tar_sectors) != 0) {
         kfree(buf);
         boot_log("SYNC: disk write failed — not flushed");
         return -1;
     }
     kfree(buf);
+
+    /* Field section (epic #96): every region, at the fixed home. */
+    uint32_t field_slots = field_blob_write(field_blob_buf);
+    uint32_t field_csum = archive_checksum(field_blob_buf, FIELD_BLOB_BYTES);
+    if (ata_write(field_home_lba(), field_blob_buf, FIELD_BLOB_SECTORS) != 0) {
+        boot_log("SYNC: field write failed — not flushed");
+        return -1;
+    }
 
     uint8_t sb[ATA_SECTOR_SIZE];
     for (int i = 0; i < ATA_SECTOR_SIZE; i++) {
@@ -346,6 +381,9 @@ int persist_sync(void) {
     put_u32(sb + QDSK_TARBYTES_OFF, tar_bytes);
     put_u32(sb + QDSK_FILECOUNT_OFF, nfiles);
     put_u32(sb + QDSK_CHECKSUM_OFF, csum);
+    put_u32(sb + QDSK_FIELD_LBA_OFF, field_home_lba());
+    put_u32(sb + QDSK_FIELD_BYTES_OFF, FIELD_BLOB_BYTES);
+    put_u32(sb + QDSK_FIELD_CSUM_OFF, field_csum);
     if (ata_write(0, sb, 1) != 0) {
         boot_log("SYNC: superblock write failed — not flushed");
         return -1;
@@ -353,6 +391,8 @@ int persist_sync(void) {
 
     boot_log("SYNC: overlay flushed to disk, files:");
     early_console_write_hex(nfiles);
+    boot_log("FIELD: synced slots to disk:");
+    early_console_write_hex(field_slots);
     return (int)nfiles;
 }
 
@@ -366,25 +406,7 @@ static int restore_cb(const char *name, const uint8_t *data, uint32_t size, void
     return 0;
 }
 
-void persist_restore(void) {
-    if (!ata_present()) {
-        return;
-    }
-
-    uint8_t sb[ATA_SECTOR_SIZE];
-    if (ata_read(0, sb, 1) != 0) {
-        boot_log("FS: superblock read failed — starting empty");
-        return;
-    }
-
-    const char *magic = QDSK_MAGIC;
-    for (int i = 0; i < QDSK_MAGIC_LEN; i++) {
-        if (sb[i] != (uint8_t)magic[i]) {
-            boot_log("FS: no persisted archive on disk (fresh volume)");
-            return;
-        }
-    }
-
+static void restore_fs_section(const uint8_t *sb) {
     uint32_t tar_bytes = get_u32(sb + QDSK_TARBYTES_OFF);
     uint32_t want_csum = get_u32(sb + QDSK_CHECKSUM_OFF);
 
@@ -428,6 +450,67 @@ void persist_restore(void) {
 
     boot_log("FS: restored persisted files from disk:");
     early_console_write_hex(restored);
+}
+
+/* Field section restore (epic #96). Independent of the fs section: each
+ * carries its own checksum, so a torn fs archive never blocks a valid
+ * field restore and vice versa. The blob crossed a trust boundary (the
+ * disk is attacker-writable offline): the descriptor must name EXACTLY
+ * the fixed home and the exact blob size, the whole blob must checksum,
+ * and field_blob_load revalidates every slot (len bounds BEFORE the
+ * wavefront recompute). Anything off -> cold start, honestly logged. */
+static void restore_field_section(const uint8_t *sb) {
+    uint32_t field_lba = get_u32(sb + QDSK_FIELD_LBA_OFF);
+    uint32_t field_bytes = get_u32(sb + QDSK_FIELD_BYTES_OFF);
+    uint32_t want_csum = get_u32(sb + QDSK_FIELD_CSUM_OFF);
+
+    if (field_lba == 0) {
+        /* Pre-#96 disk: bytes past 19 are guaranteed zero. */
+        boot_log("FIELD: no persisted field on disk (cold start)");
+        return;
+    }
+    if (field_lba != field_home_lba() || field_bytes != FIELD_BLOB_BYTES) {
+        boot_log("FIELD: superblock names an implausible field section — cold start");
+        return;
+    }
+    if (ata_read(field_lba, field_blob_buf, FIELD_BLOB_SECTORS) != 0) {
+        boot_log("FIELD: blob read failed — cold start");
+        return;
+    }
+    if (archive_checksum(field_blob_buf, FIELD_BLOB_BYTES) != want_csum) {
+        boot_log("FIELD: persisted field checksum mismatch - cold start");
+        return;
+    }
+    int64_t restored = field_blob_load(field_blob_buf, FIELD_BLOB_BYTES);
+    if (restored < 0) {
+        boot_log("FIELD: blob header mismatch - cold start");
+        return;
+    }
+    boot_log("FIELD: restored slots from disk:");
+    early_console_write_hex((uint32_t)restored);
+}
+
+void persist_restore(void) {
+    if (!ata_present()) {
+        return;
+    }
+
+    uint8_t sb[ATA_SECTOR_SIZE];
+    if (ata_read(0, sb, 1) != 0) {
+        boot_log("FS: superblock read failed — starting empty");
+        return;
+    }
+
+    const char *magic = QDSK_MAGIC;
+    for (int i = 0; i < QDSK_MAGIC_LEN; i++) {
+        if (sb[i] != (uint8_t)magic[i]) {
+            boot_log("FS: no persisted archive on disk (fresh volume)");
+            return;
+        }
+    }
+
+    restore_fs_section(sb);
+    restore_field_section(sb);
 }
 
 size_t ramfs_format_list(const char *prefix, char *buf, size_t max, size_t o) {

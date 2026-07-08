@@ -127,6 +127,11 @@ typedef struct {
      * never inherit its predecessor's memories. */
     uint8_t grant_field;
     uint8_t field_region; /* which region the field cap names (< FIELD_REGION_COUNT) */
+    /* Opt in to inheriting DISK-restored region content at the FIRST
+     * grant of a boot (epic #96). Without it every grant scrubs (the
+     * epic #95 rule). Inheritance is consumed once per boot per region;
+     * watchdog rebirths and successors always scrub. qsh only. */
+    uint8_t field_inherit;
 } service_definition_t;
 
 /* ============================================================================

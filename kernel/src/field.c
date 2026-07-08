@@ -165,8 +165,9 @@ int64_t field_imprint(uint32_t region, const uint8_t *pattern, uint32_t len, int
         }
     }
     if (target < 0) {
-        int32_t weakest = 0x7FFFFFFF;
-        for (int i = 0; i < FIELD_SLOTS; i++) {
+        target = 0;
+        int32_t weakest = effective_energy(&r->slot[0], now_ticks);
+        for (int i = 1; i < FIELD_SLOTS; i++) {
             int32_t eff = effective_energy(&r->slot[i], now_ticks);
             if (eff < weakest) {
                 weakest = eff;
@@ -285,5 +286,128 @@ void field_region_scrub(uint32_t region) {
             r->slot[i].bytes[b] = 0;
             r->slot[i].h_q15[b] = 0;
         }
+    }
+}
+
+/* ============================================================================
+ * Persistence (epic #96) — see field.h. All little-endian u32 fields,
+ * written/read bytewise so the layout is compiler-independent.
+ * ============================================================================ */
+
+static uint8_t region_inheritable[FIELD_REGION_COUNT];
+
+static void put_u32(uint8_t *p, uint32_t v) {
+    p[0] = (uint8_t)v;
+    p[1] = (uint8_t)(v >> 8);
+    p[2] = (uint8_t)(v >> 16);
+    p[3] = (uint8_t)(v >> 24);
+}
+
+static uint32_t get_u32(const uint8_t *p) {
+    return (uint32_t)p[0] | ((uint32_t)p[1] << 8) | ((uint32_t)p[2] << 16) | ((uint32_t)p[3] << 24);
+}
+
+uint32_t field_blob_write(uint8_t *buf) {
+    /* Zero the WHOLE sector-rounded buffer first: the tail padding lands
+     * on disk and must never carry kernel memory. */
+    for (uint32_t i = 0; i < FIELD_BLOB_SECTORS * 512u; i++) {
+        buf[i] = 0;
+    }
+    put_u32(buf + 0, FIELD_BLOB_MAGIC);
+    put_u32(buf + 4, FIELD_BLOB_VERSION);
+    put_u32(buf + 8, FIELD_REGION_COUNT);
+    put_u32(buf + 12, FIELD_SLOTS);
+    put_u32(buf + 16, FIELD_PAT_MAX);
+    /* buf+20 reserved, zero */
+
+    uint32_t live = 0;
+    uint8_t *rec = buf + 24;
+    for (uint32_t rg = 0; rg < FIELD_REGION_COUNT; rg++) {
+        for (int sl = 0; sl < FIELD_SLOTS; sl++) {
+            const field_slot_t *s = &regions[rg].slot[sl];
+            rec[0] = s->alive ? 1 : 0;
+            rec[1] = s->len;
+            /* rec[2..3] reserved */
+            put_u32(rec + 4, s->retrievals);
+            put_u32(rec + 8, (uint32_t)s->energy_q15);
+            for (uint32_t b = 0; b < FIELD_PAT_MAX; b++) {
+                rec[12 + b] = s->bytes[b];
+            }
+            if (s->alive) {
+                live++;
+            }
+            rec += FIELD_SLOT_REC_BYTES;
+        }
+    }
+    return live;
+}
+
+int64_t field_blob_load(const uint8_t *buf, uint32_t len) {
+    if (len < FIELD_BLOB_BYTES) {
+        return -1;
+    }
+    /* The header must describe EXACTLY this build's geometry — any
+     * mismatch (older layout, scribbled sector) means nothing here can
+     * be trusted, and nothing has been touched yet. */
+    if (get_u32(buf + 0) != FIELD_BLOB_MAGIC || get_u32(buf + 4) != FIELD_BLOB_VERSION ||
+        get_u32(buf + 8) != FIELD_REGION_COUNT || get_u32(buf + 12) != FIELD_SLOTS ||
+        get_u32(buf + 16) != FIELD_PAT_MAX) {
+        return -1;
+    }
+
+    int64_t restored = 0;
+    const uint8_t *rec = buf + 24;
+    for (uint32_t rg = 0; rg < FIELD_REGION_COUNT; rg++) {
+        field_region_scrub(rg);
+        uint32_t region_live = 0;
+        for (int sl = 0; sl < FIELD_SLOTS; sl++, rec += FIELD_SLOT_REC_BYTES) {
+            /* The disk crossed a trust boundary: every field is
+             * revalidated, and len is bounds-checked BEFORE the
+             * wavefront recompute may index with it. */
+            if (rec[0] != 1) {
+                continue; /* dead (or scribbled alive-byte) slot */
+            }
+            uint32_t slen = rec[1];
+            if (slen == 0 || slen > FIELD_PAT_MAX) {
+                continue;
+            }
+            int16_t h[FIELD_PAT_MAX];
+            if (wavefront(rec + 12, slen, h) != 0) {
+                continue; /* degenerate content cannot resonate — drop */
+            }
+            int32_t energy = (int32_t)get_u32(rec + 8);
+            if (energy < FIELD_ENERGY_MIN) {
+                energy = FIELD_ENERGY_MIN;
+            }
+            if (energy > FIELD_ENERGY_MAX) {
+                energy = FIELD_ENERGY_MAX;
+            }
+            field_slot_t *s = &regions[rg].slot[sl];
+            s->alive = 1;
+            s->len = (uint8_t)slen;
+            s->retrievals = get_u32(rec + 4);
+            s->energy_q15 = energy;
+            s->imprint_tick = 0; /* boot-relative ticks reset on restore */
+            for (uint32_t b = 0; b < FIELD_PAT_MAX; b++) {
+                s->bytes[b] = b < slen ? rec[12 + b] : 0;
+            }
+            for (uint32_t b = 0; b < FIELD_PAT_MAX; b++) {
+                s->h_q15[b] = b < slen ? h[b] : 0;
+            }
+            region_live++;
+            restored++;
+        }
+        region_inheritable[rg] = region_live > 0 ? 1 : 0;
+    }
+    return restored;
+}
+
+int field_region_inherit_peek(uint32_t region) {
+    return region < FIELD_REGION_COUNT && region_inheritable[region];
+}
+
+void field_region_inherit_consume(uint32_t region) {
+    if (region < FIELD_REGION_COUNT) {
+        region_inheritable[region] = 0;
     }
 }

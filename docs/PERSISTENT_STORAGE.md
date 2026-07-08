@@ -113,6 +113,47 @@ is checked only in boot 2's log, which never types it. Its appearance
 there can only be a genuine disk read-back. This runs as a **required**
 CI job (`persistence`).
 
+## The field section (epic #96): associative memories that survive reboot
+
+The kernel holographic field (epic #95, `kernel/src/field.c`) rides the
+same QDSK volume. `persist_sync` serializes every region into a
+fixed-size blob (header + 4x8 fixed 76-byte slot records: bytes +
+metadata only — the Q15 wavefront is **recomputed** on restore, which
+also revalidates it, and boot-relative imprint ticks reset to 0) at a
+**fixed home at the top of the disk** (`ata_sector_count()-6..-2`, just
+below the RW self-test scratch). Fixed, because the archive *grows*
+between syncs: a moving blob location would let a crash leave the old
+superblock pointing at field sectors a larger archive had already
+overwritten. The superblock (which has always zeroed its unused tail)
+gains a field descriptor at offset 32 — `field_lba`/`field_bytes`/
+`field_checksum` — written LAST as part of the same single commit
+point. Pre-#96 disks read as `field_lba == 0` → honest cold start.
+
+The crash guarantee, stated honestly: sections are overwritten in
+place, so a torn sync can lose an old snapshot — but per-section
+checksums mean it is always **detect-and-cold-start, never garbage**,
+and a torn *field* write never blocks a valid *fs* restore (or vice
+versa).
+
+Restore runs before any service starts, but epic #95's rule scrubs a
+region at every capability grant — deliberately, so reborn/successor
+services inherit nothing. The reconciliation is **opt-in, once-per-boot
+inheritance**: a service declaring `field_inherit` (qsh only) skips the
+scrub at the *first* grant of a boot when the disk restored its region,
+consuming the inheritance mark only after the cap actually minted and
+logging `service: field region 0 inherited from disk (scrub skipped)`.
+Watchdog rebirths and every later grant scrub exactly as before.
+kannakad does *not* opt in: its boot demo re-seeds region 1 from
+scratch every time. Durable operator memories live in region 0 —
+`imprint` at the prompt, `sync`, power off, boot, `recall`.
+
+`make ci-smoke-disk` now proves it in three boots: boot 1 imprints and
+syncs; boot 2 — which never types the pattern — restores, inherits
+region 0, and recalls the exact text from a corrupted probe; boot 3
+`dd`s garbage over the blob's fixed LBA and must report
+`FIELD: persisted field checksum mismatch - cold start` while the
+filesystem still restores (section isolation).
+
 ## Known limits / follow-ups
 
 - Single primary-master drive, polled PIO (no DMA, no second disk).

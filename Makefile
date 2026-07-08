@@ -828,7 +828,7 @@ ci-smoke-disk: kernel
 	@rm -f $(DISK_IMG)
 	@dd if=/dev/zero of=$(DISK_IMG) bs=1M count=2 2>/dev/null
 	@echo "[boot 1] write /data/note + sync to a fresh disk..."
-	@( printf 'write /data/note tide-remembers-x91\nsync\n'; sleep 8 ) | \
+	@( printf 'write /data/note tide-remembers-x91\nimprint the tide remembers x91\nsync\n'; sleep 8 ) | \
 		timeout 10s qemu-system-x86_64 -kernel $(BUILD_DIR)/kernel.elf32 \
 		-drive file=$(DISK_IMG),format=raw,if=ide -serial stdio -m 128M \
 		-display none -no-reboot 2>&1 | tee /tmp/qemu-disk-boot1.log || true
@@ -850,8 +850,14 @@ ci-smoke-disk: kernel
 		echo ""; echo "=== Persistence Test FAILED ==="; exit 1; \
 	fi
 	@echo "SUCCESS: boot 1 flushed the overlay to disk (qsh: sync ok)"
+	@# epic #96: the sync must also have serialized the kernel field.
+	@if ! grep -q "FIELD: synced slots to disk" /tmp/qemu-disk-boot1.log 2>/dev/null; then \
+		echo "ERROR: boot 1 sync did not write the field section"; \
+		echo ""; echo "=== Persistence Test FAILED ==="; exit 1; \
+	fi
+	@echo "SUCCESS: boot 1 serialized the kernel field to disk"
 	@echo "[boot 2] cat /data/note off the SAME disk (fresh boot, no write)..."
-	@( printf 'cat /data/note\n'; sleep 8 ) | \
+	@( printf 'cat /data/note\nrecall the tjde remembers x9j\n'; sleep 8 ) | \
 		timeout 10s qemu-system-x86_64 -kernel $(BUILD_DIR)/kernel.elf32 \
 		-drive file=$(DISK_IMG),format=raw,if=ide -serial stdio -m 128M \
 		-display none -no-reboot 2>&1 | tee /tmp/qemu-disk-boot2.log || true
@@ -869,6 +875,45 @@ ci-smoke-disk: kernel
 		echo ""; echo "=== Persistence Test FAILED ==="; exit 1; \
 	fi
 	@echo "SUCCESS: content written in boot 1 read back in boot 2 — PERSISTENCE PROVEN"
+	@# epic #96: the FIELD side of the same story. Boot 2 restored the
+	@# blob, region 0 was inherited at qsh's first grant (audited), and a
+	@# corrupted probe recalled the EXACT text imprinted in boot 1 — which
+	@# boot 2 never typed, so only a disk restore can produce it.
+	@if ! grep -q "FIELD: restored slots from disk" /tmp/qemu-disk-boot2.log 2>/dev/null; then \
+		echo "ERROR: boot 2 did not restore the field from disk"; \
+		echo "Boot log:"; cat /tmp/qemu-disk-boot2.log 2>/dev/null || true; \
+		echo ""; echo "=== Persistence Test FAILED ==="; exit 1; \
+	fi
+	@if ! grep -q "service: field region 0 inherited from disk (scrub skipped)" /tmp/qemu-disk-boot2.log 2>/dev/null; then \
+		echo "ERROR: region 0 was not inherited at the first grant"; \
+		echo ""; echo "=== Persistence Test FAILED ==="; exit 1; \
+	fi
+	@if ! grep -qF "FIELD: winner=\"the tide remembers x91\"" /tmp/qemu-disk-boot2.log 2>/dev/null; then \
+		echo "ERROR: boot 2 recall did not recover the imprint from boot 1"; \
+		echo "Boot log:"; cat /tmp/qemu-disk-boot2.log 2>/dev/null || true; \
+		echo ""; echo "=== Persistence Test FAILED ==="; exit 1; \
+	fi
+	@echo "SUCCESS: field memory imprinted in boot 1 recalled in boot 2 — FIELD PERSISTENCE PROVEN"
+	@echo "[boot 3] corrupt the field blob at its fixed home; fs must survive, field must cold-start..."
+	@dd if=/dev/urandom of=$(DISK_IMG) bs=512 seek=4090 count=1 conv=notrunc 2>/dev/null
+	@( printf 'help\n'; sleep 8 ) | \
+		timeout 10s qemu-system-x86_64 -kernel $(BUILD_DIR)/kernel.elf32 \
+		-drive file=$(DISK_IMG),format=raw,if=ide -serial stdio -m 128M \
+		-display none -no-reboot 2>&1 | tee /tmp/qemu-disk-boot3.log || true
+	@if ! grep -q "FIELD: persisted field checksum mismatch - cold start" /tmp/qemu-disk-boot3.log 2>/dev/null; then \
+		echo "ERROR: boot 3 did not detect the corrupted field blob"; \
+		echo "Boot log:"; cat /tmp/qemu-disk-boot3.log 2>/dev/null || true; \
+		echo ""; echo "=== Persistence Test FAILED ==="; exit 1; \
+	fi
+	@if grep -q "FIELD: restored slots from disk" /tmp/qemu-disk-boot3.log 2>/dev/null; then \
+		echo "ERROR: boot 3 restored a CORRUPTED field blob as truth"; \
+		echo ""; echo "=== Persistence Test FAILED ==="; exit 1; \
+	fi
+	@if ! grep -q "FS: restored persisted files from disk" /tmp/qemu-disk-boot3.log 2>/dev/null; then \
+		echo "ERROR: field corruption bled into the fs section (isolation broken)"; \
+		echo ""; echo "=== Persistence Test FAILED ==="; exit 1; \
+	fi
+	@echo "SUCCESS: corrupted field detected, cold-started honestly, fs unaffected — SECTION ISOLATION PROVEN"
 	@echo ""
 	@echo "=== Persistence Test PASSED ==="
 
