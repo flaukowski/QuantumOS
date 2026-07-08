@@ -31,6 +31,7 @@
 #define UART_LCR 3 /* Line Control Register */
 #define UART_MCR 4 /* Modem Control Register */
 #define UART_LSR 5 /* Line Status Register */
+#define UART_SCR 7 /* Scratch Register (presence detection) */
 
 #define LSR_DATA_READY 0x01
 #define LSR_THR_EMPTY 0x20
@@ -107,8 +108,28 @@ uint32_t console_read(uint8_t *buf, uint32_t len) {
  * COM1 receive
  * ============================================================================ */
 
+/* Set at init if a real 16550 answers the scratch-register test. On a
+ * machine with no UART behind 0x3F8 every port read floats to 0xFF —
+ * which makes LSR look like "data ready, forever". The previously
+ * unguarded drain loop below hung the first real-hardware boot at the
+ * 45% splash stage (reproduced exactly in QEMU with -serial none). */
+static uint8_t com1_present;
+
+int console_com1_present(void) {
+    return com1_present;
+}
+
 void console_com1_irq(void) {
-    while (io_inb(COM1_PORT_BASE + UART_LSR) & LSR_DATA_READY) {
+    if (!com1_present) {
+        return;
+    }
+    /* Bounded drain: a floating or wedged LSR must never spin the
+     * kernel. 64 bytes far exceeds any real 16550 FIFO. */
+    for (int n = 0; n < 64; n++) {
+        uint8_t lsr = io_inb(COM1_PORT_BASE + UART_LSR);
+        if (lsr == 0xFF || !(lsr & LSR_DATA_READY)) {
+            break;
+        }
         ring_push(io_inb(COM1_PORT_BASE + UART_RBR));
     }
 }
@@ -233,42 +254,69 @@ void console_kbd_irq(void) {
  * ============================================================================ */
 
 void console_init(void) {
-    /* 1. Quiesce the receiver's interrupt while we set up. */
-    io_outb(COM1_PORT_BASE + UART_IER, 0x00);
+    /* 0. Does a UART actually exist at 0x3F8? Scratch-register test: a
+     *    real 16550 echoes back what we store; a machine with no COM1
+     *    floats every read to 0xFF. Touching a phantom UART is not just
+     *    useless — the pre-fix RX drain spun forever on a floating LSR
+     *    and hung the first real-hardware boot at the 45% splash. */
+    io_outb(COM1_PORT_BASE + UART_SCR, 0x5A);
+    uint8_t scr1 = io_inb(COM1_PORT_BASE + UART_SCR);
+    io_outb(COM1_PORT_BASE + UART_SCR, 0xA5);
+    uint8_t scr2 = io_inb(COM1_PORT_BASE + UART_SCR);
+    com1_present = (scr1 == 0x5A && scr2 == 0xA5);
 
-    /* 2. Line settings: 115200 8N1 (matches the COM2 bridge; QEMU's
-     *    stdio chardev ignores baud, real hardware wants it explicit). */
-    io_outb(COM1_PORT_BASE + UART_LCR, LCR_DLAB);
-    io_outb(COM1_PORT_BASE + UART_DLL, 0x01);
-    io_outb(COM1_PORT_BASE + UART_DLH, 0x00);
-    io_outb(COM1_PORT_BASE + UART_LCR, LCR_8N1);
+    if (com1_present) {
+        /* 1. Quiesce the receiver's interrupt while we set up. */
+        io_outb(COM1_PORT_BASE + UART_IER, 0x00);
 
-    /* 3. FCR is deliberately NOT touched. CI pipes shell input from t=0
-     *    and QEMU refills the receive register asynchronously the moment
-     *    the guest drains it, so there is NO point in this sequence where
-     *    a FIFO clear is safe — QEMU also forces a clear on ANY change of
-     *    the FIFO-enable bit (a real byte was lost to exactly this race:
-     *    'help' arrived as 'hep'). Per-byte receive interrupts are ample
-     *    for a console, and the flow-controlled chardev never overruns a
-     *    1-byte receiver. */
+        /* 2. Line settings: 115200 8N1 (matches the COM2 bridge; QEMU's
+         *    stdio chardev ignores baud, real hardware wants it explicit). */
+        io_outb(COM1_PORT_BASE + UART_LCR, LCR_DLAB);
+        io_outb(COM1_PORT_BASE + UART_DLL, 0x01);
+        io_outb(COM1_PORT_BASE + UART_DLH, 0x00);
+        io_outb(COM1_PORT_BASE + UART_LCR, LCR_8N1);
 
-    /* 4. DTR + RTS + OUT2 — OUT2 gates the UART's IRQ line to the PIC. */
-    io_outb(COM1_PORT_BASE + UART_MCR, 0x0B);
+        /* 3. FCR is deliberately NOT touched. CI pipes shell input from t=0
+         *    and QEMU refills the receive register asynchronously the moment
+         *    the guest drains it, so there is NO point in this sequence where
+         *    a FIFO clear is safe — QEMU also forces a clear on ANY change of
+         *    the FIFO-enable bit (a real byte was lost to exactly this race:
+         *    'help' arrived as 'hep'). Per-byte receive interrupts are ample
+         *    for a console, and the flow-controlled chardev never overruns a
+         *    1-byte receiver. */
 
-    /* 5. Rescue any byte the receiver already holds into the ring, THEN
-     *    enable the receive interrupt. A byte landing between these two
-     *    writes still raises the IRQ once IER is set (Data-Ready is
-     *    level-evaluated on the IER write), so there is no loss window. */
-    console_com1_irq();
-    io_outb(COM1_PORT_BASE + UART_IER, IER_RX_AVAIL);
+        /* 4. DTR + RTS + OUT2 — OUT2 gates the UART's IRQ line to the PIC. */
+        io_outb(COM1_PORT_BASE + UART_MCR, 0x0B);
+
+        /* 5. Rescue any byte the receiver already holds into the ring, THEN
+         *    enable the receive interrupt. A byte landing between these two
+         *    writes still raises the IRQ once IER is set (Data-Ready is
+         *    level-evaluated on the IER write), so there is no loss window. */
+        console_com1_irq();
+        io_outb(COM1_PORT_BASE + UART_IER, IER_RX_AVAIL);
+    } else {
+        /* No UART: silence the transmit path too (early_console_write
+         * keeps working — a floating LSR reads as THR-empty — but the
+         * bytes go nowhere; the screen console is the real display). */
+        com1_dead = 1;
+    }
 
     /* 6. Reset keyboard translation state and drain stale PS/2 bytes so
-     *    the first real keystroke starts clean. */
+     *    the first real keystroke starts clean. Bounded, and a floating
+     *    0xFF status bails: no i8042 must not hang the boot either. */
     kbd_e0 = 0;
     kbd_shift = 0;
-    while (io_inb(PS2_STATUS) & PS2_STATUS_OUTPUT_FULL) {
+    for (int n = 0; n < 32; n++) {
+        uint8_t st = io_inb(PS2_STATUS);
+        if (st == 0xFF || !(st & PS2_STATUS_OUTPUT_FULL)) {
+            break;
+        }
         (void)io_inb(PS2_DATA);
     }
 
-    boot_log("Console input online (COM1 RX IRQ4 + PS/2 IRQ1 -> 1K ring)");
+    if (com1_present) {
+        boot_log("Console input online (COM1 RX IRQ4 + PS/2 IRQ1 -> 1K ring)");
+    } else {
+        boot_log("CONS: no COM1 UART detected — screen/keyboard console only");
+    }
 }

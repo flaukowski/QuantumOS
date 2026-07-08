@@ -538,6 +538,8 @@ jobs:
       run: make ci-smoke-iso
     - name: Type into qsh via PS/2 scancodes
       run: make ci-smoke-kbd
+    - name: Boot with no COM1 UART at all (the serial-less laptop shape)
+      run: make ci-smoke-noserial
 
   persistence:
     name: Persistence Test (two boots, one disk — epic #71)

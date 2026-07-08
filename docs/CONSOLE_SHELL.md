@@ -211,6 +211,20 @@ video request → VGA text → screen console. The **graphical wave field**
 entry boots the video-requesting image (1024x768 splash + live field
 view; its text stays on COM1).
 
+**Hardware without a COM1 UART** — the first real-laptop boot froze at
+the 45% splash stage: with no UART behind 0x3F8 every port read floats
+to `0xFF`, so LSR permanently reads "data ready" and `console_init`'s
+RX rescue drain spun forever (reproduced exactly in QEMU with
+`-serial none`). `console_init` therefore probes first: a scratch-
+register echo test (`0x5A`/`0xA5` written to SCR and read back — a
+floating bus can't echo) sets the presence flag exposed as
+`console_com1_present()`. When absent, all COM1 setup is skipped, the
+transmit tee is latched off, IRQ4 stays masked, and the boot log says
+so honestly: `CONS: no COM1 UART detected — screen/keyboard console
+only`. The RX drain is bounded (64 bytes, bails on a floating `0xFF`
+LSR) and the PS/2 stale-byte drain gets the same treatment — nothing in
+the console layer may ever spin on a status bit the hardware can float.
+
 **CI gates** (the `Real-Hardware Boot Path` job):
 
 - `make ci-smoke-iso` — boots the ISO with `-cdrom` (the real GRUB
@@ -221,6 +235,10 @@ view; its text stays on COM1).
   through the QEMU monitor (`sendkey`); serial carries **no input** that
   run, so the executed `help` proves the i8042/IRQ1 path a real laptop
   keyboard uses.
+- `make ci-smoke-noserial` — boots with `-serial none` (no COM1 device
+  at all: ports float exactly like serial-less hardware) and verifies
+  the Lamport boot attestation arriving on COM2 — proof that full
+  service bring-up completes with no console serial port.
 
 ## Known limits / follow-ups
 

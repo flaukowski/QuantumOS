@@ -111,7 +111,7 @@ OBJECTS = $(KERNEL_SOURCES:$(KERNEL_DIR)/src/%.c=$(BUILD_DIR)/%.o) \
 -include $(OBJECTS:.o=.d)
 
 # Targets
-.PHONY: all clean kernel run debug dump test test-list test-coverage ci-smoke ci-smoke-disk ci-smoke-net ci-smoke-http ci-smoke-quiet ci-smoke-resonant ci-smoke-qseed ci-smoke-swarm ci-smoke-iso ci-smoke-kbd swarm-pingpong
+.PHONY: all clean kernel run debug dump test test-list test-coverage ci-smoke ci-smoke-disk ci-smoke-net ci-smoke-http ci-smoke-quiet ci-smoke-resonant ci-smoke-qseed ci-smoke-swarm ci-smoke-iso ci-smoke-kbd ci-smoke-noserial swarm-pingpong
 
 all: kernel
 
@@ -1223,6 +1223,24 @@ ci-smoke-kbd: kernel
 	fi
 	@echo "SUCCESS: qsh executed a command typed via PS/2 scancodes (IRQ1 -> ring -> shell)"
 
+# Serial-less boot (epic #101 — the laptop shape): -serial none allocates
+# NO COM1 device, so its ports float to 0xFF exactly like hardware with no
+# UART — the configuration that hung the first real-laptop boot at the 45%
+# splash (unbounded RX drain on a floating LSR). The boot must complete
+# anyway; COM2 (still present) carries the swarm attestation, and verifying
+# it proves the kernel got all the way through service bring-up with no
+# console serial port at all.
+ci-smoke-noserial: kernel
+	@echo "=== QuantumOS serial-less boot test (epic #101 — the laptop path) ==="
+	@rm -f /tmp/qemu-noserial-com2.bin
+	@timeout 15s qemu-system-x86_64 -kernel $(BUILD_DIR)/kernel.elf32 \
+		-serial none -serial file:/tmp/qemu-noserial-com2.bin \
+		-m 128M -display none -no-reboot >/dev/null 2>&1 || true
+	@python3 scripts/verify_attestation.py /tmp/qemu-noserial-com2.bin --qseed none || \
+		(echo "ERROR: boot did not reach the swarm attestation without COM1"; \
+		 echo "=== Serial-less Boot Test FAILED ==="; exit 1)
+	@echo "SUCCESS: kernel booted fully with NO COM1 UART (attestation verified via COM2)"
+
 # Quick validation for contributors
 validate: kernel
 	@echo "=== Quick Validation ==="
@@ -1266,6 +1284,7 @@ help:
 	@echo "  ci-smoke       - CI smoke test (build + headless boot + validate)"
 	@echo "  ci-smoke-iso   - Boot the GRUB ISO via -cdrom to the shell (epic #101)"
 	@echo "  ci-smoke-kbd   - Drive qsh via PS/2 scancodes only (epic #101)"
+	@echo "  ci-smoke-noserial - Boot with NO COM1 device at all (epic #101)"
 	@echo "  validate       - Quick validation (build + API check)"
 	@echo "  debug          - Debug kernel with GDB"
 	@echo "  dump           - Show kernel information"
@@ -1300,7 +1319,7 @@ info:
 	@echo "  Objects: $(OBJECTS)"
 
 # Phony targets
-.PHONY: all clean kernel run run-iso debug dump test test-list test-coverage ci-smoke ci-smoke-resonant ci-smoke-qseed ci-smoke-iso ci-smoke-kbd validate info install-deps help
+.PHONY: all clean kernel run run-iso debug dump test test-list test-coverage ci-smoke ci-smoke-resonant ci-smoke-qseed ci-smoke-iso ci-smoke-kbd ci-smoke-noserial validate info install-deps help
 
 # Default target
 .DEFAULT_GOAL := all

@@ -38,8 +38,14 @@
  * interrupt_enable() once the IDT handlers are live. */
 void console_init(void);
 
-/* IRQ4 body: drain every byte the COM1 receiver holds into the ring. */
+/* IRQ4 body: drain the COM1 receiver into the ring (bounded; no-op
+ * when no UART was detected at init). */
 void console_com1_irq(void);
+
+/* True if a real 16550 answered the init-time scratch-register test.
+ * False on serial-less hardware — reads at 0x3F8 float to 0xFF there,
+ * and nothing should ever spin on that port's status bits. */
+int console_com1_present(void);
 
 /* IRQ1 body: read one scancode from the PS/2 data port, translate
  * (set 1, US layout, shift tracked), and push the ASCII byte. */

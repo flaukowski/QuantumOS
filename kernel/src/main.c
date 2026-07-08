@@ -189,7 +189,11 @@ static void kernel_init(void) {
     pit_init(TIMER_DEFAULT_HZ);
     interrupt_enable(IRQ_BASE + IRQ_TIMER);
     interrupt_enable(IRQ_BASE + IRQ_KEYBOARD);
-    interrupt_enable(IRQ_BASE + IRQ_COM1);
+    // Only listen to a UART that exists — on serial-less hardware the
+    // line floats and its handler would just poll a phantom port.
+    if (console_com1_present()) {
+        interrupt_enable(IRQ_BASE + IRQ_COM1);
+    }
     // Unmask the NIC's (dynamically assigned) IRQ line if a NIC came up.
     // Its handler is routed from irq_handler's default case. On a PCI
     // line >= 8 the slave PIC's cascade (IRQ2) must also be live — it is
