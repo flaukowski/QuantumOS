@@ -43,8 +43,18 @@ static void out(const char *s) {
     out_bytes(s, str_len(s));
 }
 
+/* ANSI colour. The screen console (kernel/src/vga.c) interprets these SGR
+ * codes into VGA attributes and a real terminal renders them natively, so the
+ * shell looks the same in the browser demo and on hardware. */
+#define A0 "\x1b[0m"         /* reset */
+#define A_TITLE "\x1b[1;36m" /* bold cyan */
+#define A_CAT "\x1b[1;35m"   /* bold magenta — category labels */
+#define A_CMD "\x1b[1;32m"   /* bold green — command names */
+#define A_KEY "\x1b[1;33m"   /* bold yellow — highlights */
+#define A_DIM "\x1b[90m"     /* grey — descriptions */
+
 static void prompt(void) {
-    out("qsh> ");
+    out(A_TITLE "qsh" A_DIM "> " A0);
 }
 
 static int put_hex64(char *b, int o, unsigned long long v) {
@@ -87,8 +97,32 @@ static const char *arg_of(const char *line, const char *cmd) {
  * ------------------------------------------------------------------ */
 
 static void cmd_help(void) {
-    out("qsh: commands: help echo ps free uptime date pid ls cat write rm sync imprint recall "
-        "fieldtest nslookup udping http run qrand qseed ghost clear exit\r\n");
+    /* "qsh commands:" is the CI grep anchor — keep it intact (colour codes
+     * sit outside the phrase). Grouped by what each command is FOR, with a
+     * one-line description, so a newcomer knows where to start. */
+    out(A_TITLE "qsh commands:" A0 "\r\n");
+    out(A_CAT "  memory " A0 A_CMD "imprint" A0 " <text>   " A_DIM
+              "store a phrase in the holographic field" A0 "\r\n");
+    out("         " A_CMD "recall" A0 " <cue>     " A_DIM "bring it back from a corrupted cue" A0
+        "\r\n");
+    out("         " A_CMD "ghost" A0 "          " A_DIM "field status: order R and live patterns" A0
+        "\r\n");
+    out("         " A_CMD "fieldtest" A0 "      " A_DIM "run the field self-test" A0 "\r\n");
+    out(A_CAT "  quantum" A0 " " A_CMD "qrand" A0 "          " A_DIM
+              "64 bits of quantum-seeded entropy" A0 "\r\n");
+    out("         " A_CMD "qseed" A0 "          " A_DIM "the boot quantum seed" A0 "\r\n");
+    out("         " A_CMD "ghost" A0 "          " A_DIM "quantum-seeded dice + resonant recall" A0
+        "\r\n");
+    out(A_CAT "  run    " A0 A_CMD "run" A0 " <path>      " A_DIM "start a citizen  " A_KEY
+              "try: run /bin/qtop" A0 "\r\n");
+    out(A_CAT "  files  " A0 A_CMD "ls" A0 " " A_CMD "cat" A0 " " A_CMD "write" A0 " " A_CMD "rm" A0
+              " " A_CMD "sync" A0 "  " A_DIM "browse and edit the initrd" A0 "\r\n");
+    out(A_CAT "  net    " A0 A_CMD "http" A0 " <host>   " A_CMD "nslookup" A0 "   " A_CMD
+              "udping" A0 "   " A_DIM "reach the network" A0 "\r\n");
+    out(A_CAT "  system " A0 A_CMD "ps" A0 " " A_CMD "free" A0 " " A_CMD "uptime" A0 " " A_CMD
+              "date" A0 " " A_CMD "pid" A0 " " A_CMD "echo" A0 "  " A_DIM "inspect the machine" A0
+              "\r\n");
+    out(A_CAT "  shell  " A0 A_CMD "clear" A0 " " A_CMD "help" A0 " " A_CMD "exit" A0 "\r\n");
 }
 
 /* write <path> <text>: create/truncate an overlay file with the text
@@ -1262,7 +1296,10 @@ void _start(void) {
         o = ghost_put(b, o, ")\r\n");
         out_bytes(b, o);
     } else {
-        out("QSH: QuantumOS interactive shell ready — type 'help'\r\n");
+        /* The phrase up to "ready" is the browser demo's boot marker and a CI
+         * gate — keep it intact; colour codes sit outside it. */
+        out(A_TITLE "QSH: QuantumOS interactive shell ready" A0 A_DIM " — type " A_KEY "help" A_DIM
+                    "\r\n" A0);
     }
 
     /* Greet with the message of the day — read through the VFS, off the
@@ -1276,6 +1313,13 @@ void _start(void) {
             o = ghost_put(b, o, ")\r\n");
             out_bytes(b, o);
         }
+    }
+
+    /* A one-line nudge so a first-time visitor knows what to try. */
+    if (restarts == 0) {
+        out(A_DIM "  try " A_KEY "ghost" A0 A_DIM "   " A_KEY "run /bin/qtop" A0 A_DIM
+                  "   or " A_KEY "imprint hello world" A0 A_DIM " then " A_KEY
+                  "recall hxllo wxrld" A0 "\r\n");
     }
 
     prompt();

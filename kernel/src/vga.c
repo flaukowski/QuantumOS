@@ -230,6 +230,51 @@ void vga_boot_ready(void) {
 static int cons_active;
 static int cons_x, cons_y;
 
+/* ---- minimal ANSI SGR colour for the screen console ----
+ * The serial console passes escape bytes straight through, so a real
+ * terminal (xterm in the browser demo) colours itself; the VGA screen has
+ * no terminal, so we interpret the handful of SGR codes qsh uses and set
+ * the text attribute directly. Anything we don't recognise is swallowed,
+ * never printed — so a colour code can never leave `[31m` litter on screen.
+ * ANSI colour order differs from the VGA palette, hence the map. */
+static uint8_t cons_fg = VGA_LIGHT_GREY;
+static uint8_t cons_bg = VGA_BLACK;
+static uint8_t cons_bold;
+static const uint8_t ansi2vga[8] = {VGA_BLACK, VGA_RED,     VGA_GREEN, VGA_BROWN,
+                                    VGA_BLUE,  VGA_MAGENTA, VGA_CYAN,  VGA_LIGHT_GREY};
+static enum { ESC_NONE, ESC_SEEN, ESC_CSI } cons_esc;
+#define CONS_MAXPARAM 8
+static int cons_param[CONS_MAXPARAM];
+static int cons_nparam;
+static int cons_curparam;
+
+static void cons_apply_sgr(void) {
+    for (int i = 0; i < cons_nparam; i++) {
+        int p = cons_param[i];
+        if (p == 0) {
+            cons_fg = VGA_LIGHT_GREY;
+            cons_bg = VGA_BLACK;
+            cons_bold = 0;
+        } else if (p == 1) {
+            cons_bold = 1;
+        } else if (p == 22) {
+            cons_bold = 0;
+        } else if (p >= 30 && p <= 37) {
+            cons_fg = (uint8_t)(ansi2vga[p - 30] | (cons_bold ? 8 : 0));
+        } else if (p == 39) {
+            cons_fg = VGA_LIGHT_GREY;
+        } else if (p >= 40 && p <= 47) {
+            cons_bg = ansi2vga[p - 40];
+        } else if (p == 49) {
+            cons_bg = VGA_BLACK;
+        } else if (p >= 90 && p <= 97) {
+            cons_fg = (uint8_t)(ansi2vga[p - 90] | 8);
+        } else if (p >= 100 && p <= 107) {
+            cons_bg = (uint8_t)(ansi2vga[p - 100] | 8);
+        }
+    }
+}
+
 static void cursor_show(void) {
     outb(0x3D4, 0x0A);
     outb(0x3D5, 0x0E); /* cursor start scanline 14, enable (bit 5 clear) */
@@ -245,7 +290,7 @@ static void crtc_word(uint8_t idx_hi, uint8_t idx_lo, uint16_t value) {
 }
 
 static void cons_cell(int x, int y, char ch) {
-    VGA_MEM[y * VGA_WIDTH + x] = cell(ch, VGA_LIGHT_GREY, VGA_BLACK);
+    VGA_MEM[y * VGA_WIDTH + x] = cell(ch, (vga_color_t)cons_fg, (vga_color_t)cons_bg);
 }
 
 static void cons_clear_row(int y) {
@@ -279,6 +324,42 @@ int vga_console_active(void) {
 
 void vga_console_putc(char c) {
     if (!cons_active) {
+        return;
+    }
+    /* ANSI escape handling (SGR colour only; everything else is swallowed). */
+    if (cons_esc == ESC_SEEN) {
+        if (c == '[') {
+            cons_esc = ESC_CSI;
+            cons_nparam = 0;
+            cons_curparam = 0;
+        } else {
+            cons_esc = ESC_NONE; /* not a CSI — ignore the escape */
+        }
+        return;
+    }
+    if (cons_esc == ESC_CSI) {
+        if (c >= '0' && c <= '9') {
+            cons_curparam = cons_curparam * 10 + (c - '0');
+            return;
+        }
+        if (c == ';') {
+            if (cons_nparam < CONS_MAXPARAM) {
+                cons_param[cons_nparam++] = cons_curparam;
+            }
+            cons_curparam = 0;
+            return;
+        }
+        if (c == 'm') { /* SGR — the only sequence we act on */
+            if (cons_nparam < CONS_MAXPARAM) {
+                cons_param[cons_nparam++] = cons_curparam;
+            }
+            cons_apply_sgr();
+        }
+        cons_esc = ESC_NONE; /* any letter terminates the CSI */
+        return;
+    }
+    if (c == 0x1b) {
+        cons_esc = ESC_SEEN;
         return;
     }
     switch (c) {

@@ -505,8 +505,8 @@ ci-smoke: kernel
 	@echo "SUCCESS: qsh interactive shell came up (console capability live)"
 	@# Input integrity: the FIRST piped command ('help') must arrive intact
 	@# across the boot handoff — every byte rescued, none eaten by UART init.
-	@if ! grep -q "qsh: commands: help" /tmp/qemu-boot.log 2>/dev/null; then \
-		echo "ERROR: piped 'help' did not execute intact (qsh: commands: help)"; \
+	@if ! grep -q "qsh commands:" /tmp/qemu-boot.log 2>/dev/null; then \
+		echo "ERROR: piped 'help' did not execute intact (qsh commands:)"; \
 		echo "Boot log:"; cat /tmp/qemu-boot.log 2>/dev/null || true; \
 		echo ""; echo "=== Smoke Test FAILED ==="; exit 1; \
 	fi
@@ -1320,7 +1320,7 @@ ci-smoke-quiet: kernel
 		echo "Boot log:"; cat /tmp/qemu-quiet.log 2>/dev/null || true; \
 		echo ""; echo "=== Quiet Test FAILED ==="; exit 1; \
 	fi
-	@if ! grep -q "qsh: commands:" /tmp/qemu-quiet.log 2>/dev/null; then \
+	@if ! grep -q "qsh commands:" /tmp/qemu-quiet.log 2>/dev/null; then \
 		echo "ERROR: 'help' produced no output — the shell is not usable under quiet"; \
 		echo "Boot log:"; cat /tmp/qemu-quiet.log 2>/dev/null || true; \
 		echo ""; echo "=== Quiet Test FAILED ==="; exit 1; \
@@ -1530,7 +1530,7 @@ ci-smoke-iso: $(BUILD_DIR)/kernel.iso
 	@for gate in "QuantumOS ready" \
 	             "CONS: screen console active (VGA text 80x25)" \
 	             "QSH: QuantumOS interactive shell ready" \
-	             "qsh: commands: help" \
+	             "qsh commands:" \
 	             "consciousnessd: CONSCIOUSNESS EMERGED"; do \
 		if ! grep -qF "$$gate" /tmp/qemu-iso.log 2>/dev/null; then \
 			echo "ERROR: ISO boot gate missing: $$gate"; \
@@ -1563,8 +1563,8 @@ ci-smoke-kbd: kernel
 		cat /tmp/qemu-kbd-serial.log 2>/dev/null || true; \
 		echo "=== PS/2 Keyboard Test FAILED ==="; exit 1; \
 	fi
-	@if ! grep -qF "qsh: commands: help" /tmp/qemu-kbd-serial.log 2>/dev/null; then \
-		echo "ERROR: PS/2-typed 'help' did not reach qsh (qsh: commands: help)"; \
+	@if ! grep -qF "qsh commands:" /tmp/qemu-kbd-serial.log 2>/dev/null; then \
+		echo "ERROR: PS/2-typed 'help' did not reach qsh (qsh commands:)"; \
 		echo "Serial log:"; cat /tmp/qemu-kbd-serial.log 2>/dev/null || true; \
 		echo "=== PS/2 Keyboard Test FAILED ==="; exit 1; \
 	fi
