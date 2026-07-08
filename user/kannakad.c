@@ -42,9 +42,14 @@ static long field_imprint_text(const char *text, int milli) {
     }
     req.region = KAN_REGION;
     unsigned n = 0;
-    while (n < FIELD_PAT_MAX && text[n]) {
-        req.pattern[n] = (unsigned char)text[n];
+    while (text[n]) {
         n++;
+    }
+    if (n > FIELD_PAT_MAX) {
+        n = FIELD_PAT_MAX;
+    }
+    for (unsigned i = 0; i < n; i++) {
+        req.pattern[i] = (unsigned char)text[i];
     }
     req.len = n;
     req.energy_q15 = q15_energy(milli);
@@ -59,9 +64,14 @@ static long field_recall_text(const char *probe, field_recall_out_t *out) {
     req.region = KAN_REGION;
     req.k = 3;
     unsigned n = 0;
-    while (n < FIELD_PAT_MAX && probe[n]) {
-        req.probe[n] = (unsigned char)probe[n];
+    while (probe[n]) {
         n++;
+    }
+    if (n > FIELD_PAT_MAX) {
+        n = FIELD_PAT_MAX;
+    }
+    for (unsigned i = 0; i < n; i++) {
+        req.probe[i] = (unsigned char)probe[i];
     }
     req.len = n;
     return recall_(&req, out);
