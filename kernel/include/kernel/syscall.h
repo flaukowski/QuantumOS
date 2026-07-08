@@ -182,6 +182,24 @@
 #define TCP_OP_CLOSE 3
 #define TCP_OP_STATUS 4
 
+#define SYS_IMPRINT                                                                                \
+    29 /* rdi = field_imprint_req ptr; store a pattern into a
+                         * holographic field region (epic #95). Gated on a
+                         * CAP_RESOURCE_FIELD WRITE cap naming EXACTLY
+                         * req.region (cap_find_resource; EPERM without).
+                         * Returns the slot index. Capless callers are denied
+                         * BEFORE any user memory is read, so they always get
+                         * exactly EPERM. */
+#define SYS_RECALL                                                                                 \
+    30 /* rdi = field_recall_req ptr, rsi = field_recall_out ptr;
+                         * ranked associative recall against a region (epic
+                         * #95). Gated on a CAP_RESOURCE_FIELD READ cap naming
+                         * req.region. Retrieval reinforcement (a write to the
+                         * energy landscape) is applied ONLY when the caller
+                         * also holds CAP_WRITE — a read-only capability never
+                         * mutates. n=0 (nothing resonates, incl. a degenerate
+                         * probe) is success, not an error. */
+
 /* SYS_RESOLVE / SYS_UDP: still pending (poll again) / queue-ring full. */
 #define RESOLVE_WOULDBLOCK ((uint64_t) - 11)
 

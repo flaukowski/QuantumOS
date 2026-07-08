@@ -120,6 +120,13 @@ typedef struct {
      * every start. The network-access right: SYS_RESOLVE (hostname lookup)
      * from ring 3. Held only by qsh (epic #73 follow-up). */
     uint8_t grant_net;
+    /* Grant a CAP_RESOURCE_FIELD read+write cap over field_region,
+     * re-minted on every start. The holographic-memory right: SYS_IMPRINT
+     * and SYS_RECALL against exactly that region (epic #95). The region is
+     * SCRUBBED at every (re)mint — a reborn or successor service must
+     * never inherit its predecessor's memories. */
+    uint8_t grant_field;
+    uint8_t field_region; /* which region the field cap names (< FIELD_REGION_COUNT) */
 } service_definition_t;
 
 /* ============================================================================

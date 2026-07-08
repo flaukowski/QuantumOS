@@ -18,6 +18,7 @@
 #include <kernel/console.h>
 #include <kernel/ata.h>
 #include <kernel/net.h>
+#include <kernel/field.h>
 #include <kernel/syscall.h>
 #include <kernel/interrupts.h>
 #include <kernel/boot.h>
@@ -268,6 +269,22 @@ static svc_result_t start_slot(service_slot_t *slot) {
             CAP_SUCCESS) {
             boot_log("service: network cap grant failed");
             boot_log(slot->info.name);
+        }
+    }
+    if (slot->def.grant_field) {
+        if (slot->def.field_region >= FIELD_REGION_COUNT) {
+            boot_log("service: field region out of range — cap NOT granted");
+            boot_log(slot->info.name);
+        } else {
+            /* Scrub BEFORE minting: a reborn or successor service must
+             * never inherit the region's previous contents (epic #95). */
+            field_region_scrub(slot->def.field_region);
+            uint32_t fldcap = CAP_ID_INVALID;
+            if (cap_create(pid, CAP_RESOURCE_FIELD, slot->def.field_region, CAP_READ | CAP_WRITE, 0,
+                           &fldcap) != CAP_SUCCESS) {
+                boot_log("service: field cap grant failed");
+                boot_log(slot->info.name);
+            }
         }
     }
 

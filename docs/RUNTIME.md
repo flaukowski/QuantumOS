@@ -76,6 +76,32 @@ append):
 | 26 | SYS_RESOLVE    | `resolve_`                | DNS hostname → ip (cap)          |
 | 27 | SYS_UDP        | `udp_`                    | ring-3 UDP sockets (cap)         |
 | 28 | SYS_TCP        | `tcp_`                    | ring-3 TCP client (cap)          |
+| 29 | SYS_IMPRINT    | `imprint_`                | store into a kernel field region (cap) |
+| 30 | SYS_RECALL     | `recall_`                 | ranked associative recall (cap)  |
+
+**The kernel holographic field (epic #95).** `SYS_IMPRINT` stores a
+byte pattern (≤ 64 bytes, with a Q15 importance) into one of the
+kernel's fixed field REGIONS; `SYS_RECALL` scores every live slot in a
+region against a probe — Q15 cosine of centered unit wavefronts times
+energy, one bounded integer pass, no floats — and returns the top-K
+`(slot, score)` rankings plus the winner's stored bytes: a ~15%-
+corrupted probe recovers the exact original. Both calls take request
+structs (`field_imprint_req_t` / `field_recall_req_t` +
+`field_recall_out_t` in `usys.h`; layouts `_Static_assert`-pinned
+against the kernel twins) whose `region` field must be named EXACTLY by
+the caller's `CAP_RESOURCE_FIELD` capability — granted declaratively to
+services (`grant_field` + `field_region`, scrubbed and re-minted on
+every restart so a reborn or successor service never inherits its
+predecessor's memories), never to spawned `/bin` programs. A capless
+caller is denied `-4` before the kernel reads its request; a
+wrong-region request by a cap holder is also `-4` (that comparison IS
+the isolation boundary). Recall's retrieval reinforcement (an energy
+boost on the winner) only happens when the caller also holds the write
+right — a read-only capability never mutates. A degenerate
+all-equal-bytes probe returns `n=0` (success); as a pattern it is `-1`
+EINVAL. This is the RANKED holographic memory kind; `ghostd`'s
+iterative attractor field is a deliberately different, living memory
+that stays in ring 3.
 
 **Conventions.** A non-negative return is success (often a count or fd);
 a negative return is an errno: `-4` EPERM (no capability authorises it),
