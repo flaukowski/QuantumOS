@@ -5,6 +5,11 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>QuantumOS — a real OS, booting in your browser</title>
 <meta name="description" content="Boot QuantumOS, a 64-bit hobby operating system, in your browser tab and type into a live shell. No install, no server — the whole machine is emulated in WebAssembly.">
+<!-- MUST be first: on a static host that can't send COOP/COEP (GitHub Pages),
+     this registers a service worker and reloads ONCE to enable SharedArrayBuffer,
+     which qemu-wasm needs. Loading it before anything else means the reload
+     happens before the ~40MB emulator is fetched, not after it fails. -->
+<script src="./coi-serviceworker.js"></script>
 <link rel="stylesheet" href="./vendor/xterm.css">
 <style>
   :root {
@@ -209,10 +214,6 @@
     </div>
   </footer>
 </div>
-
-<!-- Cross-origin isolation for SharedArrayBuffer (GitHub Pages can't set COOP/COEP
-     headers, so this service worker re-serves the page isolated). -->
-<script src="./coi-serviceworker.js"></script>
 
 <!-- terminal + pty (vendored; globals: Terminal, openpty) -->
 <script src="./vendor/xterm.js"></script>

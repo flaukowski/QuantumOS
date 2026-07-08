@@ -29,20 +29,25 @@ await page.goto(URL, { waitUntil: "domcontentloaded" });
 
 // The page accumulates the FULL serial stream into window.__serial (xterm's
 // own buffer is only the visible viewport, so it scrolls the banner away).
-const serial = () => page.evaluate(() => window.__serial || "");
+// coi-serviceworker reloads the page once on first load, which destroys the
+// execution context mid-evaluate — treat that as "nothing yet", not a crash.
+const evalSafe = async (fn, dflt) => { try { return await page.evaluate(fn); } catch { return dflt; } };
+const serial = () => evalSafe(() => window.__serial || "", "");
+const booted = () => evalSafe(() => !!window.__booted, false);
 const t0 = Date.now();
 
 // 1. Boots to the qsh banner (the page flips window.__booted on detection).
-let booted = false;
+//    On a headers-less host this waits through the coi-serviceworker reload.
+let didBoot = false;
 for (let i = 0; i < 90; i++) {
-  if (await page.evaluate(() => !!window.__booted)) { booted = true; break; }
+  if (await booted()) { didBoot = true; break; }
   await new Promise((r) => setTimeout(r, 1000));
 }
-if (!booted) fail("never reached the qsh banner", (await serial()).slice(-1500));
+if (!didBoot) fail("never reached the qsh banner", (await serial()).slice(-1500));
 console.log(`OK: booted to qsh in ${((Date.now() - t0) / 1000).toFixed(1)}s`);
 
 // 2. The loader was replaced by the live prompt.
-if (!(await page.evaluate(() => document.getElementById("loader")?.hasAttribute("hidden")))) {
+if (!(await evalSafe(() => document.getElementById("loader")?.hasAttribute("hidden"), false))) {
   fail("boot banner seen but the loading overlay never cleared");
 }
 if (!(await serial()).includes(BANNER)) fail("banner not present in the serial stream");
