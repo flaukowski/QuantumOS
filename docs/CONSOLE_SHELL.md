@@ -182,9 +182,13 @@ output device.
 | `vga_console_sync()` | Move the HW cursor to the pen position — 4 port writes, batched once per write because every port write is a trap under QEMU TCG |
 | `vga_panic_banner(msg)` | Red panic banner, independent of console state; called from `boot_panic` (boot.S) so early bring-up failures are visible without a serial cable. Skipped when a linear framebuffer owns the display |
 
-**Tee points**: `console_write()` (the `SYS_CONS` sink) and `boot_log()`
-write serial first, then the screen when the console is active. Serial
-remains authoritative — every CI gate reads it, none changed.
+**Tee points**: `console_write()` (the `SYS_CONS` sink), `boot_log()`,
+and `user_console_write()` (the `SYS_WRITE` sink — every ring-3
+program's `[user pid=N]` output) write serial first, then the screen
+when the console is active. The `SYS_WRITE` tee was the third
+real-laptop finding: citizens ran to a clean exit 0 while their output
+went only to a serial port that did not exist. Serial remains
+authoritative — every CI gate reads it, none changed.
 `console_write` also *latches off* a dead COM1 (transmit register never
 drains within the spin cap): a machine with no UART behind 0x3F8 pays
 the spin once, not per byte forever, and the screen carries on alone.
@@ -243,6 +247,10 @@ the console layer may ever spin on a status bit the hardware can float.
   at all: ports float exactly like serial-less hardware) and verifies
   the Lamport boot attestation arriving on COM2 — proof that full
   service bring-up completes with no console serial port.
+- `make ci-smoke-screen` — dumps the live VGA text cells through the
+  QEMU monitor (`scripts/check_vga_text.py`) and asserts a ring-3
+  `[user pid=` line is actually ON the screen. Serial gates can't see
+  the display; this one reads what the operator reads.
 
 ## Known limits / follow-ups
 

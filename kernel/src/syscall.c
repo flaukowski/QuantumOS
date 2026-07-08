@@ -23,6 +23,7 @@
 #include <kernel/service.h>
 #include <kernel/com2_uart.h>
 #include <kernel/console.h>
+#include <kernel/vga.h>
 #include <kernel/initrd.h>
 #include <kernel/ramfs.h>
 #include <kernel/ata.h>
@@ -83,13 +84,33 @@ static int in_user_range(uint64_t addr) {
     return addr >= USER_VBASE && addr < 0x80000000UL;
 }
 
-/* Print "[user pid=N] msg" atomically enough for the boot console */
+/* Print "[user pid=N] msg" atomically enough for the boot console.
+ * Tees to the VGA screen console (no-op until enabled): on serial-less
+ * hardware SYS_WRITE was invisible — the third real-laptop finding was
+ * citizens running to a clean exit 0 with nobody able to see their
+ * output. The pid keeps the serial log's 16-digit hex form on screen
+ * too, so the two transcripts stay grep-compatible. */
 static void user_console_write(uint32_t pid, const char *msg) {
     early_console_write("[user pid=");
     early_console_write_hex(pid);
     early_console_write("] ");
     early_console_write(msg);
     early_console_write("\r\n");
+    if (vga_console_active()) {
+        uint64_t p = pid; /* widen BEFORE shifting: >>60 on a u32 is UB */
+        char hex[17];
+        for (int i = 0; i < 16; i++) {
+            uint8_t nib = (uint8_t)((p >> (60 - 4 * i)) & 0xF);
+            hex[i] = (char)(nib < 10 ? '0' + nib : 'A' + nib - 10);
+        }
+        hex[16] = '\0';
+        vga_console_puts("[user pid=");
+        vga_console_puts(hex);
+        vga_console_puts("] ");
+        vga_console_puts(msg);
+        vga_console_putc('\n');
+        vga_console_sync();
+    }
 }
 
 /* ============================================================================
