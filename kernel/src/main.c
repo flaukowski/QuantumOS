@@ -459,6 +459,48 @@ static int cmdline_has_word(const char *cmd, const char *word) {
     return 0;
 }
 
+/* Decode `<key>A.B.C.D` at a whitespace token boundary into out[4].
+ * Returns 1 on a well-formed dotted quad, 0 otherwise (epic #97). */
+static int cmdline_get_ipv4(const char *cmd, const char *key, uint8_t out[4]) {
+    for (const char *p = cmd; *p; p++) {
+        if (p != cmd && p[-1] != ' ' && p[-1] != '\t') {
+            continue;
+        }
+        int k = 0;
+        while (key[k] && p[k] == key[k]) {
+            k++;
+        }
+        if (key[k] != '\0') {
+            continue;
+        }
+        const char *h = p + k;
+        int oi = 0, val = -1;
+        for (;;) {
+            char c = *h;
+            if (c >= '0' && c <= '9') {
+                val = (val < 0 ? 0 : val) * 10 + (c - '0');
+                if (val > 255) {
+                    return 0;
+                }
+                h++;
+            } else if (c == '.' || c == '\0' || c == ' ' || c == '\t') {
+                if (val < 0 || oi >= 4) {
+                    return 0;
+                }
+                out[oi++] = (uint8_t)val;
+                val = -1;
+                if (c != '.') {
+                    return oi == 4;
+                }
+                h++;
+            } else {
+                return 0;
+            }
+        }
+    }
+    return 0;
+}
+
 // Match "qseed=" at p; on hit, decode up to 16 hex digits into a u64. Also
 // scans for the bare `quiet` token (clean interactive console).
 static void parse_boot_cmdline(uint32_t info_addr) {
@@ -476,62 +518,19 @@ static void parse_boot_cmdline(uint32_t info_addr) {
         g_boot_quiet = 1;
     }
 
-    /* Static IP (epic #97): `ip=A.B.C.D` at a token boundary configures a
-     * static address and skips the DHCP client — the enabler for two
-     * QuantumOS guests on a raw L2 segment with no DHCP server. Matched
-     * only at a whitespace boundary so it can never trip on a substring. */
-    for (const char *p = cmd; *p; p++) {
-        if (p != cmd && p[-1] != ' ' && p[-1] != '\t') {
-            continue;
-        }
-        static const char ipkey[] = "ip=";
-        int k = 0;
-        while (ipkey[k] && p[k] == ipkey[k]) {
-            k++;
-        }
-        if (ipkey[k] != '\0') {
-            continue;
-        }
-        const char *h = p + k;
-        uint8_t octets[4];
-        int oi = 0;
-        int val = -1;
-        int ok = 1;
-        for (;;) {
-            char c = *h;
-            if (c >= '0' && c <= '9') {
-                if (val < 0) {
-                    val = 0;
-                }
-                val = val * 10 + (c - '0');
-                if (val > 255) {
-                    ok = 0;
-                    break;
-                }
-                h++;
-            } else if (c == '.' || c == '\0' || c == ' ' || c == '\t') {
-                if (val < 0 || oi >= 4) {
-                    ok = 0;
-                    break;
-                }
-                octets[oi++] = (uint8_t)val;
-                val = -1;
-                if (c != '.') {
-                    break; /* end of token */
-                }
-                h++;
-            } else {
-                ok = 0;
-                break;
-            }
-        }
-        if (ok && oi == 4) {
-            net_set_static_ip(octets);
-            boot_log("NET: static ip configured from cmdline (ip=)");
-        } else {
-            boot_log("NET: malformed ip= on cmdline — ignored");
-        }
-        break;
+    /* Static IP + coupling peer (epic #97): `ip=A.B.C.D` configures a
+     * static address and skips DHCP (the enabler for two guests on a raw
+     * L2); `peer=A.B.C.D` names the field-coupling partner. Both are
+     * matched only at a whitespace token boundary so they can never trip
+     * on a substring, and both share the dotted-quad decoder below. */
+    uint8_t octets[4];
+    if (cmdline_get_ipv4(cmd, "ip=", octets)) {
+        net_set_static_ip(octets);
+        boot_log("NET: static ip configured from cmdline (ip=)");
+    }
+    if (cmdline_get_ipv4(cmd, "peer=", octets)) {
+        net_set_peer_ip(octets);
+        boot_log("NET: coupling peer configured from cmdline (peer=)");
     }
 
     static const char key[] = "qseed=";

@@ -65,6 +65,20 @@ void net_set_static_ip(const uint8_t ip[4]) {
     static_pending = 1;
 }
 
+/* Field-coupling peer (epic #97): the `peer=` boot token names the other
+ * node's IP. Stored packed so SYSINFO_PEER can hand it to fieldsyncd in a
+ * single uncapped syscall return (0 = no peer configured). */
+static uint32_t peer_ip_packed;
+
+void net_set_peer_ip(const uint8_t ip[4]) {
+    peer_ip_packed = (uint32_t)ip[0] | ((uint32_t)ip[1] << 8) | ((uint32_t)ip[2] << 16) |
+                     ((uint32_t)ip[3] << 24);
+}
+
+uint32_t net_get_peer_ip(void) {
+    return peer_ip_packed;
+}
+
 /* ---- packet headers (all packed). eth_hdr_t / ip_hdr_t / udp_hdr_t are
  * shared and live in net_internal.h; arp_pkt_t and dhcp_hdr_t are used
  * only by the control plane and stay here. ---- */

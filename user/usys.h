@@ -72,6 +72,7 @@
 #define SYSINFO_MEM 1
 #define SYSINFO_TIME 2
 #define SYSINFO_QUIET 3
+#define SYSINFO_PEER 4 /* epic #97: packed peer= IP, 0 = none */
 
 static inline long usys0(long n) {
     long r;

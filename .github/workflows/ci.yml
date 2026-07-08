@@ -588,6 +588,8 @@ jobs:
       run: make ci-smoke-http
     - name: Two guests exchange UDP over a raw L2 (static IP + ARP responder, epic #97)
       run: make ci-smoke-2net
+    - name: Two kernels couple their oscillator fields over UDP (epic #97)
+      run: make ci-smoke-fieldsync
 
   integration:
     name: Integration Tests

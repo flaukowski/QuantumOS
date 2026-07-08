@@ -35,6 +35,21 @@
 #define GHOST_REMEMBER 1 /* imprint bits into slot */
 #define GHOST_RECALL 2   /* relax from probe, identify basin */
 #define GHOST_STATUS 3   /* report R, live count, lambda */
+#define GHOST_SNAPSHOT 4 /* reply carries this node's 256 phase bytes + R_x (epic #97) */
+#define GHOST_COUPLE 5   /* request carries the PEER's 256 phase bytes to fold in (epic #97) */
+
+/* Wide phase message (epic #97): 256 oscillators as one byte each — the
+ * TOP byte of each phase "turn", so a difference is exact modular u8
+ * arithmetic (no signed-shift trap). Used both ways: fieldsyncd asks
+ * ghostd for a GHOST_SNAPSHOT (reply = this node's phases), sends them to
+ * the peer over UDP, and forwards the peer's phases back as a
+ * GHOST_COUPLE request. 260 bytes — well under IPC_MAX_MESSAGE_SIZE. */
+typedef struct {
+    uint8_t op;   /* GHOST_SNAPSHOT (reply) or GHOST_COUPLE (request) */
+    uint8_t rx_x; /* cross-node order parameter R_x, hundredths [0,100] (reply only) */
+    uint8_t pad[2];
+    uint8_t phase[GHOST_N]; /* top byte of each theta */
+} ghost_wide_t;
 
 /* Reply .match sentinels (>= 0 is the matched slot index) */
 #define GHOST_NOMATCH (-1)  /* relaxation converged to nothing stored */

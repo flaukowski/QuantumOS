@@ -93,6 +93,54 @@ static inline int ghost_sinq(uint32_t th) {
 
 /* ---- field + slot state (zeroed .bss) ---- */
 static uint32_t theta[GHOST_N];
+
+/* ---- cross-node coupling state (epic #97) ---- */
+static uint8_t remote_phase[GHOST_N]; /* peer's last-seen phases (top byte of turns) */
+static int remote_fresh;              /* a GHOST_COUPLE frame is waiting to fold in */
+static int coupling_mode;             /* peer is active — run the coupling regime */
+static uint32_t couple_frames;        /* frames folded in (gate: >= MIN before a verdict) */
+
+#define COUPLE_K 16384 /* Q15-sin -> turn scale: max ~1/8 turn nudge per frame */
+#define COUPLE_MIN_FRAMES 4
+
+/* Integer sqrt of a u64, bit-by-bit (ghostd had none). */
+static uint32_t ghost_isqrt(uint64_t x) {
+    uint64_t root = 0, bit = 1ULL << 62;
+    while (bit > x)
+        bit >>= 2;
+    while (bit) {
+        if (x >= root + bit) {
+            x -= root + bit;
+            root = (root >> 1) + bit;
+        } else {
+            root >>= 1;
+        }
+        bit >>= 2;
+    }
+    return (uint32_t)root;
+}
+
+/* Cross-node order parameter R_x (hundredths): over the 256 phase
+ * DIFFERENCES d_i = remote_i - local_i, R_x = |mean e^{j d_i}|. It is 1
+ * when the two fields are phase-locked (a constant offset counts as
+ * locked, the standard Kuramoto measure) and ~0 when uncorrelated. This
+ * is the number the gate asserts RISES as coupling pulls the fields
+ * together — and it starts LOW only because each node seeds its field
+ * from its own qseed (divergent init), so a green R_x cannot be faked by
+ * two identical frozen fields. */
+static int cross_order_param(void) {
+    int64_t sc = 0, ss = 0;
+    for (int i = 0; i < GHOST_N; i++) {
+        uint32_t rt = (uint32_t)remote_phase[i] << 24;
+        uint32_t d = rt - theta[i];
+        sc += ghost_cos_q15(d);
+        ss += ghost_sinq(d);
+    }
+    uint64_t mag2 = (uint64_t)(sc * sc + ss * ss);
+    uint32_t mag = ghost_isqrt(mag2);    /* 0 .. N*32767 */
+    uint32_t rx = mag / (GHOST_N * 328); /* /N then Q15->hundredths (32767/100~=328) */
+    return rx > 100 ? 100 : (int)rx;
+}
 static uint32_t slot_bits[GHOST_M][GHOST_PW];
 static uint8_t slot_live[GHOST_M];
 static uint64_t slot_imprint_tick[GHOST_M];
@@ -386,9 +434,70 @@ static void reap_expired(uint64_t now) {
 /* λ-damping: hold the free-running order parameter inside its band. Runs
  * only on idle ticks; never touches stored patterns, so it cannot affect
  * a subsequent RECALL (which re-initialises the field from the probe). */
+/* Seed the field with node-specific random phases (epic #97). Drawn from
+ * noise_byte() — qseed-derived when the node booted with a qseed — so two
+ * nodes with different qseed start DIVERGENT. This is what makes the R_x
+ * gate meaningful: without it two nodes running the same self-test would
+ * sit in the same basin and be trivially "synced". */
+static void couple_seed_divergent(void) {
+    for (int i = 0; i < GHOST_N; i++) {
+        theta[i] = (uint32_t)noise_byte() << 24;
+    }
+}
+
+/* Fold the peer's last-seen phases into ours: a Kuramoto nudge toward the
+ * remote phase at each oscillator. Applied ONCE per received frame (not
+ * per tick), so it chases a fresh target rather than overshooting a stale
+ * one. Mutual on both nodes -> consensus. */
+static void couple_apply(void) {
+    for (int i = 0; i < GHOST_N; i++) {
+        uint32_t rt = (uint32_t)remote_phase[i] << 24;
+        int s = ghost_sinq(rt - theta[i]); /* sin(remote - local), Q15 */
+        theta[i] += (uint32_t)((int64_t)s * COUPLE_K);
+    }
+}
+
+static void couple_tick(uint64_t now) {
+    if (remote_fresh) {
+        couple_apply();
+        couple_frames++;
+        remote_fresh = 0;
+    }
+    field_publish();
+    if ((now - last_lambda_log) >= GHOST_LOG_INTERVAL && couple_frames > 0) {
+        int rx = cross_order_param();
+        char b[80];
+        int o = ghost_put(b, 0, "FIELDSYNC: R_x=0.");
+        if (rx < 10) {
+            b[o++] = '0';
+        }
+        o = ghost_put_u(b, o, (unsigned)rx);
+        if (rx >= 100) {
+            /* "1.00" reads cleaner than "0.100" */
+            o = ghost_put(b, 0, "FIELDSYNC: R_x=1.00");
+        }
+        o = ghost_put(b, o, " frames=");
+        o = ghost_put_u(b, o, couple_frames);
+        b[o] = 0;
+        logline(b);
+        if (rx >= 80 && couple_frames >= COUPLE_MIN_FRAMES) {
+            logline("FIELDSYNC: SYNCHRONIZED (R_x>=0.80)");
+        }
+        last_lambda_log = now;
+    }
+}
+
 static void free_tick(void) {
     uint64_t now = ticks();
     reap_expired(now);
+    /* Coupling regime (epic #97): once a peer is exchanging phases, the
+     * field's dynamics ARE the cross-node coupling — no shared local
+     * attractor doing the work, so a rising R_x can only mean the wire
+     * carried the peer's state. Replaces the idle lambda/relax path. */
+    if (coupling_mode) {
+        couple_tick(now);
+        return;
+    }
     field_publish(); /* breathe the live view even at idle */
     if (live_count == 0)
         return;
@@ -470,6 +579,39 @@ static void handle(const ghost_req_t *req, long sender) {
     field_publish();
 }
 
+/* Wide-message handler (epic #97): GHOST_SNAPSHOT replies with this node's
+ * phases (fieldsyncd sends them to the peer); GHOST_COUPLE ingests the
+ * peer's phases with NO reply (an ack would just flood fieldsyncd's
+ * mailbox). The first COUPLE enters coupling mode and seeds the field
+ * divergently. */
+static void handle_wide(const ghost_wide_t *w, long sender) {
+    if (w->op == GHOST_SNAPSHOT) {
+        ghost_wide_t rep;
+        for (unsigned i = 0; i < sizeof(rep); i++) {
+            ((uint8_t *)&rep)[i] = 0;
+        }
+        rep.op = GHOST_SNAPSHOT;
+        rep.rx_x = coupling_mode ? (uint8_t)cross_order_param() : 0;
+        for (int i = 0; i < GHOST_N; i++) {
+            rep.phase[i] = (uint8_t)(theta[i] >> 24);
+        }
+        send_to(sender, (const char *)&rep, (long)sizeof(rep));
+        return;
+    }
+    if (w->op == GHOST_COUPLE) {
+        if (!coupling_mode) {
+            coupling_mode = 1;
+            couple_seed_divergent();
+            logline("FIELDSYNC: coupling engaged — field seeded divergent");
+        }
+        for (int i = 0; i < GHOST_N; i++) {
+            remote_phase[i] = w->phase[i];
+        }
+        remote_fresh = 1;
+        /* No reply. */
+    }
+}
+
 void _start(void) {
     /* Rebirth: a nonzero service restart count means the watchdog brought
      * us back — the imprinted field was lost with the old process. */
@@ -483,17 +625,26 @@ void _start(void) {
     /* Decide the perturbation-noise provenance and announce it honestly. */
     detect_noise_source();
 
-    char buf[sizeof(ghost_req_t) + 8];
+    /* Buffer sized for the WIDE coupling message (260 B), not just
+     * ghost_req_t (36 B) — the epic #97 fix for the truncation that would
+     * otherwise feed stack garbage in as remote phases. */
+    char buf[sizeof(ghost_wide_t) + 8];
 
     while (1) {
         long sender = recv_msg(buf, sizeof(buf));
         if (sender == 0) {
-            free_tick(); /* Resonant Constraint Law + forgetting */
+            free_tick(); /* Resonant Constraint Law + forgetting (or coupling) */
             heartbeat(); /* stay live for the watchdog */
             yield();
             continue;
         }
-        handle((const ghost_req_t *)buf, sender);
+        /* The op byte is at offset 0 in both message layouts. */
+        uint8_t op = (uint8_t)buf[0];
+        if (op == GHOST_SNAPSHOT || op == GHOST_COUPLE) {
+            handle_wide((const ghost_wide_t *)buf, sender);
+        } else {
+            handle((const ghost_req_t *)buf, sender);
+        }
         heartbeat();
     }
 }

@@ -31,6 +31,12 @@ void net_init(void);
  * no DHCP server. Idempotent; a later call overrides. */
 void net_set_static_ip(const uint8_t ip[4]);
 
+/* Field-coupling peer address (epic #97), from the `peer=` boot token.
+ * Set before net_init; read (packed, little-endian, 0 = unset) by
+ * fieldsyncd via SYSINFO_PEER. */
+void net_set_peer_ip(const uint8_t ip[4]);
+uint32_t net_get_peer_ip(void);
+
 /* Boot self-test: ARP-resolve the gateway, obtain a DHCP lease, ping the
  * gateway, and resolve a hostname — proving the stack end to end. Runs in
  * the net kernel thread (interrupts live), not inline in early boot. */
