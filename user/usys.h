@@ -36,6 +36,8 @@
 #define SYS_RESOLVE 26
 #define SYS_UDP 27
 #define SYS_TCP 28
+#define SYS_IMPRINT 29
+#define SYS_RECALL 30
 
 /* SYS_RESOLVE / SYS_UDP: still pending (poll again) / ring full. */
 #define RESOLVE_WOULDBLOCK (-11)
@@ -285,6 +287,51 @@ typedef udp_req_t tcp_req_t;
 
 static inline long tcp_(long op, tcp_req_t *req) {
     return usys2(SYS_TCP, op, (long)req);
+}
+
+/* SYS_IMPRINT / SYS_RECALL request blocks (epic #95): the kernel
+ * holographic field. Layouts MUST stay byte-identical to the kernel's
+ * field_*_k_t twins (76 / 76 / 136 bytes, all 4-byte members + byte
+ * arrays, no padding). The capability must name EXACTLY `region`
+ * (CAP_RESOURCE_FIELD, granted declaratively to services); a capless or
+ * wrong-region caller gets -4 EPERM. IMPRINT returns the slot index;
+ * an all-equal-bytes pattern is -1 EINVAL (no direction to resonate
+ * along). RECALL returns 0 with out->n rankings (n=0 = nothing
+ * resonates — success); the winner's stored bytes come back in
+ * out->winner (the completion a noisy probe recovers). Retrieval
+ * reinforcement only happens for callers who also hold the write right. */
+#define FIELD_PAT_MAX 64
+#define FIELD_RANK_MAX 8
+
+typedef struct {
+    unsigned int region;
+    unsigned int len; /* 1..FIELD_PAT_MAX */
+    int energy_q15;   /* 0 => kernel default (0x4000) */
+    unsigned char pattern[FIELD_PAT_MAX];
+} field_imprint_req_t;
+
+typedef struct {
+    unsigned int region;
+    unsigned int len;
+    unsigned int k; /* 1..FIELD_RANK_MAX rankings wanted */
+    unsigned char probe[FIELD_PAT_MAX];
+} field_recall_req_t;
+
+typedef struct {
+    unsigned int n;
+    struct {
+        unsigned int slot;
+        int score_q15;
+    } rank[FIELD_RANK_MAX];
+    unsigned int winner_len;
+    unsigned char winner[FIELD_PAT_MAX];
+} field_recall_out_t;
+
+static inline long imprint_(field_imprint_req_t *req) {
+    return usys1(SYS_IMPRINT, (long)req);
+}
+static inline long recall_(field_recall_req_t *req, field_recall_out_t *out) {
+    return usys2(SYS_RECALL, (long)req, (long)out);
 }
 
 /* Start an initrd ELF as a new ring-3 process. `cmd` is a command line:

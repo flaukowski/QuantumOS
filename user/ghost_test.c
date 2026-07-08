@@ -164,6 +164,55 @@ void _start(void) {
         }
     }
 
+    /* And for the kernel holographic field (epic #95): a capless IMPRINT
+     * and a capless RECALL must each be EPERM — checked EXACTLY (-4), so
+     * an unimplemented syscall (ENOSYS -3) or a bad-argument path
+     * (EINVAL -1) can never satisfy these gates. The capability check
+     * precedes every argument check AND any read of the request struct,
+     * so a capless caller costs the kernel nothing. Two distinct gate
+     * lines: grep -q cannot count, so one line per syscall. */
+    {
+        field_imprint_req_t freq;
+        for (unsigned i = 0; i < sizeof(freq); i++) {
+            ((unsigned char *)&freq)[i] = 0;
+        }
+        freq.region = 0;
+        freq.len = 6;
+        freq.pattern[0] = 'f';
+        freq.pattern[1] = 'o';
+        freq.pattern[2] = 'r';
+        freq.pattern[3] = 'g';
+        freq.pattern[4] = 'e';
+        freq.pattern[5] = 'd';
+        long fldr = imprint_(&freq);
+        if (fldr == -4) {
+            write_str("FIELD: capless imprint denied (EPERM)");
+        } else {
+            write_str("FIELD: WARNING — capless imprint was NOT denied");
+        }
+
+        field_recall_req_t rreq;
+        for (unsigned i = 0; i < sizeof(rreq); i++) {
+            ((unsigned char *)&rreq)[i] = 0;
+        }
+        rreq.region = 0;
+        rreq.len = 6;
+        rreq.k = 1;
+        rreq.probe[0] = 'f';
+        rreq.probe[1] = 'o';
+        rreq.probe[2] = 'r';
+        rreq.probe[3] = 'g';
+        rreq.probe[4] = 'e';
+        rreq.probe[5] = 'd';
+        field_recall_out_t rout;
+        long rclr = recall_(&rreq, &rout);
+        if (rclr == -4) {
+            write_str("FIELD: capless recall denied (EPERM)");
+        } else {
+            write_str("FIELD: WARNING — capless recall was NOT denied");
+        }
+    }
+
     const uint32_t seeds[3] = {GHOST_SEED_0, GHOST_SEED_1, GHOST_SEED_2};
     uint32_t pats[3][GHOST_PW];
 

@@ -29,6 +29,7 @@
 #include <kernel/ata.h>
 #include <kernel/net.h>
 #include <kernel/rtc.h>
+#include <kernel/field.h>
 #include <kernel/boot.h>
 
 /* Embedded user programs (kernel/src/user_blob.S) */
@@ -1161,6 +1162,90 @@ bool field_snapshot_take(int8_t *dst, int *out_n) {
 }
 
 /* ============================================================================
+ * SYS_IMPRINT / SYS_RECALL — the holographic field as a kernel memory
+ * primitive (epic #95). Region-scoped by CAP_RESOURCE_FIELD: the caller's
+ * capability must name EXACTLY the region in the request. The capless
+ * check runs before any user memory is read — a capless caller always
+ * observes exactly EPERM (the ghost_test attack gate depends on it).
+ * ============================================================================ */
+
+static uint64_t sys_imprint(uint32_t pid, uint64_t req_ptr) {
+    /* Capless callers are denied before ANY user memory is read. The
+     * region id lives inside the request struct, so the specific-region
+     * match runs after copy-in; this first check only asks "do you hold
+     * any field-write capability at all?". */
+    uint32_t any_region = 0;
+    if (cap_find(pid, CAP_RESOURCE_FIELD, CAP_WRITE, &any_region) != CAP_SUCCESS) {
+        return SYSCALL_EPERM;
+    }
+    /* Whole-struct endpoint validation (the sys_udp precedent). */
+    if (!in_user_range(req_ptr) || !in_user_range(req_ptr + sizeof(field_imprint_req_k_t) - 1)) {
+        return SYSCALL_EFAULT;
+    }
+    field_imprint_req_k_t req;
+    const uint8_t *usrc = (const uint8_t *)req_ptr;
+    for (size_t i = 0; i < sizeof(req); i++) {
+        ((uint8_t *)&req)[i] = usrc[i];
+    }
+    /* The cap must name EXACTLY the requested region (cap_find_resource,
+     * the sys_send_to precedent): holding region 0 must never reach
+     * region 1 — this comparison IS the isolation boundary. */
+    if (cap_find_resource(pid, CAP_RESOURCE_FIELD, CAP_WRITE, req.region) != CAP_SUCCESS) {
+        return SYSCALL_EPERM;
+    }
+    if (req.len == 0 || req.len > FIELD_PAT_MAX) {
+        return SYSCALL_EINVAL;
+    }
+    int64_t slot =
+        field_imprint(req.region, req.pattern, req.len, req.energy_q15, timer_get_ticks());
+    if (slot < 0) {
+        return SYSCALL_EINVAL; /* degenerate (all-equal-bytes) pattern */
+    }
+    return (uint64_t)slot;
+}
+
+static uint64_t sys_recall(uint32_t pid, uint64_t req_ptr, uint64_t out_ptr) {
+    uint32_t any_region = 0;
+    if (cap_find(pid, CAP_RESOURCE_FIELD, CAP_READ, &any_region) != CAP_SUCCESS) {
+        return SYSCALL_EPERM;
+    }
+    if (!in_user_range(req_ptr) || !in_user_range(req_ptr + sizeof(field_recall_req_k_t) - 1) ||
+        !in_user_range(out_ptr) || !in_user_range(out_ptr + sizeof(field_recall_out_k_t) - 1)) {
+        return SYSCALL_EFAULT;
+    }
+    field_recall_req_k_t req;
+    const uint8_t *usrc = (const uint8_t *)req_ptr;
+    for (size_t i = 0; i < sizeof(req); i++) {
+        ((uint8_t *)&req)[i] = usrc[i];
+    }
+    if (cap_find_resource(pid, CAP_RESOURCE_FIELD, CAP_READ, req.region) != CAP_SUCCESS) {
+        return SYSCALL_EPERM;
+    }
+    if (req.len == 0 || req.len > FIELD_PAT_MAX || req.k == 0 || req.k > FIELD_RANK_MAX) {
+        return SYSCALL_EINVAL;
+    }
+    /* Retrieval reinforcement writes the energy landscape: apply it only
+     * when the caller ALSO holds the write right — a read-only capability
+     * must never mutate (adversarial-review commitment). */
+    int reinforce =
+        cap_find_resource(pid, CAP_RESOURCE_FIELD, CAP_WRITE, req.region) == CAP_SUCCESS;
+    /* Compute into kernel memory, then one whole-struct copy-out of the
+     * pre-validated span — the caller never sees a partially-written
+     * result. Static is safe: syscalls run cli'd on one CPU (the
+     * sys_readdir static-buffer justification). */
+    static field_recall_out_k_t out;
+    if (field_recall(req.region, req.probe, req.len, req.k, reinforce, &out, timer_get_ticks()) <
+        0) {
+        return SYSCALL_EINVAL;
+    }
+    uint8_t *udst = (uint8_t *)out_ptr;
+    for (size_t i = 0; i < sizeof(out); i++) {
+        udst[i] = ((const uint8_t *)&out)[i];
+    }
+    return 0;
+}
+
+/* ============================================================================
  * Dispatch
  * ============================================================================ */
 
@@ -1254,6 +1339,12 @@ static void syscall_dispatch(cpu_state_t *state) {
         break;
     case SYS_TCP:
         state->rax = sys_tcp(pid, state->rdi, state->rsi);
+        break;
+    case SYS_IMPRINT:
+        state->rax = sys_imprint(pid, state->rdi);
+        break;
+    case SYS_RECALL:
+        state->rax = sys_recall(pid, state->rdi, state->rsi);
         break;
     default:
         state->rax = SYSCALL_ENOSYS;
@@ -1727,6 +1818,11 @@ void user_shell_init(uint32_t ghostd_pid) {
         .grant_fswrite = 1,
         /* Network access: the shell alone may resolve hostnames (SYS_RESOLVE). */
         .grant_net = 1,
+        /* Holographic memory (epic #95): the shell holds field region 0 —
+         * `imprint`/`recall` builtins give the operator associative
+         * memory at the prompt. Scrubbed + re-minted on every restart. */
+        .grant_field = 1,
+        .field_region = 0,
     };
 
     uint32_t sid = 0;

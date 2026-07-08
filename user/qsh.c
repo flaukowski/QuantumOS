@@ -87,8 +87,8 @@ static const char *arg_of(const char *line, const char *cmd) {
  * ------------------------------------------------------------------ */
 
 static void cmd_help(void) {
-    out("qsh: commands: help echo ps free uptime date pid ls cat write rm sync nslookup udping "
-        "http run qrand qseed ghost clear exit\r\n");
+    out("qsh: commands: help echo ps free uptime date pid ls cat write rm sync imprint recall "
+        "fieldtest nslookup udping http run qrand qseed ghost clear exit\r\n");
 }
 
 /* write <path> <text>: create/truncate an overlay file with the text
@@ -154,6 +154,145 @@ static void cmd_rm(const char *path) {
         o = ghost_put_u(b, o, (unsigned)(-r));
         o = ghost_put(b, o, ")\r\n");
         out_bytes(b, o);
+    }
+}
+
+/* ------------------------------------------------------------------ *
+ * Kernel holographic field (epic #95): the shell holds the
+ * CAP_RESOURCE_FIELD capability over region 0, so the operator gets
+ * associative memory at the prompt — imprint text, recall it later
+ * from a corrupted probe. The "FIELD:" output prefixes are merge
+ * gates; their line forms cannot be produced by echoed input.
+ * ------------------------------------------------------------------ */
+#define QSH_FIELD_REGION 0u
+
+static void cmd_imprint(const char *args) {
+    long n = str_len(args);
+    if (n <= 0) {
+        out("qsh: imprint: usage: imprint <text>\r\n");
+        return;
+    }
+    if (n > FIELD_PAT_MAX) {
+        n = FIELD_PAT_MAX;
+    }
+    field_imprint_req_t req;
+    req.region = QSH_FIELD_REGION;
+    req.len = (unsigned)n;
+    req.energy_q15 = 0; /* kernel default */
+    for (long i = 0; i < FIELD_PAT_MAX; i++) {
+        req.pattern[i] = i < n ? (unsigned char)args[i] : 0;
+    }
+    long r = imprint_(&req);
+    if (r < 0) {
+        char b[96];
+        int o = ghost_put(b, 0, "qsh: imprint failed (err ");
+        o = ghost_put_u(b, o, (unsigned)(-r));
+        o = ghost_put(b, o, ")\r\n");
+        out_bytes(b, o);
+        return;
+    }
+    char b[96];
+    int o = ghost_put(b, 0, "FIELD: imprinted slot ");
+    o = ghost_put_u(b, o, (unsigned)r);
+    o = ghost_put(b, o, "\r\n");
+    out_bytes(b, o);
+}
+
+static void cmd_recall(const char *args) {
+    long n = str_len(args);
+    if (n <= 0) {
+        out("qsh: recall: usage: recall <probe text>\r\n");
+        return;
+    }
+    if (n > FIELD_PAT_MAX) {
+        n = FIELD_PAT_MAX;
+    }
+    field_recall_req_t req;
+    req.region = QSH_FIELD_REGION;
+    req.len = (unsigned)n;
+    req.k = 3;
+    for (long i = 0; i < FIELD_PAT_MAX; i++) {
+        req.probe[i] = i < n ? (unsigned char)args[i] : 0;
+    }
+    field_recall_out_t res;
+    long r = recall_(&req, &res);
+    if (r < 0) {
+        char b[96];
+        int o = ghost_put(b, 0, "qsh: recall failed (err ");
+        o = ghost_put_u(b, o, (unsigned)(-r));
+        o = ghost_put(b, o, ")\r\n");
+        out_bytes(b, o);
+        return;
+    }
+    if (res.n == 0) {
+        out("FIELD: recall empty (n=0)\r\n");
+        return;
+    }
+    char b[192];
+    int o = ghost_put(b, 0, "FIELD: winner=\"");
+    for (unsigned i = 0; i < res.winner_len && o < (int)sizeof(b) - 40; i++) {
+        b[o++] = (char)res.winner[i];
+    }
+    o = ghost_put(b, o, "\" slot=");
+    o = ghost_put_u(b, o, res.rank[0].slot);
+    o = ghost_put(b, o, " score=");
+    int sc = res.rank[0].score_q15;
+    if (sc < 0) {
+        b[o++] = '-';
+        sc = -sc;
+    }
+    o = ghost_put_u(b, o, (unsigned)sc);
+    o = ghost_put(b, o, " n=");
+    o = ghost_put_u(b, o, res.n);
+    o = ghost_put(b, o, "\r\n");
+    out_bytes(b, o);
+}
+
+/* fieldtest: assert the field's two negative contracts from the one
+ * process that HOLDS a field cap (ghost_test proves the capless side):
+ * a cross-region request must be exactly EPERM even for a cap holder,
+ * and a degenerate probe must be a clean n=0, never a kernel fault. */
+static void cmd_fieldtest(void) {
+    field_imprint_req_t req;
+    req.region = QSH_FIELD_REGION + 1; /* a region the shell holds NO cap for */
+    req.len = 5;
+    req.energy_q15 = 0;
+    for (int i = 0; i < FIELD_PAT_MAX; i++) {
+        req.pattern[i] = 0;
+    }
+    req.pattern[0] = 'c';
+    req.pattern[1] = 'r';
+    req.pattern[2] = 'o';
+    req.pattern[3] = 's';
+    req.pattern[4] = 's';
+    long r = imprint_(&req);
+    if (r == -4) {
+        out("FIELD: cross-region denied (EPERM)\r\n");
+    } else {
+        char b[96];
+        int o = ghost_put(b, 0, "FIELD: cross-region NOT denied (ret ");
+        o = ghost_put_u(b, o, (unsigned)(r < 0 ? -r : r));
+        o = ghost_put(b, o, ") — isolation broken\r\n");
+        out_bytes(b, o);
+    }
+
+    field_recall_req_t rr;
+    rr.region = QSH_FIELD_REGION;
+    rr.len = 4;
+    rr.k = 1;
+    for (int i = 0; i < FIELD_PAT_MAX; i++) {
+        rr.probe[i] = 0;
+    }
+    rr.probe[0] = ' ';
+    rr.probe[1] = ' ';
+    rr.probe[2] = ' ';
+    rr.probe[3] = ' '; /* all-equal bytes: degenerate on purpose */
+    field_recall_out_t res;
+    r = recall_(&rr, &res);
+    if (r == 0 && res.n == 0) {
+        out("FIELD: empty-probe ok (n=0)\r\n");
+    } else {
+        out("FIELD: empty-probe MISBEHAVED\r\n");
     }
 }
 
@@ -957,6 +1096,16 @@ static void execute(const char *line) {
         cmd_rm(a);
     } else if (is_cmd(line, "sync")) {
         cmd_sync();
+    } else if ((a = arg_of(line, "imprint")) != 0) {
+        cmd_imprint(a);
+    } else if (is_cmd(line, "imprint")) {
+        out("qsh: imprint: usage: imprint <text>\r\n");
+    } else if ((a = arg_of(line, "recall")) != 0) {
+        cmd_recall(a);
+    } else if (is_cmd(line, "recall")) {
+        out("qsh: recall: usage: recall <probe text>\r\n");
+    } else if (is_cmd(line, "fieldtest")) {
+        cmd_fieldtest();
     } else if ((a = arg_of(line, "nslookup")) != 0) {
         cmd_nslookup(a);
     } else if (is_cmd(line, "nslookup")) {

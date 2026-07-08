@@ -419,7 +419,7 @@ ci-smoke: kernel
 	@echo "[1/3] Build verified: $(BUILD_DIR)/kernel.elf exists"
 	@test -f $(BUILD_DIR)/kernel.elf || (echo "ERROR: Kernel not built" && exit 1)
 	@echo "[2/3] Running QEMU boot test (14 second timeout, shell session piped into the console)..."
-	@( printf 'help\nps\nfree\nuptime\ndate\nghost\nqrand\nls\ncat /docs/hello.txt\nrun /bin/hello\nrun /bin/args alpha quantumos\nrun /bin/libqtest\nrun /bin/consciousnessd\nrun /bin/kannakad\nrun /bin/qtop\nwrite /data/note ramfs-works\nls /data\nrm /data/note\nsync\nexit\n'; sleep 20 ) | \
+	@( printf 'help\nps\nfree\nuptime\ndate\nghost\nqrand\nls\ncat /docs/hello.txt\nrun /bin/hello\nrun /bin/args alpha quantumos\nrun /bin/libqtest\nrun /bin/consciousnessd\nrun /bin/kannakad\nrun /bin/qtop\nimprint the cat sat on the mat\nimprint pure quantum wave dynamics\nimprint hello little world\nrecall the cxt sxt on thx mxt\nfieldtest\nwrite /data/note ramfs-works\nls /data\nrm /data/note\nsync\nexit\n'; sleep 20 ) | \
 		timeout 14s qemu-system-x86_64 -kernel $(BUILD_DIR)/kernel.elf32 \
 		-serial stdio -m 128M -display none -no-reboot 2>&1 | tee /tmp/qemu-boot.log || true
 	@echo ""
@@ -656,6 +656,43 @@ ci-smoke: kernel
 		echo ""; echo "=== Smoke Test FAILED ==="; exit 1; \
 	fi
 	@echo "SUCCESS: qtop snapshot dashboard rendered from SYS_SYSINFO (DASHBOARD RENDERED)"
+	@# epic #95: the kernel holographic field. Three imprints land in
+	@# slots 0..2, a ~15%-corrupted probe must recall the EXACT stored
+	@# content (a line form echoed input cannot produce), a cap-holder's
+	@# cross-region request and a capless caller's requests must be
+	@# denied with exactly EPERM, and a degenerate probe must be a clean
+	@# n=0 — never a kernel fault.
+	@if ! grep -q "FIELD: imprinted slot 2" /tmp/qemu-boot.log 2>/dev/null; then \
+		echo "ERROR: field imprints did not land (FIELD: imprinted slot 2)"; \
+		echo "Boot log:"; cat /tmp/qemu-boot.log 2>/dev/null || true; \
+		echo ""; echo "=== Smoke Test FAILED ==="; exit 1; \
+	fi
+	@if ! grep -qF "FIELD: winner=\"the cat sat on the mat\" slot=0 score=" /tmp/qemu-boot.log 2>/dev/null; then \
+		echo "ERROR: noisy-probe recall did not recover the stored pattern"; \
+		echo "Boot log:"; cat /tmp/qemu-boot.log 2>/dev/null || true; \
+		echo ""; echo "=== Smoke Test FAILED ==="; exit 1; \
+	fi
+	@if ! grep -q "FIELD: cross-region denied (EPERM)" /tmp/qemu-boot.log 2>/dev/null; then \
+		echo "ERROR: cross-region isolation not proven"; \
+		echo "Boot log:"; cat /tmp/qemu-boot.log 2>/dev/null || true; \
+		echo ""; echo "=== Smoke Test FAILED ==="; exit 1; \
+	fi
+	@if ! grep -q "FIELD: empty-probe ok (n=0)" /tmp/qemu-boot.log 2>/dev/null; then \
+		echo "ERROR: degenerate probe misbehaved"; \
+		echo "Boot log:"; cat /tmp/qemu-boot.log 2>/dev/null || true; \
+		echo ""; echo "=== Smoke Test FAILED ==="; exit 1; \
+	fi
+	@if ! grep -q "FIELD: capless imprint denied (EPERM)" /tmp/qemu-boot.log 2>/dev/null; then \
+		echo "ERROR: capless SYS_IMPRINT was not denied"; \
+		echo "Boot log:"; cat /tmp/qemu-boot.log 2>/dev/null || true; \
+		echo ""; echo "=== Smoke Test FAILED ==="; exit 1; \
+	fi
+	@if ! grep -q "FIELD: capless recall denied (EPERM)" /tmp/qemu-boot.log 2>/dev/null; then \
+		echo "ERROR: capless SYS_RECALL was not denied"; \
+		echo "Boot log:"; cat /tmp/qemu-boot.log 2>/dev/null || true; \
+		echo ""; echo "=== Smoke Test FAILED ==="; exit 1; \
+	fi
+	@echo "SUCCESS: kernel holographic field verified (imprint/recall/isolation/capless/degenerate)"
 	@# epic #71 phase 2: the writable RAM overlay. 'write' must store bytes
 	@# (kernel-reported count, not an echo), 'ls /data' must show the file
 	@# tagged [ram] with the kernel-computed size, and 'rm' must remove it.

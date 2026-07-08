@@ -48,6 +48,7 @@ typedef enum {
     CAP_RESOURCE_QUANTUM,    /* qubits / quantum contexts */
     CAP_RESOURCE_PROCESS,    /* control over other processes */
     CAP_RESOURCE_SERVICE,    /* user-space services */
+    CAP_RESOURCE_FIELD,      /* holographic field regions (epic #95) */
     CAP_RESOURCE_TYPE_COUNT
 } cap_resource_type_t;
 
