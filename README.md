@@ -112,12 +112,13 @@ make ci-smoke-iso
 Write `build/x86_64/kernel.iso` to a USB stick — `dd if=... of=/dev/sdX bs=4M`
 on Linux, or Rufus on Windows (choose **DD Image mode** when asked) — then
 boot the target machine from USB with Legacy/CSM boot enabled. The default
-GRUB entry, **QuantumOS (console)**, gives you the boot splash and then an
-interactive `qsh` on the machine's own screen and keyboard; the
-**graphical wave field** entry renders the live oscillator field at
-1024x768. Notes: BIOS boot only (no UEFI layer yet), keyboard input relies
-on the BIOS's PS/2 legacy emulation, and RAM beyond 128 MB is currently
-ignored.
+GRUB entry, **QuantumOS (console)**, gives you the boot splash and then a
+clean interactive `qsh` on the machine's own screen and keyboard (it boots
+`quiet`; pick **console, verbose kernel log** to watch the kernel narrate
+itself instead). The **graphical wave field** entry renders the live
+oscillator field at 1024x768. Notes: BIOS boot only (no UEFI layer yet),
+keyboard input relies on the BIOS's PS/2 legacy emulation, and RAM beyond
+128 MB is currently ignored.
 
 ### One-Command Verification
 New contributors can verify their entire setup works with a single command:

@@ -202,14 +202,18 @@ correctly on both. The wrap console (pen returns to the top and clears
 ahead of itself; a moving blank separator marks the newest line) costs a
 flat 160 cell writes per line and no CRTC state at all.
 
-**Booting into it**: `make iso` builds a GRUB ISO with two menu entries
-backed by two images of the same kernel. GRUB honours the multiboot
-header's video request over `gfxpayload` (verified: `text`/`keep` still
-produced a linear framebuffer), so the default **QuantumOS (console)**
-entry boots `kernel-console.elf` — built with `-DMB1_TEXT_ONLY`, no
-video request → VGA text → screen console. The **graphical wave field**
-entry boots the video-requesting image (1024x768 splash + live field
-view; its text stays on COM1).
+**Booting into it**: `make iso` builds a GRUB ISO with three menu
+entries backed by two images of the same kernel. GRUB honours the
+multiboot header's video request over `gfxpayload` (verified:
+`text`/`keep` still produced a linear framebuffer), so the console
+entries boot `kernel-console.elf` — built with `-DMB1_TEXT_ONLY`, no
+video request → VGA text → screen console. The default
+**QuantumOS (console)** entry adds `quiet`: on the first real-laptop
+boot the demo kernel's narration outran the shell prompt faster than a
+human could type, so the default is the usable interactive machine and
+**console, verbose kernel log** is the debugging entry. The
+**graphical wave field** entry boots the video-requesting image
+(1024x768 splash + live field view; its text stays on COM1).
 
 **Hardware without a COM1 UART** — the first real-laptop boot froze at
 the 45% splash stage: with no UART behind 0x3F8 every port read floats
