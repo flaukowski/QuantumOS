@@ -1849,9 +1849,13 @@ void user_shell_init(uint32_t ghostd_pid) {
         .grant_net = 1,
         /* Holographic memory (epic #95): the shell holds field region 0 —
          * `imprint`/`recall` builtins give the operator associative
-         * memory at the prompt. Scrubbed + re-minted on every restart. */
+         * memory at the prompt. Scrubbed + re-minted on every restart,
+         * EXCEPT the first grant of a boot when the disk restored the
+         * region (epic #96 field_inherit): the operator's synced
+         * memories survive reboot, inherited exactly once, audibly. */
         .grant_field = 1,
         .field_region = 0,
+        .field_inherit = 1,
     };
 
     uint32_t sid = 0;

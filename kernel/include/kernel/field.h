@@ -106,4 +106,40 @@ int64_t field_recall(uint32_t region, const uint8_t *probe, uint32_t len, uint32
  * inherit its predecessor's memories. */
 void field_region_scrub(uint32_t region);
 
+/* ---- persistence (epic #96) ----
+ * The field rides the QDSK volume: persist_sync serializes every region
+ * into a fixed-size blob at a FIXED home at the top of the disk (away
+ * from the growing archive), and persist_restore validates + reloads it
+ * before any service starts. Restored content survives only the FIRST
+ * grant of a region whose service opted in (field_inherit); every other
+ * grant scrubs as epic #95 requires. Slot records persist bytes +
+ * metadata only — the wavefront is recomputed (and thereby revalidated)
+ * on load, and imprint ticks are boot-relative so they reset to 0. */
+
+#define FIELD_BLOB_MAGIC 0x314C4651u /* 'QFL1' little-endian */
+#define FIELD_BLOB_VERSION 1u
+#define FIELD_SLOT_REC_BYTES 76u
+#define FIELD_BLOB_BYTES (24u + FIELD_REGION_COUNT * FIELD_SLOTS * FIELD_SLOT_REC_BYTES) /* 2456 */
+#define FIELD_BLOB_SECTORS ((FIELD_BLOB_BYTES + 511u) / 512u)                            /* 5 */
+
+/* Serialize every region into buf (FIELD_BLOB_SECTORS * 512 bytes; fully
+ * zeroed first — sector padding must never leak kernel memory). Returns
+ * the number of live slots written. */
+uint32_t field_blob_write(uint8_t *buf);
+
+/* Validate + load a blob (header, then per-slot: alive/len bounds BEFORE
+ * the wavefront recompute, energy clamped). Returns restored live-slot
+ * count, or -1 if the header does not describe exactly this build's
+ * geometry (then nothing was touched). Invalid slots are dropped, not
+ * trusted. Marks populated regions as inheritable-once. */
+int64_t field_blob_load(const uint8_t *buf, uint32_t len);
+
+/* Inheritance handshake for the grant path (service.c): peek asks
+ * whether a region still holds unclaimed restored content; consume
+ * clears the mark once a cap was successfully minted for an opted-in
+ * service. A region whose mark is never consumed keeps its content but
+ * nothing can reach it without a capability. */
+int field_region_inherit_peek(uint32_t region);
+void field_region_inherit_consume(uint32_t region);
+
 #endif /* KERNEL_FIELD_H */

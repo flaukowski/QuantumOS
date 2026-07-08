@@ -277,13 +277,29 @@ static svc_result_t start_slot(service_slot_t *slot) {
             boot_log(slot->info.name);
         } else {
             /* Scrub BEFORE minting: a reborn or successor service must
-             * never inherit the region's previous contents (epic #95). */
-            field_region_scrub(slot->def.field_region);
+             * never inherit the region's previous contents (epic #95).
+             * ONE exception (epic #96): a service that opted in via
+             * field_inherit may claim DISK-restored content at the first
+             * grant of a boot — the inherit mark is consumed only after
+             * the cap actually minted (a failed mint leaves it for the
+             * retry), and every later grant scrubs as before. */
+            int inherit =
+                slot->def.field_inherit && field_region_inherit_peek(slot->def.field_region);
+            if (!inherit) {
+                field_region_scrub(slot->def.field_region);
+            }
             uint32_t fldcap = CAP_ID_INVALID;
             if (cap_create(pid, CAP_RESOURCE_FIELD, slot->def.field_region, CAP_READ | CAP_WRITE, 0,
                            &fldcap) != CAP_SUCCESS) {
                 boot_log("service: field cap grant failed");
                 boot_log(slot->info.name);
+            } else if (inherit) {
+                field_region_inherit_consume(slot->def.field_region);
+                /* The region digit keeps the audit line unambiguous;
+                 * only single-digit region counts exist. */
+                char iline[64] = "service: field region 0 inherited from disk (scrub skipped)";
+                iline[22] = (char)('0' + slot->def.field_region);
+                boot_log(iline);
             }
         }
     }
