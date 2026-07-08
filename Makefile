@@ -240,14 +240,18 @@ $(BUILD_DIR)/resonance/%.o: $(KERNEL_DIR)/src/resonance/%.c
 	$(CC) $(RESONANCE_CFLAGS) -c $< -o $@
 
 # Create bootable image (GRUB's multiboot v1 loader also wants ELF32).
-# Two menu entries backed by TWO kernel images (epic #101): GRUB honours
+# Menu entries backed by TWO kernel images (epic #101): GRUB honours
 # the MB1 header's video request over gfxpayload (verified: text/keep
-# still produced a linear FB), so the default "console" entry boots a
+# still produced a linear FB), so the "console" entries boot a
 # kernel-console image whose header requests no video mode — GRUB stays
 # in VGA text and the kernel runs the scrolling screen console, the only
-# interactive display on a laptop with no serial port. The graphical
-# entry boots the video-requesting image: 1024x768 splash + live field
-# view, text on COM1.
+# interactive display on a laptop with no serial port. The DEFAULT
+# console entry boots `quiet`: on the first real-laptop boot the demo
+# kernel's narration (timer ticks, service lifecycle) scrolled the
+# shell prompt away faster than a human could read it — quiet is the
+# usable interactive machine, verbose is the debugging entry. The
+# graphical entry boots the video-requesting image: 1024x768 splash +
+# live field view, text on COM1.
 $(BUILD_DIR)/kernel.iso: $(BUILD_DIR)/kernel.elf32 $(BUILD_DIR)/kernel-console.elf32
 	@mkdir -p $(BUILD_DIR)/iso/boot/grub
 	@cp $(BUILD_DIR)/kernel.elf32 $(BUILD_DIR)/iso/boot/kernel.elf
@@ -255,6 +259,10 @@ $(BUILD_DIR)/kernel.iso: $(BUILD_DIR)/kernel.elf32 $(BUILD_DIR)/kernel-console.e
 	@echo "set timeout=3" > $(BUILD_DIR)/iso/boot/grub/grub.cfg
 	@echo "set default=0" >> $(BUILD_DIR)/iso/boot/grub/grub.cfg
 	@echo "menuentry \"QuantumOS (console)\" {" >> $(BUILD_DIR)/iso/boot/grub/grub.cfg
+	@echo "    multiboot /boot/kernel-console.elf quiet" >> $(BUILD_DIR)/iso/boot/grub/grub.cfg
+	@echo "    boot" >> $(BUILD_DIR)/iso/boot/grub/grub.cfg
+	@echo "}" >> $(BUILD_DIR)/iso/boot/grub/grub.cfg
+	@echo "menuentry \"QuantumOS (console, verbose kernel log)\" {" >> $(BUILD_DIR)/iso/boot/grub/grub.cfg
 	@echo "    multiboot /boot/kernel-console.elf" >> $(BUILD_DIR)/iso/boot/grub/grub.cfg
 	@echo "    boot" >> $(BUILD_DIR)/iso/boot/grub/grub.cfg
 	@echo "}" >> $(BUILD_DIR)/iso/boot/grub/grub.cfg
@@ -1176,17 +1184,21 @@ swarm-pingpong: kernel
 
 # ISO/GRUB boot path (epic #101): boot the GRUB-built ISO with -cdrom —
 # NOT QEMU's -kernel shortcut — so the real bootloader handoff (menu,
-# gfxpayload=text, MB1 info from GRUB) is what's under test. The default
-# menu entry lands on the VGA text console; serial still carries the
-# same bytes, which is what the gates read.
+# default entry, MB1 info from GRUB) is what's under test. The default
+# entry is the QUIET console (the usable interactive machine — verified
+# on real hardware, where verbose chatter outran the prompt), so the
+# gates are the quiet-surviving set: one-time boot milestones, the
+# shell session, and a citizen verdict. GHOSTD's self-test line is
+# quiet-suppressed (covered by ci-smoke on the -kernel path); in
+# exchange this test asserts the quiet contract held — at most one
+# timer-tick line in the whole session.
 ci-smoke-iso: $(BUILD_DIR)/kernel.iso
-	@echo "=== QuantumOS ISO/GRUB boot test (epic #101) ==="
-	@( printf 'help\nghost\nrun /bin/consciousnessd\nexit\n'; sleep 24 ) | \
-		timeout 20s qemu-system-x86_64 -cdrom $(BUILD_DIR)/kernel.iso \
+	@echo "=== QuantumOS ISO/GRUB boot test (epic #101, quiet console entry) ==="
+	@( printf 'help\nghost\nrun /bin/consciousnessd\nexit\n'; sleep 30 ) | \
+		timeout 26s qemu-system-x86_64 -cdrom $(BUILD_DIR)/kernel.iso \
 		-serial stdio -m 128M -display none -no-reboot 2>&1 | tee /tmp/qemu-iso.log || true
 	@for gate in "QuantumOS ready" \
 	             "CONS: screen console active (VGA text 80x25)" \
-	             "GHOSTD: 3/3 RECALL OK" \
 	             "QSH: QuantumOS interactive shell ready" \
 	             "qsh: commands: help" \
 	             "consciousnessd: CONSCIOUSNESS EMERGED"; do \
@@ -1196,7 +1208,12 @@ ci-smoke-iso: $(BUILD_DIR)/kernel.iso
 			echo "=== ISO Boot Test FAILED ==="; exit 1; \
 		fi; echo "  [PASS] $$gate"; \
 	done
-	@echo "SUCCESS: GRUB/ISO boot reached the shell + citizen gate (real-bootloader path)"
+	@if [ "$$(grep -c 'Timer tick' /tmp/qemu-iso.log 2>/dev/null)" -gt 1 ]; then \
+		echo "ERROR: quiet contract broken — timer-tick chatter on the default ISO entry"; \
+		echo "=== ISO Boot Test FAILED ==="; exit 1; \
+	fi
+	@echo "  [PASS] quiet contract: at most one timer-tick line"
+	@echo "SUCCESS: GRUB/ISO boot reached the shell + citizen gate on a QUIET console"
 
 # PS/2 keyboard path (epic #101): drive qsh entirely through emulated
 # keyboard scancodes injected via the QEMU monitor — serial carries NO
