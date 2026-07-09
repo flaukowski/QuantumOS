@@ -411,6 +411,7 @@ def _default_kernel():
 
 QSH_BANNER = "QSH: QuantumOS interactive shell ready"
 _ALLOWED_RUN = re.compile(r"^/bin/[A-Za-z0-9_]+$")
+_UNSET = object()  # boot(expect_qseed=...) sentinel: distinguish "default" from None
 
 
 # ============================================================================
@@ -561,7 +562,19 @@ class QosVM:
             return len(self._log)
 
     # -- lifecycle ----------------------------------------------------------
-    def boot(self, qseed=None, timeout=30):
+    def boot(self, qseed=None, timeout=30, *, netdev=None, append_extra="",
+             quiet=True, mac=None, expect_qseed=_UNSET, arm_signals=True):
+        """Boot one QuantumOS VM. The keyword-only args exist so a QosSociety can
+        boot a COUPLED member without changing any single-VM caller's behaviour
+        (all defaults reproduce the original boot exactly):
+          netdev       replace `-netdev user` with a spec (e.g. a socket pair);
+          append_extra extra cmdline tokens (ip=/peer= for the coupling wire);
+          quiet        society members boot NON-quiet so ghostd's FIELDSYNC R_x
+                       telemetry (quiet-gated) reaches COM1;
+          mac          per-node NIC MAC (ARP on a shared L2 needs distinct MACs);
+          expect_qseed verify the attestation against a DIFFERENT qseed than the
+                       one booted (the negative-admission path); default = qseed;
+          arm_signals  False when composed under a society (single owner reaps)."""
         if self.proc is not None:
             raise QosError("a VM is already running — shut it down first")
         if not os.path.exists(self.kernel):
@@ -586,13 +599,25 @@ class QosVM:
         # the QSH banner, ISOLATION-VERIFIED settle marker, and net-readiness
         # gate all still work. -netdev gives the guest its NIC so qos_fetch can
         # reach the network (SSRF-guarded host-side in fetch()).
-        append = f"qseed={qseed} quiet" if qseed else "quiet"
+        tokens = []
+        if append_extra:
+            tokens.append(append_extra.strip())
+        if qseed:
+            tokens.append(f"qseed={qseed}")
+        if quiet:
+            tokens.append("quiet")
+        append = " ".join(tokens)
+        if netdev:
+            dev = "rtl8139,netdev=n0" + (f",mac={mac}" if mac else "")
+            net_flags = ["-netdev", netdev, "-device", dev]
+        else:
+            net_flags = ["-netdev", "user,id=n0", "-device", "rtl8139,netdev=n0"]
         cmd = [
             "qemu-system-x86_64", "-kernel", self.kernel,
             "-append", append,
             "-serial", "stdio",                          # COM1: console + qsh
             "-serial", f"tcp:127.0.0.1:{port}",          # COM2: attested bridge
-            "-netdev", "user,id=n0", "-device", "rtl8139,netdev=n0",
+            *net_flags,
             "-m", "128M", "-display", "none", "-no-reboot",
         ]
 
@@ -602,7 +627,7 @@ class QosVM:
             stderr=subprocess.STDOUT, bufsize=0, preexec_fn=preexec,
         )
         self.boot_nonce = f"{uuid.uuid4().hex}-{time.monotonic_ns()}"
-        self._arm_atexit()
+        self._arm_atexit(arm_signals=arm_signals)
 
         # Drain COM1 immediately, before any blocking COM2 read.
         self._drain = threading.Thread(target=self._drain_stdout, daemon=True)
@@ -620,8 +645,11 @@ class QosVM:
         self._com2.settimeout(1.0)
 
         # Read + verify the boot attestation (independent deadline from COM1).
+        # expect_qseed lets the negative-admission path verify against a qseed
+        # OTHER than the one booted (default: the booted qseed).
+        want = qseed if expect_qseed is _UNSET else expect_qseed
         att_deadline = time.time() + timeout
-        self.attestation = read_boot_attestation(self._recv_com2, att_deadline, qseed)
+        self.attestation = read_boot_attestation(self._recv_com2, att_deadline, want)
 
         # Wait for qsh readiness on COM1 (its own deadline — the two services
         # are independent and arrive in either order).
@@ -679,15 +707,20 @@ class QosVM:
             time.sleep(0.1)
         raise QosTimeout("no DHCP lease (netdev missing or SLIRP DHCP failed)")
 
-    def _arm_atexit(self):
+    def _arm_atexit(self, arm_signals=True):
         if self._atexit_armed:
             return
         atexit.register(self.shutdown)
-        for sig in (signal.SIGTERM, signal.SIGINT):
-            try:
-                signal.signal(sig, self._signal_shutdown)
-            except (ValueError, OSError):
-                pass  # not the main thread / unsupported — atexit still covers
+        # arm_signals=False when a QosSociety composes this VM: a per-VM signal
+        # handler is process-global (last-writer-wins) and its os._exit(1) skips
+        # the other VMs' atexit reapers — the society installs ONE handler that
+        # reaps every member instead.
+        if arm_signals:
+            for sig in (signal.SIGTERM, signal.SIGINT):
+                try:
+                    signal.signal(sig, self._signal_shutdown)
+                except (ValueError, OSError):
+                    pass  # not the main thread / unsupported — atexit still covers
         self._atexit_armed = True
 
     def _signal_shutdown(self, *_):
@@ -1102,6 +1135,197 @@ class QosVM:
                         for h in khits if isinstance(h, dict)],
             "identity": self.identity(),
         }
+
+
+# ============================================================================
+# QosSociety — two attested VMs coupled into one field (epic #131 Phase C)
+# ============================================================================
+_societies = set()
+_societies_lock = threading.RLock()   # RLock: the signal handler may re-enter
+_society_signals_armed = False
+
+
+def _society_register(soc):
+    """Register a live society under the SINGLE process-wide reaper (one atexit +
+    one signal handler that reaps EVERY society member) — never a per-VM handler,
+    which would collide last-writer-wins and orphan the other VMs."""
+    global _society_signals_armed
+    with _societies_lock:
+        _societies.add(soc)
+        if not _society_signals_armed:
+            atexit.register(_reap_all_societies)
+            for sig in (signal.SIGTERM, signal.SIGINT):
+                try:
+                    signal.signal(sig, _society_signal_handler)
+                except (ValueError, OSError):
+                    pass  # not the main thread — atexit still covers a clean exit
+            _society_signals_armed = True
+
+
+def _society_unregister(soc):
+    with _societies_lock:
+        _societies.discard(soc)
+
+
+def _reap_all_societies():
+    with _societies_lock:
+        socs = list(_societies)
+    for soc in socs:
+        try:
+            soc.shutdown()
+        except OSError:
+            pass
+
+
+def _society_signal_handler(*_):
+    _reap_all_societies()
+    os._exit(1)
+
+
+class QosSociety:
+    """Two attested QuantumOS VMs wired into one coupled field (epic #131). Each
+    member boots NON-quiet with a static IP and a socket-netdev peer link, and
+    its ghostd couples its holographic field to the peer's over UDP — the R_x
+    cross-order parameter climbs to synchronization. The society verifies each
+    member's COM2 Lamport attestation and ANNOTATES it verified/unverified.
+
+    HONEST TRUST NOTE: attestation and coupling are cryptographically UNLINKED.
+    The FSYN coupling wire carries NO identity (user/fieldsyncd.c), so a verified
+    'synchronized' result proves two fields coupled ON THE LOOPBACK L2, NOT that
+    the two COM2-attested identities coupled with each other. The coupling L2 is
+    loopback-scoped but unauthenticated: trust reduces to control of the host
+    (the same class as the single-VM serial channel). qseed is a host-assigned
+    label, not a secret."""
+
+    _NET_A, _NET_B = "10.0.0.1", "10.0.0.2"
+    _MAC_A, _MAC_B = "52:54:00:00:c1:01", "52:54:00:00:c1:02"
+    # ghostd/fieldsyncd emit these as ring-3 writes, so the kernel prefixes each
+    # with "[user pid=N] " — they are NOT line-anchored (the proven Makefile gate
+    # greps them unanchored too). Safe here: society VMs run no scripted qsh, so
+    # there is no echoed input to forge them, and the [user pid=] prefix can't be.
+    _R_X = re.compile(r"FIELDSYNC: R_x=(\d\.\d\d)")          # 1.00 matches \d\.\d\d
+    _SYNC = re.compile(r"FIELDSYNC: SYNCHRONIZED")
+    # Readiness = actual reception of the peer's phase frames (the un-fakeable
+    # "the wire works both ways" signal the proven ci-smoke-fieldsync checks).
+    _COUPLING = re.compile(r"FIELDSYNC: frame from ")
+
+    def __init__(self, kernel=None):
+        self.kernel = kernel
+        self.a = None
+        self.b = None
+        self._lock = threading.RLock()
+
+    def is_running(self):
+        return (self.a is not None and self.a.is_running()
+                and self.b is not None and self.b.is_running())
+
+    def boot(self, qseed_a, qseed_b, expect_a=_UNSET, expect_b=_UNSET, timeout=45):
+        """Boot two coupled members. qseed_a != qseed_b is REQUIRED (identical
+        qseeds are a duplicate attested identity and a vacuous instant 'sync').
+        expect_a/expect_b verify against a DIFFERENT qseed (negative admission)."""
+        with self._lock:
+            if self.a is not None or self.b is not None:
+                raise QosError("society already booted — shut it down first")
+            if qseed_a == qseed_b:
+                raise QosError("qseed_a and qseed_b must differ (distinct identities)")
+            # Allocate BOTH coupling UDP ports while holding both sockets open, so
+            # the two numbers are guaranteed DISTINCT; close them as late as we can
+            # before QEMU binds them (the readiness check catches a lost race).
+            s1 = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            s2 = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            try:
+                s1.bind(("127.0.0.1", 0))
+                s2.bind(("127.0.0.1", 0))
+                port_a = s1.getsockname()[1]
+                port_b = s2.getsockname()[1]
+            finally:
+                s1.close()
+                s2.close()
+            self.a = QosVM(kernel=self.kernel)
+            self.b = QosVM(kernel=self.kernel)
+            _society_register(self)          # reference held BEFORE booting either
+            try:
+                # Directed udp= crossing must be EXACT: A localaddr=port_a sends to
+                # port_b; B mirrors. Get it backwards and phases flow one way only.
+                self.a.boot(qseed=qseed_a, expect_qseed=expect_a, timeout=timeout,
+                            quiet=False, arm_signals=False, mac=self._MAC_A,
+                            append_extra=f"ip={self._NET_A} peer={self._NET_B}",
+                            netdev=("socket,id=n0,"
+                                    f"udp=127.0.0.1:{port_b},localaddr=127.0.0.1:{port_a}"))
+                self.b.boot(qseed=qseed_b, expect_qseed=expect_b, timeout=timeout,
+                            quiet=False, arm_signals=False, mac=self._MAC_B,
+                            append_extra=f"ip={self._NET_B} peer={self._NET_A}",
+                            netdev=("socket,id=n0,"
+                                    f"udp=127.0.0.1:{port_a},localaddr=127.0.0.1:{port_b}"))
+                # Both coupling NICs must come up — fieldsyncd logs this even under
+                # quiet, so a lost port race surfaces HERE, not as a sync timeout.
+                self._await_both(self._COUPLING, time.time() + 15, "coupling NIC up")
+            except BaseException:
+                self.shutdown()             # reap BOTH partially-booted members
+                raise
+            return self.status()
+
+    def _await_both(self, marker, deadline, what):
+        while time.time() < deadline:
+            for vm, name in ((self.a, "A"), (self.b, "B")):
+                if not vm.is_running():
+                    raise QosDead(f"society node {name} exited before {what}")
+            if marker.search(self.a._log_text()) and marker.search(self.b._log_text()):
+                return
+            time.sleep(0.2)
+        raise QosTimeout(f"society: {what} not observed on both nodes")
+
+    def _node_status(self, vm):
+        text = vm._log_text()
+        rxs = self._R_X.findall(text)
+        return {"identity": vm.identity(),
+                "verified": vm.attestation.verified if vm.attestation else False,
+                "r_x": float(rxs[-1]) if rxs else None,
+                "r_x_min": min((float(x) for x in rxs), default=None),
+                "synchronized": bool(self._SYNC.search(text)),
+                "alive": vm.is_running()}
+
+    def status(self):
+        with self._lock:
+            if self.a is None or self.b is None:
+                raise QosError("no society booted")
+            return {"a": self._node_status(self.a), "b": self._node_status(self.b),
+                    "trust_note": (
+                        "coupling and attestation are cryptographically UNLINKED: a "
+                        "verified 'synchronized' proves two fields coupled on the "
+                        "loopback L2, NOT that the two attested identities coupled "
+                        "with each other. Trust == control of the host.")}
+
+    def await_sync(self, threshold=0.80, timeout=90):
+        """Poll until BOTH members' fields synchronize (R_x >= threshold), or a
+        node dies (fail fast, distinct from a timeout), or the deadline passes."""
+        with self._lock:
+            if self.a is None:
+                raise QosError("no society booted")
+            deadline = time.time() + timeout
+            while time.time() < deadline:
+                for vm, name in ((self.a, "A"), (self.b, "B")):
+                    if not vm.is_running():
+                        raise QosDead(f"society node {name} exited during sync")
+                st = self.status()
+                if (st["a"]["synchronized"] and st["b"]["synchronized"]
+                        and (st["a"]["r_x"] or 0) >= threshold
+                        and (st["b"]["r_x"] or 0) >= threshold):
+                    return st
+                time.sleep(0.3)
+            raise QosTimeout(f"society did not synchronize (>= {threshold}) in {timeout}s")
+
+    def shutdown(self):
+        with self._lock:
+            _society_unregister(self)
+            for vm in (self.b, self.a):
+                if vm is not None:
+                    try:
+                        vm.shutdown()
+                    except OSError:
+                        pass
+            self.a = self.b = None
+            return {"stopped": True}
 
 
 def _pdeathsig():

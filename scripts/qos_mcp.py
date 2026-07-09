@@ -28,10 +28,11 @@ Dep:  mcp>=1.0  (Python >=3.10)
 
 from mcp.server.fastmcp import FastMCP
 
-from qos_bridge import QosVM, QosError
+from qos_bridge import QosVM, QosSociety, QosError
 
 mcp = FastMCP("quantumos")
 _vm = QosVM()
+_society = QosSociety()
 
 
 def _err(exc):
@@ -208,6 +209,55 @@ def qos_memory_bridged_recall(query: str, top_k: int = 3) -> dict:
         return _vm.bridged_recall(query, top_k=top_k)
     except QosError as exc:
         return _err(exc)
+
+
+@mcp.tool()
+def qos_society_boot(qseed_a: str, qseed_b: str) -> dict:
+    """Boot a SOCIETY of two attested QuantumOS VMs coupled into one holographic
+    field (epic #131). Each member boots with a static IP and a peer link; their
+    ghostd services couple their fields over UDP and the R_x cross-order
+    parameter climbs to synchronization. qseed_a must differ from qseed_b.
+    Returns each member's attested identity + status.
+
+    HONEST TRUST NOTE: attestation and coupling are cryptographically UNLINKED —
+    a verified 'synchronized' proves two fields coupled on the loopback L2, NOT
+    that the two attested identities coupled with each other. Trust == control of
+    the host. One society at a time — shut it down first."""
+    global _society
+    if _society.is_running():
+        return {"error": "a society is already running — call qos_society_shutdown first"}
+    _society = QosSociety()
+    try:
+        return {"booted": True, "status": _society.boot(qseed_a, qseed_b)}
+    except QosError as exc:
+        return _err(exc)
+
+
+@mcp.tool()
+def qos_society_status() -> dict:
+    """Per-member status of the running society: each node's verified identity,
+    latest and minimum R_x, and whether it has synchronized."""
+    try:
+        return _society.status()
+    except QosError as exc:
+        return _err(exc)
+
+
+@mcp.tool()
+def qos_society_await_sync(threshold: float = 0.80) -> dict:
+    """Block until BOTH society members' fields synchronize (R_x >= threshold),
+    or a member dies, or a deadline passes. Returns the final per-member status
+    (with the minimum R_x seen, showing the divergent start)."""
+    try:
+        return _society.await_sync(threshold=threshold)
+    except QosError as exc:
+        return _err(exc)
+
+
+@mcp.tool()
+def qos_society_shutdown() -> dict:
+    """Power off both society members. Idempotent."""
+    return _society.shutdown()
 
 
 @mcp.tool()
