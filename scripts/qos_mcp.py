@@ -266,21 +266,53 @@ def qos_society_boot(qseed_a: str, qseed_b: str) -> dict:
 
 
 @mcp.tool()
+def qos_society_boot_n(qseeds: list) -> dict:
+    """Boot an N-WAY society (3..4 members) into ONE mean-field coupled over a
+    shared multicast L2 (epic #139). Every qseed must be DISTINCT — each member
+    seeds its ghostd field divergently, so the cross-node order parameter starts
+    low and can only climb because the wire carries the peers' phases. Each node
+    folds the circular MEAN field over its N-1 peers; the sync verdict is the
+    MINIMUM pairwise R_x, so a partial lock cannot masquerade as full. All N
+    reaching that threshold is mean-field convergence a 2-VM society (which can
+    only pairwise-lock) structurally cannot fake. Returns each member's attested
+    identity + status.
+
+    Same HONEST TRUST NOTE as the 2-VM society: coupling and attestation are
+    cryptographically UNLINKED — a synchronized society proves N fields coupled
+    on the shared loopback L2, not that N attested identities coupled; a forged
+    source can skew (never starve) the mean. Trust == control of the host. One
+    society at a time — shut it down first."""
+    global _society
+    if _society.is_running():
+        return {"error": "a society is already running — call qos_society_shutdown first"}
+    _society = QosSociety()
+    try:
+        return {"booted": True, "status": _society.boot_n(list(qseeds))}
+    except QosError as exc:
+        return _err(exc)
+
+
+@mcp.tool()
 def qos_society_status() -> dict:
     """Per-member status of the running society: each node's verified identity,
-    latest and minimum R_x, and whether it has synchronized."""
+    latest and minimum R_x, and whether it has synchronized. Works for both the
+    2-VM society and an N-way society (epic #139)."""
     try:
-        return _society.status()
+        return _society.status_n() if _society.members else _society.status()
     except QosError as exc:
         return _err(exc)
 
 
 @mcp.tool()
 def qos_society_await_sync(threshold: float = 0.80) -> dict:
-    """Block until BOTH society members' fields synchronize (R_x >= threshold),
+    """Block until EVERY society member's field synchronizes (R_x >= threshold),
     or a member dies, or a deadline passes. Returns the final per-member status
-    (with the minimum R_x seen, showing the divergent start)."""
+    (with the minimum R_x seen, showing the divergent start). Works for both the
+    2-VM society and an N-way society (epic #139: the N-way verdict is the
+    minimum pairwise R_x per node)."""
     try:
+        if _society.members:
+            return _society.await_sync_n(threshold=threshold)
         return _society.await_sync(threshold=threshold)
     except QosError as exc:
         return _err(exc)
