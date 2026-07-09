@@ -5,6 +5,13 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>QuantumOS — a real OS, booting in your browser</title>
 <meta name="description" content="Boot QuantumOS, a 64-bit hobby operating system, in your browser tab and type into a live shell. No install, no server — the whole machine is emulated in WebAssembly.">
+<meta property="og:title" content="QuantumOS — a real 64-bit OS in your browser">
+<meta property="og:description" content="Boot QuantumOS and type into a live shell. No install, no server — the whole machine is real qemu-system-x86_64, compiled to WebAssembly.">
+<meta property="og:type" content="website">
+<meta property="og:url" content="https://flaukowski.github.io/QuantumOS/">
+<meta property="og:image" content="https://flaukowski.github.io/QuantumOS/preview.png">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:image" content="https://flaukowski.github.io/QuantumOS/preview.png">
 <!-- MUST be first: on a static host that can't send COOP/COEP (GitHub Pages),
      this registers a service worker and reloads ONCE to enable SharedArrayBuffer,
      which qemu-wasm needs. Loading it before anything else means the reload
