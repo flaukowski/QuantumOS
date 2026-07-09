@@ -5,8 +5,9 @@ as tools. Any MCP-speaking agent can boot a VM; query its ghostd field; imprint
 and recall associative memories at the kernel field; run a citizen off the
 initrd (with arguments); read a structured machine snapshot (uptime, memory,
 process table, date); draw quantum-seeded entropy; write/rm/sync overlay files;
-have the OS fetch a URL over its own TCP stack; and shut it down — every result
-carrying the boot's Lamport-verified identity.
+have the OS fetch a URL over its own TCP stack; bridge memories to/from the host
+Kannaka HRM (epic #127); and shut it down — every result carrying the boot's
+Lamport-verified identity.
 
 This is a THIN wrapper: all logic (framing, attestation, the QEMU lifecycle,
 the verified-gate) lives in qos_bridge.QosVM. The tools here are one-line
@@ -150,6 +151,46 @@ def qos_fs(op: str, path: str = "", text: str = "") -> dict:
     Refuses if the attestation is not verified."""
     try:
         return _vm.fs(op, path=path, text=text)
+    except QosError as exc:
+        return _err(exc)
+
+
+@mcp.tool()
+def qos_memory_import(query: str, top_k: int = 5) -> dict:
+    """Recall the top-k memories for `query` from the host Kannaka HRM and
+    imprint each into the QuantumOS kernel field — seeding the OS's associative
+    memory from the host memory system. Content is truncated to the 64-byte
+    field slot (reported) and non-ASCII memories are skipped (the field is
+    ASCII-only); Kannaka strength is NOT carried into slot energy. Requires
+    kannaka.exe (QOS_KANNAKA_BIN). Refuses if the attestation is not verified."""
+    try:
+        return _vm.memory_import(query, top_k=top_k)
+    except QosError as exc:
+        return _err(exc)
+
+
+@mcp.tool()
+def qos_memory_export(probe: str, importance: float = 0.6,
+                      allow_write: bool = False) -> dict:
+    """Recall the field completion for `probe` and persist it to the host
+    Kannaka HRM. REFUSES unless allow_write=True: this WRITES the user's real
+    ~/.kannaka memory (or KANNAKA_DATA_DIR) with field-derived content, and it
+    REINFORCES the recalled field slot (not a pure read). `importance` is a
+    caller constant. Refuses if the attestation is not verified."""
+    try:
+        return _vm.memory_export(probe, importance=importance, allow_write=allow_write)
+    except QosError as exc:
+        return _err(exc)
+
+
+@mcp.tool()
+def qos_memory_bridged_recall(query: str, top_k: int = 3) -> dict:
+    """Query BOTH memory systems on the same cue: the QuantumOS field completion
+    (resonance = cosine x energy) and the Kannaka HRM's top-k. The field recall
+    REINFORCES its winner, and field_score_q15 is cosine x energy in Q15 (NOT a
+    bare similarity). Requires kannaka.exe. Refuses if not verified."""
+    try:
+        return _vm.bridged_recall(query, top_k=top_k)
     except QosError as exc:
         return _err(exc)
 

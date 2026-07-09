@@ -28,12 +28,14 @@ repeat it.
 import atexit
 import ctypes
 import hashlib
+import json
 import os
 import platform
 import re
 import signal
 import socket
 import subprocess
+import sys
 import threading
 import time
 import uuid
@@ -406,6 +408,112 @@ def _default_kernel():
 
 QSH_BANNER = "QSH: QuantumOS interactive shell ready"
 _ALLOWED_RUN = re.compile(r"^/bin/[A-Za-z0-9_]+$")
+
+
+# ============================================================================
+# Kannaka HRM bridge (epic #127): the QuantumOS kernel field is "kannaka-
+# memory's essence, ported" (kernel/include/kernel/field.h). This shells out
+# to the kannaka.exe CLI to move memories between the two — imprint a Kannaka
+# recall's results into the field, or export a field completion back into the
+# HRM. Kannaka has NO daemon; the CLI is the only interface.
+# ============================================================================
+FIELD_PAT_MAX = 64                     # kernel field slot capacity (field.h:36)
+_UUID_RE = re.compile(r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-"
+                      r"[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$")
+_kannaka_lock = threading.Lock()       # serialize this process's kannaka calls
+
+
+def _default_kannaka_bin():
+    """QOS_KANNAKA_BIN overrides (the CI gate points it at a stub); otherwise
+    the standard release build."""
+    return os.environ.get("QOS_KANNAKA_BIN") or (
+        os.path.join(os.path.expanduser("~"), "Source", "kannaka-memory",
+                     "target", "release", "kannaka.exe"))
+
+
+class KannakaCLI:
+    """Thin, safe wrapper over the kannaka.exe CLI.
+
+    SECURITY (from the epic-#127 attack panel, verified against kannaka's
+    src/bin/kannaka.rs):
+      * kannaka's `remember` flag parser matches --flags at ANY argv position
+        and has NO `--` end-of-options escape (a bare `--` exits 2), so a
+        text argument that begins with '-' is OPTION injection even in
+        list-form (it can substitute the stored content, force a --substrate
+        NATS publish, or DoS the call). remember() therefore REFUSES any text
+        starting with '-'.
+      * KANNAKA_READONLY makes a write SILENTLY no-op while still printing a
+        UUID and exiting 0. The child env is built EXPLICITLY: reads force
+        READONLY=1, writes REMOVE it (a merely-unset var still inherits).
+      * stdout is parsed in isolation (KANNAKA_QUIET=1; notices go to stderr).
+      * subprocess failures map to QosError/QosTimeout, never an uncaught raise.
+    """
+
+    def __init__(self, binary=None, timeout=120):
+        self._binary_override = binary       # None => resolve QOS_KANNAKA_BIN per call
+        self.timeout = timeout
+
+    def _bin(self):
+        return self._binary_override or _default_kannaka_bin()
+
+    def _argv(self, binary, args):
+        # A .py stub (the CI gate) is run through the current interpreter so
+        # the same wiring works on the Linux runner and on Windows locally.
+        if binary.endswith(".py"):
+            return [sys.executable, binary, *args]
+        return [binary, *args]
+
+    def _run(self, args, write):
+        binary = self._bin()
+        env = os.environ.copy()
+        env["KANNAKA_QUIET"] = "1"
+        if write:
+            env.pop("KANNAKA_READONLY", None)   # a write under READONLY no-ops
+        else:
+            env["KANNAKA_READONLY"] = "1"        # a read must not mutate the HRM
+        with _kannaka_lock:                      # single-writer within this proc
+            try:
+                proc = subprocess.run(self._argv(binary, args), capture_output=True,
+                                      text=True, timeout=self.timeout, env=env)
+            except subprocess.TimeoutExpired:
+                raise QosTimeout(f"kannaka timed out after {self.timeout}s "
+                                 f"(store cold-load? op={args[0] if args else '?'})")
+            except (FileNotFoundError, OSError) as exc:
+                raise QosError(f"kannaka not runnable ({binary}): {exc}")
+        if proc.returncode != 0:
+            raise QosError(f"kannaka {args[0] if args else '?'} failed "
+                           f"(exit {proc.returncode}): {proc.stderr.strip()[:200]}")
+        return proc.stdout
+
+    def remember(self, text, importance):
+        """Persist `text` to the HRM; returns the new memory id. Writes the real
+        store (or KANNAKA_DATA_DIR). Refuses option-injection / quote-forge text."""
+        if not text or text[0] == "-":
+            raise QosError("refusing kannaka text starting with '-' (kannaka has "
+                           "no '--' end-of-options escape — option injection)")
+        if '"' in text:
+            raise QosError('refusing kannaka text containing a quote (field '
+                           'winner-line forge guard)')
+        out = self._run(["remember", text, "--importance", str(float(importance))],
+                        write=True).strip()
+        if not _UUID_RE.match(out):
+            raise QosError(f"kannaka remember did not return a UUID: {out[:80]!r}")
+        return out
+
+    def recall(self, query, top_k):
+        """Resonance recall; returns a list of {id, content, similarity, ...}.
+        Read-only (KANNAKA_READONLY forced)."""
+        out = self._run(["recall", query, "--top-k", str(int(top_k))], write=False)
+        try:
+            data = json.loads(out)
+        except json.JSONDecodeError as exc:
+            raise QosError(f"unparseable kannaka recall JSON: {exc}")
+        if isinstance(data, dict):        # --envelope form
+            data = data.get("data", [])
+        return data if isinstance(data, list) else []
+
+
+_kannaka = KannakaCLI()
 
 
 class QosVM:
@@ -880,6 +988,82 @@ class QosVM:
                 raise QosError(f"rm failed (err {m.group(1)})")
             return {"op": "rm", "path": path, "removed": True, "identity": self.identity()}
         raise QosError(f"unknown fs op {op!r} (write|rm|sync; read/ls deferred)")
+
+    # -- Kannaka HRM bridge (epic #127) -------------------------------------
+    def memory_import(self, query, top_k=5, region=0):
+        """Recall the top-k HRM memories for `query` and imprint each into the
+        kernel field, so the OS's associative memory is seeded from the host
+        memory system.
+
+        HONEST LIMITATIONS: the field slot is <= 64 BYTES, so longer content is
+        truncated (reported per result); the field is ASCII-only (qsh line
+        protocol), so a non-ASCII memory is SKIPPED, not imprinted; and Kannaka
+        strength is NOT carried into the slot energy (qsh `imprint` takes no
+        energy argument — the slot gets the field default), so importance does
+        not survive the hop. One bad result never aborts the batch."""
+        self._ensure_verified()
+        results = _kannaka.recall(query, top_k)
+        out = []
+        for r in results:
+            content = r.get("content", "") if isinstance(r, dict) else ""
+            kid = r.get("id") if isinstance(r, dict) else None
+            sim = r.get("similarity") if isinstance(r, dict) else None
+            stored = content[:FIELD_PAT_MAX]
+            truncated = len(content.encode("utf-8", "replace")) > FIELD_PAT_MAX
+            try:
+                if '"' in stored:
+                    raise QosError("content contains a quote (field forge guard)")
+                res = self.imprint(stored)              # validates ASCII/budget
+                out.append({"slot": res["slot"], "kannaka_id": kid,
+                            "content": stored, "truncated": truncated,
+                            "similarity": sim})
+            except QosError as exc:
+                out.append({"slot": None, "kannaka_id": kid, "content": None,
+                            "skipped": str(exc), "similarity": sim})
+        return {"imported": sum(1 for o in out if o["slot"] is not None),
+                "results": out, "identity": self.identity()}
+
+    def memory_export(self, probe, importance=0.6, allow_write=False, region=0):
+        """Recall the field completion for `probe` and persist it to the HRM.
+
+        REFUSES unless allow_write=True: this is a WRITE to the user's real
+        ~/.kannaka memory (or KANNAKA_DATA_DIR), content derived from the
+        (possibly agent-seeded) field — a memory-poisoning surface, so it is
+        gated like qos_fetch's private-target guard. It also REINFORCES the
+        recalled field slot (qsh holds CAP_WRITE — recall is not a pure read).
+        `importance` is a caller-supplied constant (the slot's own energy is not
+        readable until the field-info follow-up)."""
+        self._ensure_verified()
+        if not allow_write:
+            raise QosError("qos_memory_export writes the real HRM: pass "
+                           "allow_write=True to confirm (memory-poisoning guard)")
+        rec = self.recall(probe)                       # reinforces the winner
+        winner = rec.get("winner")
+        if not winner or rec.get("n", 0) == 0:
+            return {"exported": False, "reason": "field empty — nothing resonated",
+                    "identity": self.identity()}
+        kid = _kannaka.remember(winner, importance)    # refuses '-'/quote text
+        return {"exported": True, "kannaka_id": kid, "content": winner,
+                "field_score_q15": rec.get("score"), "importance": float(importance),
+                "reinforced": True, "identity": self.identity()}
+
+    def bridged_recall(self, query, top_k=3, region=0):
+        """Query BOTH memories on the same cue and return them side by side: the
+        field's completion (resonance = cosine x energy) and the HRM's top-k
+        (its own resonance). NOTE: the field recall REINFORCES its winner (qsh
+        CAP_WRITE), and `field_score_q15` is cosine x energy in Q15 — NOT a bare
+        similarity, so it is not directly comparable to Kannaka's [0,1] score."""
+        self._ensure_verified()
+        rec = self.recall(query)                       # reinforces the winner
+        khits = _kannaka.recall(query, top_k)
+        return {
+            "field": {"winner": rec.get("winner"), "score_q15": rec.get("score"),
+                      "n": rec.get("n"), "reinforced": True,
+                      "score_note": "cosine x energy in Q15, not a bare similarity"},
+            "kannaka": [{"content": h.get("content"), "similarity": h.get("similarity")}
+                        for h in khits if isinstance(h, dict)],
+            "identity": self.identity(),
+        }
 
 
 def _pdeathsig():
