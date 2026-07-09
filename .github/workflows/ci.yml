@@ -837,6 +837,17 @@ jobs:
         echo "Using kernel: $KERNEL_ELF"
         QOS_KERNEL="$KERNEL_ELF" make ci-smoke-mcp-gate
 
+    # Agent society (epic #131): two attested QuantumOS VMs coupled into one
+    # holographic field, driven through QosSociety (the same code path the
+    # qos_society_* MCP tools use) — the MCP-driven generalization of the
+    # ci-smoke-fieldsync two-kernel coupling, with attestation-gated reporting.
+    # Invoked via the single-sourced make target (timeout lives in the Makefile).
+    - name: Agent society coupling (epic #131)
+      run: |
+        KERNEL_ELF=$(find build/ -name "kernel.elf32" | head -1)
+        echo "Using kernel: $KERNEL_ELF"
+        QOS_KERNEL="$KERNEL_ELF" make ci-smoke-society-gate
+
     - name: Upload integration test results
       uses: actions/upload-artifact@v4
       with:

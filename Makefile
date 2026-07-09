@@ -111,7 +111,7 @@ OBJECTS = $(KERNEL_SOURCES:$(KERNEL_DIR)/src/%.c=$(BUILD_DIR)/%.o) \
 -include $(OBJECTS:.o=.d)
 
 # Targets
-.PHONY: all clean kernel run debug dump test test-list test-coverage ci-smoke ci-smoke-disk ci-smoke-net ci-smoke-http ci-smoke-httpd ci-smoke-quiet ci-smoke-resonant ci-smoke-qseed ci-smoke-swarm ci-smoke-mcp ci-smoke-mcp-gate ci-smoke-iso ci-smoke-kbd ci-smoke-noserial ci-smoke-screen swarm-pingpong
+.PHONY: all clean kernel run debug dump test test-list test-coverage ci-smoke ci-smoke-disk ci-smoke-net ci-smoke-http ci-smoke-httpd ci-smoke-quiet ci-smoke-resonant ci-smoke-qseed ci-smoke-swarm ci-smoke-mcp ci-smoke-mcp-gate ci-smoke-society ci-smoke-society-gate ci-smoke-iso ci-smoke-kbd ci-smoke-noserial ci-smoke-screen swarm-pingpong
 
 all: kernel
 
@@ -1520,6 +1520,20 @@ ci-smoke-mcp: kernel ci-smoke-mcp-gate
 ci-smoke-mcp-gate:
 	@echo "=== QuantumOS MCP Server Lifecycle Test (epics #99, #125) ==="
 	timeout -k 5 $(MCP_GATE_TIMEOUT) python3 scripts/test_qos_mcp.py
+
+# Agent society (epic #131): boots TWO attested QuantumOS VMs coupled into one
+# holographic field and proves they synchronize (R_x >= 0.80 from a divergent
+# start) under the Python harness — the MCP-driven generalization of
+# ci-smoke-fieldsync, with attestation-gated reporting. Single-sourced timeout
+# like MCP_GATE_TIMEOUT so ci.yml invokes the SAME command (the #93 lesson); the
+# gate reaps both QEMUs on timeout via the society's single reaper.
+SOCIETY_GATE_TIMEOUT ?= 180s
+
+ci-smoke-society: kernel ci-smoke-society-gate
+
+ci-smoke-society-gate:
+	@echo "=== QuantumOS Agent Society Test (epic #131) ==="
+	timeout -k 5 $(SOCIETY_GATE_TIMEOUT) python3 scripts/test_qos_society.py
 
 # ISO/GRUB boot path (epic #101): boot the GRUB-built ISO with -cdrom —
 # NOT QEMU's -kernel shortcut — so the real bootloader handoff (menu,
