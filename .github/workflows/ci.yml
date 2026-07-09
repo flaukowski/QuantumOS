@@ -820,20 +820,22 @@ jobs:
           exit 1
         fi
 
-    # MCP server lifecycle (epic #99): the full agent-facing loop
+    # MCP server lifecycle (epics #99, #125): the full agent-facing loop
     # (boot -> attested identity -> ghostd status -> imprint/recall ->
-    # run a citizen -> crypto-tamper refusal -> shutdown) driven through
-    # qos_bridge, the same code path the FastMCP tools delegate to. Run
-    # against the downloaded kernel artifact, stdlib-only (no `mcp`
-    # package, no pip), matching this job's direct-python idiom. The test
-    # owns and reaps its own QEMU (finally + atexit + signal handler +
-    # PR_SET_PDEATHSIG), so `timeout -k` leaves no orphan and no shell
-    # trap is needed.
-    - name: MCP server lifecycle (epic #99)
+    # run-with-args -> sysinfo -> qrand -> fs -> fetch -> injection refusal ->
+    # crypto-tamper refusal -> shutdown) driven through qos_bridge, the same
+    # code path the FastMCP tools delegate to. Run against the downloaded
+    # kernel artifact, stdlib-only (no `mcp` package, no pip). Invoked via the
+    # single-sourced `make ci-smoke-mcp-gate` target so the gate timeout is
+    # defined in exactly one place (the Makefile), never drifting from a
+    # duplicated literal here. The gate target has no `kernel` prerequisite, so
+    # this does not rebuild against the artifact. The test owns and reaps its
+    # own QEMU (finally + atexit + signal handler + PR_SET_PDEATHSIG).
+    - name: MCP server lifecycle (epics #99, #125)
       run: |
         KERNEL_ELF=$(find build/ -name "kernel.elf32" | head -1)
         echo "Using kernel: $KERNEL_ELF"
-        QOS_KERNEL="$KERNEL_ELF" timeout -k 5 150s python3 scripts/test_qos_mcp.py
+        QOS_KERNEL="$KERNEL_ELF" make ci-smoke-mcp-gate
 
     - name: Upload integration test results
       uses: actions/upload-artifact@v4

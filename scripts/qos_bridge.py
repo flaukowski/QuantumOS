@@ -307,6 +307,84 @@ class QosTimeout(QosError):
     """A bridge reply or qsh marker did not arrive in time."""
 
 
+# ============================================================================
+# qsh input validation — the console is a line protocol
+# ============================================================================
+# qsh's line editor (user/qsh.c:1392) accepts ONLY printable ASCII and silently
+# DROPS bytes past LINE_MAX-1 = 119, then executes the truncated PREFIX on Enter
+# (qsh.c:1377). So a control byte (\n / \r) in an argument would run a SECOND
+# command, and an over-long argument would run a DIFFERENT command. Every value
+# spliced into a qsh line therefore passes through _qsh_text/_qsh_path first.
+# The byte budget is security-critical, not cosmetic. Rejecting the reserved
+# marker prefixes as well stops agent-controlled text from impersonating a
+# result line (the host parses those prefixes as ground truth).
+QSH_LINE_MAX = 119
+_QSH_MARKERS = ("qsh:", "FIELD:", "PS:", "MEM:", "TIME:")
+
+
+def _qsh_text(value, budget, what="argument"):
+    """Validate one argument destined for a qsh command line. Returns it
+    unchanged or raises QosError. `budget` is the byte room left on the line
+    after the fixed command prefix (spaces included). The charset check runs
+    FIRST so the length check can encode as ASCII without failing, and so
+    byte-length == char-length holds against qsh's 119-byte line cap."""
+    if not isinstance(value, str):
+        raise QosError(f"{what} must be a string")
+    for ch in value:
+        o = ord(ch)
+        if o < 0x20 or o > 0x7E:
+            raise QosError(
+                f"{what} contains non-printable byte 0x{o:02X}; only ASCII "
+                f"0x20-0x7E is legal on the qsh line (a control byte would "
+                f"inject a second command)")
+    n = len(value.encode("ascii"))
+    if n > budget:
+        raise QosError(
+            f"{what} too long: {n} > {budget} bytes; qsh drops input past "
+            f"{QSH_LINE_MAX} and would execute a truncated, different command")
+    stripped = value.lstrip()
+    for mk in _QSH_MARKERS:
+        if stripped.startswith(mk):
+            raise QosError(
+                f"{what} may not begin with the reserved result marker {mk!r}")
+    return value
+
+
+_QSH_PATH = re.compile(r"^/?[A-Za-z0-9._][A-Za-z0-9._/\-]{0,62}$")
+
+
+def _qsh_path(value):
+    """Validate a filesystem path argument: printable, bounded, no space (qsh
+    splits the command on the first space), no `..` traversal past the flat
+    ramfs/initrd namespace (kernel/src/ramfs.c:30-37 strips ./ and leading /)."""
+    _qsh_text(value, QSH_LINE_MAX, "path")
+    if " " in value or ".." in value:
+        raise QosError(f"invalid path {value!r} (no spaces or '..')")
+    if not _QSH_PATH.match(value):
+        raise QosError(f"invalid path {value!r}")
+    return value
+
+
+_FETCH_HOST = re.compile(r"^[A-Za-z0-9][A-Za-z0-9.\-]{0,62}$")
+
+
+def _is_private_target(host):
+    """True for loopback / RFC1918 / link-local / SLIRP-host targets. qos_fetch
+    refuses these by default: adding -netdev to every boot gives the guest the
+    HOST network namespace via SLIRP NAT (10.0.2.2 == host 127.0.0.1), so an
+    unguarded fetch is a blind-SSRF primitive into host-local services."""
+    if host.lower() == "localhost":
+        return True
+    parts = host.split(".")
+    if len(parts) == 4 and all(p.isdigit() and 0 <= int(p) <= 255 for p in parts):
+        a, b = int(parts[0]), int(parts[1])
+        return (a in (0, 10, 127)
+                or (a == 172 and 16 <= b <= 31)
+                or (a == 192 and b == 168)
+                or (a == 169 and b == 254))
+    return False
+
+
 def _repo_root():
     return os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
@@ -386,12 +464,24 @@ class QosVM:
         self._listen.settimeout(timeout)
         port = self._listen.getsockname()[1]
 
-        cmd = ["qemu-system-x86_64", "-kernel", self.kernel]
-        if qseed:
-            cmd += ["-append", f"qseed={qseed}"]
-        cmd += [
+        if qseed is not None and not re.match(r"^[0-9A-Fa-f]{1,16}$", str(qseed)):
+            self._listen.close()
+            self._listen = None
+            raise QosError(f"qseed must be 1-16 hex digits (or None): {qseed!r}")
+        # `quiet` silences the per-second Timer-tick line and the service-health
+        # churn (interrupts.c:380, service.c:457) that would otherwise interleave
+        # into a scripted-command window; the one-time [BOOT] milestones and the
+        # net self-test's `NET: DHCP lease` line survive (ungated boot_log), so
+        # the QSH banner, ISOLATION-VERIFIED settle marker, and net-readiness
+        # gate all still work. -netdev gives the guest its NIC so qos_fetch can
+        # reach the network (SSRF-guarded host-side in fetch()).
+        append = f"qseed={qseed} quiet" if qseed else "quiet"
+        cmd = [
+            "qemu-system-x86_64", "-kernel", self.kernel,
+            "-append", append,
             "-serial", "stdio",                          # COM1: console + qsh
             "-serial", f"tcp:127.0.0.1:{port}",          # COM2: attested bridge
+            "-netdev", "user,id=n0", "-device", "rtl8139,netdev=n0",
             "-m", "128M", "-display", "none", "-no-reboot",
         ]
 
@@ -462,6 +552,21 @@ class QosVM:
             if self.proc.poll() is not None:
                 raise QosDead("VM exited during boot settle")
             time.sleep(0.1)
+
+    def await_network(self, timeout_s=12.0):
+        """Block until the boot log shows a DHCP lease. net_selftest logs
+        `NET: DHCP lease <ip>` via UNGATED boot_log (net.c:999) even under
+        `quiet`, so this both serializes a fetch after the lease (the first
+        connect must not race DHCP) AND anti-vacuously proves -netdev took
+        effect (a NIC-less boot logs `NET: no NIC` instead). Bounded."""
+        deadline = time.time() + timeout_s
+        while time.time() < deadline:
+            if "NET: DHCP lease" in self._log_text():
+                return
+            if self.proc is not None and self.proc.poll() is not None:
+                raise QosDead("VM exited before a DHCP lease")
+            time.sleep(0.1)
+        raise QosTimeout("no DHCP lease (netdev missing or SLIRP DHCP failed)")
 
     def _arm_atexit(self):
         if self._atexit_armed:
@@ -566,14 +671,24 @@ class QosVM:
 
     def _wait_markers(self, start, markers, deadline_s, what):
         """Poll the COM1 log from `start` until one of the regex `markers`
-        matches; return (text, match). Caller holds _io_lock."""
+        matches; return (body, match). Caller holds _io_lock.
+
+        The echoed command line is dropped before matching: qsh echoes typed
+        input verbatim (qsh.c:1392) and it lands in the log BEFORE the real
+        output, so a marker must never be allowed to match the agent's own
+        input (a recall probe or run args containing a `FIELD:`/`qsh:` line
+        form would otherwise spoof the result). Real output always follows the
+        CRLF after the echo, so search only past the first newline; markers are
+        additionally line-anchored (re.M `^`) by their callers."""
         deadline = time.time() + deadline_s
         while time.time() < deadline:
             text = self._log_text(start)
+            nl = text.find("\n")
+            body = text[nl + 1:] if nl >= 0 else ""
             for pat in markers:
-                m = pat.search(text)
+                m = pat.search(body)
                 if m:
-                    return text, m
+                    return body, m
             if self.proc.poll() is not None:
                 raise QosDead("VM exited mid-command")
             time.sleep(0.05)
@@ -584,12 +699,30 @@ class QosVM:
             start = self._send_line(line)
             return self._wait_markers(start, markers, deadline_s, repr(line))
 
+    def _collect(self, cmds, deadline_s, what):
+        """Run one or more qsh commands under a single lock hold, then bracket
+        their output with a fresh-nonce `echo` sentinel and return the window
+        up to that sentinel. The caller extracts by known line prefix (^PS: /
+        ^MEM: / ...), so interleaved [BOOT] noise is naturally excluded and the
+        fresh nonce can appear in no stored or echoed data. One sentinel round
+        trip covers all commands."""
+        nonce = "QOS-EOF-" + uuid.uuid4().hex
+        sentinel = re.compile(r"^qsh: " + re.escape(nonce) + r"\s*$", re.M)
+        with self._io_lock:
+            start = self._log_len()
+            for c in cmds:
+                self._send_line(c)
+            self._send_line("echo " + nonce)
+            body, _m = self._wait_markers(start, (sentinel,), deadline_s, what)
+            return body
+
     def imprint(self, text, deadline_s=10.0):
         """Kernel holographic field imprint via qsh (same space as a human at
         the prompt). Returns the assigned slot."""
         self._ensure_verified()
-        _ok = re.compile(r"FIELD: imprinted slot (\d+)")
-        _err = re.compile(r"qsh: imprint(?: failed| : usage|:)")
+        _qsh_text(text, QSH_LINE_MAX - len("imprint "), "imprint text")
+        _ok = re.compile(r"^FIELD: imprinted slot (\d+)", re.M)
+        _err = re.compile(r"^qsh: imprint(?: failed| : usage|:)", re.M)
         _txt, m = self._qsh("imprint " + text, (_ok, _err), deadline_s)
         if m.re is _err:
             raise QosError("imprint rejected by qsh")
@@ -598,9 +731,10 @@ class QosVM:
     def recall(self, text, deadline_s=10.0):
         """Kernel holographic field recall via qsh. Returns the winner text."""
         self._ensure_verified()
-        _win = re.compile(r'FIELD: winner="(.*?)" slot=(\d+) score=(-?\d+) n=(\d+)')
-        _empty = re.compile(r"FIELD: recall empty")
-        _err = re.compile(r"qsh: recall(?: failed|:)")
+        _qsh_text(text, QSH_LINE_MAX - len("recall "), "recall probe")
+        _win = re.compile(r'^FIELD: winner="(.*?)" slot=(\d+) score=(-?\d+) n=(\d+)', re.M)
+        _empty = re.compile(r"^FIELD: recall empty", re.M)
+        _err = re.compile(r"^qsh: recall(?: failed|:)", re.M)
         _txt, m = self._qsh("recall " + text, (_win, _empty, _err), deadline_s)
         if m.re is _win:
             return {"winner": m.group(1), "slot": int(m.group(2)),
@@ -609,28 +743,143 @@ class QosVM:
         return {"winner": None, "slot": None, "score": None, "n": 0,
                 "identity": self.identity()}
 
-    def run(self, program, deadline_s=20.0):
-        """Spawn a /bin citizen via qsh and collect its output + exit code.
-        Matches the SPECIFIC spawned pid's exit line, so an interleaved boot
-        process exiting can't be mistaken for this program's completion."""
+    def run(self, program, args="", deadline_s=20.0):
+        """Spawn a /bin citizen via qsh with an optional argument string and
+        collect its output + exit code. Matches the SPECIFIC spawned pid's exit
+        line, so an interleaved boot process exiting can't be mistaken for this
+        program's completion. `args` is validated (no control bytes, bounded,
+        no marker impersonation) before it is spliced into the run line."""
         self._ensure_verified()
         if not _ALLOWED_RUN.match(program):
             raise QosError(f"program must match /bin/<name>: {program!r}")
+        if args:
+            _qsh_text(args, QSH_LINE_MAX - len("run ") - len(program) - 1, "run args")
+            line = "run " + program + " " + args
+        else:
+            line = "run " + program
         with self._io_lock:
-            start = self._send_line("run " + program)
-            _spawned = re.compile(r"qsh: spawned pid (\d+)")
-            _nostart = re.compile(r"qsh: run: cannot start")
+            start = self._send_line(line)
+            _spawned = re.compile(r"^qsh: spawned pid (\d+)", re.M)
+            _nostart = re.compile(r"^qsh: run: cannot start", re.M)
             _text, m = self._wait_markers(start, (_spawned, _nostart), deadline_s,
                                           f"run {program}")
             if m.re is _nostart:
                 raise QosError(f"qsh could not start {program}")
             pid = m.group(1)
-            _done = re.compile(r"qsh: pid " + pid + r" exited \(code (\d+)\)")
-            _gone = re.compile(r"qsh: pid " + pid + r" (?:still running|vanished)")
+            _done = re.compile(r"^qsh: pid " + pid + r" exited \(code (\d+)\)", re.M)
+            _gone = re.compile(r"^qsh: pid " + pid + r" (?:still running|vanished)", re.M)
             text, m = self._wait_markers(start, (_done, _gone), deadline_s,
                                          f"run {program} completion")
             code = int(m.group(1)) if m.re is _done else None
-        return {"output": text.strip(), "exit_code": code, "identity": self.identity()}
+        return {"output": text.strip(), "exit_code": code, "args": args,
+                "identity": self.identity()}
+
+    # -- sysinfo / entropy / files / network over scripted qsh --------------
+    def sysinfo(self, deadline_s=12.0):
+        """One structured snapshot of the machine: uptime, heap/frame memory,
+        the live process table, and the RTC date. Collected in a single
+        sentinel-bracketed batch; every field is parsed by its own line prefix
+        (qsh: uptime / MEM: / PS: / TIME:), so boot noise cannot leak in."""
+        self._ensure_verified()
+        text = self._collect(["uptime", "free", "ps", "date"], deadline_s, "sysinfo")
+        uptime = {}
+        mu = re.search(r"^qsh: uptime (\d+) ticks \((\d+) s\)", text, re.M)
+        if mu:
+            uptime = {"ticks": int(mu.group(1)), "s": int(mu.group(2))}
+        mem = {}
+        mm = re.search(r"^MEM: heap free=(\d+) bytes, frames free=(\d+)/(\d+)", text, re.M)
+        if mm:
+            mem = {"heap_free_bytes": int(mm.group(1)),
+                   "frames_free": int(mm.group(2)), "frames_total": int(mm.group(3))}
+        procs = [{"pid": int(p.group(1)), "name": p.group(2), "state": p.group(3)}
+                 for p in re.finditer(r"^PS: (\d+) (\S+) (\w+)", text, re.M)]
+        md = re.search(r"^TIME: (.+?)\s*$", text, re.M)
+        return {"uptime": uptime, "mem": mem, "processes": procs,
+                "date": md.group(1) if md else None, "identity": self.identity()}
+
+    def qrand(self, deadline_s=8.0):
+        """Draw 64 bits of quantum-seeded entropy via the qsh `qrand` command
+        (SYS_QRAND, capability-gated in the guest). Returns lowercase hex."""
+        self._ensure_verified()
+        _ok = re.compile(r"^qsh: qrand ([0-9a-f]{16})", re.M)
+        _err = re.compile(r"^qsh: qrand denied", re.M)
+        _txt, m = self._qsh("qrand", (_ok, _err), deadline_s)
+        if m.re is _err:
+            raise QosError("qrand denied (EPERM)")
+        return {"hex": m.group(1), "bits": 64, "identity": self.identity()}
+
+    def fetch(self, host, port=80, allow_private=False, deadline_s=30.0):
+        """Have QuantumOS fetch `http://host:port/` over its own TCP stack and
+        report the status line, byte count, and whether the transfer completed.
+
+        HONESTY: this reaches the HOST network namespace via SLIRP NAT
+        (10.0.2.2 == the host's 127.0.0.1; DNS and outbound internet are live),
+        NOT a sandbox — so loopback / RFC1918 targets are REFUSED by default as
+        an SSRF guard (pass allow_private=True to override). The response BODY
+        is not returned: qsh's `http` only prints the status line and byte count
+        (a body-returning fetch is a filed guest follow-up)."""
+        self._ensure_verified()
+        if not _FETCH_HOST.match(host):
+            raise QosError(f"invalid host {host!r}")
+        port = int(port)
+        if not 1 <= port <= 65535:
+            raise QosError(f"port out of range: {port}")
+        if not allow_private and _is_private_target(host):
+            raise QosError(
+                f"refusing private/loopback target {host!r}: qos_fetch reaches "
+                f"the host network via SLIRP (SSRF guard); pass allow_private=True")
+        self.await_network()
+        _ok = re.compile(r"^qsh: http " + re.escape(host) + r" -> (.+?)\s*$", re.M)
+        _err = re.compile(r"^qsh: http: (denied[^\r\n]*|could not resolve host|"
+                          r"connect failed|send failed|no response[^\r\n]*)", re.M)
+        _bytes = re.compile(r"^qsh: http " + re.escape(host) +
+                            r": (\d+) bytes( then connection reset)?", re.M)
+        # qsh's `http` prints the host label WITHOUT the port (qsh.c:920).
+        line = "http " + host + (" " + str(port) if port != 80 else "")
+        with self._io_lock:
+            start = self._send_line(line)
+            _t, m = self._wait_markers(start, (_ok, _err), deadline_s, f"fetch {host}")
+            if m.re is _err:
+                return {"ok": False, "error": m.group(1).strip(),
+                        "identity": self.identity()}
+            status_line = m.group(1).strip()
+            _t2, m2 = self._wait_markers(start, (_bytes,), deadline_s,
+                                         f"fetch {host} byte count")
+        return {"ok": True, "status_line": status_line, "bytes": int(m2.group(1)),
+                "complete": m2.group(2) is None, "identity": self.identity()}
+
+    def fs(self, op, path="", text="", deadline_s=12.0):
+        """Overlay filesystem write / rm / sync over scripted qsh. read and ls
+        are intentionally NOT here: their output is unprefixed (ls rows) or
+        agent-controlled (cat content can impersonate the cannot-open line), so
+        they need a guest-side machine marker — a filed follow-up. write/rm/sync
+        each report a prefixed `qsh:` line that echoed input cannot forge."""
+        self._ensure_verified()
+        if op == "sync":
+            _ok = re.compile(r"^qsh: sync ok \((\d+) files flushed\)", re.M)
+            _err = re.compile(r"^qsh: sync failed \(([^)]*)\)", re.M)
+            _txt, m = self._qsh("sync", (_ok, _err), deadline_s)
+            if m.re is _err:
+                raise QosError(f"sync failed: {m.group(1)}")
+            return {"op": "sync", "flushed": int(m.group(1)), "identity": self.identity()}
+        _qsh_path(path)
+        if op == "write":
+            _qsh_text(text, QSH_LINE_MAX - len("write ") - len(path) - 1, "write text")
+            _ok = re.compile(r"^qsh: wrote (\d+) bytes to " + re.escape(path), re.M)
+            _err = re.compile(r"^qsh: write: (cannot create[^\r\n]*|usage[^\r\n]*)", re.M)
+            _txt, m = self._qsh("write " + path + " " + text, (_ok, _err), deadline_s)
+            if m.re is _err:
+                raise QosError(f"write failed: {m.group(1).strip()}")
+            return {"op": "write", "path": path, "bytes": int(m.group(1)),
+                    "identity": self.identity()}
+        if op == "rm":
+            _ok = re.compile(r"^qsh: removed", re.M)
+            _err = re.compile(r"^qsh: rm: failed \(err (\d+)\)", re.M)
+            _txt, m = self._qsh("rm " + path, (_ok, _err), deadline_s)
+            if m.re is _err:
+                raise QosError(f"rm failed (err {m.group(1)})")
+            return {"op": "rm", "path": path, "removed": True, "identity": self.identity()}
+        raise QosError(f"unknown fs op {op!r} (write|rm|sync; read/ls deferred)")
 
 
 def _pdeathsig():
