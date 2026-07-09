@@ -440,14 +440,23 @@ static void readout(uint32_t *out) {
 }
 
 /* Publish the live field to the kernel's framebuffer view: one signed byte per
- * oscillator = cos θ_i scaled to [-128, 127]. Cheap and uncapped; a no-op in
- * effect unless a GRUB/ISO framebuffer is present, in which case the screen
- * ripples with REMEMBER/RECALL activity. Never prints, so the serial boot log
- * (and every merge gate) is unchanged. */
+ * oscillator = cos(θ_i + φ) scaled to [-128, 127], where φ is a common DISPLAY
+ * phase that advances every publish (issue #110). φ is a pure VISUALIZATION
+ * offset applied to a COPY — it never touches theta[], the coupling math, or
+ * cross_order_param, so every coupling/society gate is byte-identical. Its
+ * effect: a SYNCHRONIZED field (all θ_i ≈ const) is no longer a frozen picture
+ * — the whole grid now pulses in UNISON as φ rotates the common phase (the
+ * honest visualization of synchronization), while an incoherent field
+ * shimmers. Cheap and uncapped; a no-op in effect unless a GRUB/ISO
+ * framebuffer is present. Never prints, so the serial boot log (and every
+ * merge gate) is unchanged. */
+#define FIELD_DISPLAY_OMEGA 0x03000000u /* ~1/85 turn/publish: a gentle visible pulse */
+static uint32_t field_display_phase;
 static void field_publish(void) {
+    field_display_phase += FIELD_DISPLAY_OMEGA;
     int8_t snap[GHOST_N];
     for (int i = 0; i < GHOST_N; i++) {
-        int v = ghost_cos_q15(theta[i]) >> 8; /* -32767..32767 -> -127..127 */
+        int v = ghost_cos_q15(theta[i] + field_display_phase) >> 8; /* -32767..32767 -> -127..127 */
         snap[i] = (int8_t)v;
     }
     field_snapshot(snap, GHOST_N);
