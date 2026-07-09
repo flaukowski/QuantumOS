@@ -2,9 +2,9 @@
 """
 QuantumOS MCP server (epics #99, #125): expose a running QuantumOS to agents
 as tools. Any MCP-speaking agent can boot a VM; query its ghostd field; imprint
-and recall associative memories at the kernel field; run a citizen off the
-initrd (with arguments); read a structured machine snapshot (uptime, memory,
-process table, date); draw quantum-seeded entropy; write/rm/sync overlay files;
+and recall associative memories at the kernel field; inspect that field
+read-only (live slots, energy, eviction); run a citizen off the initrd (with
+arguments); read a structured machine snapshot (uptime, memory, process, date); draw quantum-seeded entropy; write/rm/sync overlay files;
 have the OS fetch a URL over its own TCP stack; bridge memories to/from the host
 Kannaka HRM (epic #127); and shut it down — every result carrying the boot's
 Lamport-verified identity.
@@ -87,6 +87,21 @@ def qos_recall(text: str) -> dict:
     if the attestation is not verified."""
     try:
         return _vm.recall(text)
+    except QosError as exc:
+        return _err(exc)
+
+
+@mcp.tool()
+def qos_field_status() -> dict:
+    """Inspect the kernel holographic field READ-ONLY (epic #127 B1): live slot
+    count, capacity, and per-slot metadata — slot index, length, energy (% of
+    max, the stored importance), effective energy (% after age decay),
+    retrievals, age, and a bounded preview. Unlike a recall this does NOT
+    reinforce the field, so repeated calls do not perturb it. This is a real
+    live count (not saturated) and content-addressable capacity/eviction
+    visibility. Refuses if the attestation is not verified."""
+    try:
+        return _vm.field_info()
     except QosError as exc:
         return _err(exc)
 

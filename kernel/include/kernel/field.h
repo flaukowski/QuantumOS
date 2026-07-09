@@ -19,9 +19,10 @@
  *
  * CONCURRENCY INVARIANT: the field is touched ONLY from syscall context
  * (cli'd, single CPU, non-reentrant). No timer/IRQ path may call into
- * field.c — decay is computed lazily from tick stamps at imprint/recall
- * time, so there is deliberately no periodic bookkeeping and therefore
- * no locking. Adding an IRQ-context caller breaks this contract.
+ * field.c — decay is computed lazily from tick stamps at imprint/recall/
+ * region_info time, so there is deliberately no periodic bookkeeping and
+ * therefore no locking. field_region_info reads the same tick stamps but
+ * writes nothing (read-only). Adding an IRQ-context caller breaks this.
  *
  * SPDX-License-Identifier: GPL-2.0-only
  */
@@ -35,6 +36,7 @@
 #define FIELD_SLOTS 8        /* pattern slots per region */
 #define FIELD_PAT_MAX 64     /* max pattern/probe bytes */
 #define FIELD_RANK_MAX 8     /* max rankings a recall may request */
+#define FIELD_PREVIEW 16     /* leading pattern bytes exposed by field_region_info */
 
 #define FIELD_ENERGY_MAX 0x7FFF     /* Q15 1.0 */
 #define FIELD_ENERGY_MIN 0x0800     /* floor: no zero-energy squatting */
@@ -82,6 +84,30 @@ typedef struct {
     uint8_t winner[FIELD_PAT_MAX];
 } field_recall_out_k_t; /* 136 bytes */
 
+/* Read-only slot introspection (epic #127 B1). Per ALIVE slot: its index, the
+ * stored length, the raw stored energy (stable importance) AND the effective
+ * energy after lazy decay (time-varying), the retrieval count, the saturating
+ * age in ticks, and a bounded preview of the stored bytes. All members are
+ * 4-byte or byte arrays: NO padding on either compile. age_ticks is u32 (never
+ * u64 — that would force 8-byte alignment and diverge from the user twin); it
+ * saturates at ~497 days of 100 Hz uptime, acceptable for a display field. */
+typedef struct {
+    uint32_t slot;
+    uint32_t len;
+    int32_t energy_q15;     /* stored importance, stable */
+    int32_t eff_energy_q15; /* after age decay, time-varying */
+    uint32_t retrievals;
+    uint32_t age_ticks; /* saturates at UINT32_MAX */
+    uint8_t preview[FIELD_PREVIEW];
+} field_slot_info_k_t; /* 40 bytes */
+
+typedef struct {
+    uint32_t region;
+    uint32_t live;     /* alive slots (== filled entries in slots[]) */
+    uint32_t capacity; /* FIELD_SLOTS */
+    field_slot_info_k_t slots[FIELD_SLOTS];
+} field_info_out_k_t; /* 332 bytes */
+
 /* ---- kernel API (syscall context ONLY — see invariant above) ----
  * Region ids are validated here as defense in depth; the syscall layer
  * has already matched the caller's capability against the region. */
@@ -100,6 +126,15 @@ int64_t field_imprint(uint32_t region, const uint8_t *pattern, uint32_t len, int
  * retrievals++ and an energy boost of 1/16 of its gap to MAX. */
 int64_t field_recall(uint32_t region, const uint8_t *probe, uint32_t len, uint32_t k, int reinforce,
                      field_recall_out_k_t *out, uint64_t now_ticks);
+
+/* Read-only enumeration of a region's live slots into *out (kernel memory; the
+ * syscall layer copies it out). Returns the live-slot count (>= 0), or -1 on a
+ * bad region. Computes decay lazily like recall (same guarded age math) but
+ * writes NOTHING — the honest, non-mutating counterpart to the reinforcing
+ * recall, safe under a READ-only capability. Zeroes the WHOLE out struct first,
+ * so a shared static copy-out buffer never leaks a prior call's (possibly
+ * other-region) dead-slot preview bytes. */
+int64_t field_region_info(uint32_t region, field_info_out_k_t *out, uint64_t now_ticks);
 
 /* Clear every slot in a region. Called when a service is (re)granted
  * the region's capability: a reborn or successor service must never

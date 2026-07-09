@@ -101,10 +101,12 @@ static void cmd_help(void) {
      * sit outside the phrase). Grouped by what each command is FOR, with a
      * one-line description, so a newcomer knows where to start. */
     out(A_TITLE "qsh commands:" A0 "\r\n");
-    out(A_CAT "  memory " A0 A_CMD "imprint" A0 " <text>   " A_DIM
-              "store a phrase in the holographic field" A0 "\r\n");
+    out(A_CAT "  memory " A0 A_CMD "imprint" A0 " <text>   " A_DIM "store a phrase (opt. " A_KEY
+              "--energy 0-100" A_DIM ")" A0 "\r\n");
     out("         " A_CMD "recall" A0 " <cue>     " A_DIM "bring it back from a corrupted cue" A0
         "\r\n");
+    out("         " A_CMD "field" A0 "          " A_DIM
+        "inspect the field: live slots + energy (read-only)" A0 "\r\n");
     out("         " A_CMD "ghost" A0 "          " A_DIM "field status: order R and live patterns" A0
         "\r\n");
     out("         " A_CMD "fieldtest" A0 "      " A_DIM "run the field self-test" A0 "\r\n");
@@ -201,9 +203,54 @@ static void cmd_rm(const char *path) {
 #define QSH_FIELD_REGION 0u
 
 static void cmd_imprint(const char *args) {
+    /* Optional leading "--energy <int>" sets the slot's importance (percent
+     * 0..100 -> Q15). It is consumed ONLY when the token is all-digits, so
+     * `imprint --energy hello` stays literal text and a doubled --energy from a
+     * caller leaves the second occurrence as content. */
+    int energy_q15 = 0; /* 0 => kernel default (0.5) when the flag is absent */
+    const char flag[] = "--energy ";
+    int match = 1;
+    for (int i = 0; flag[i]; i++) {
+        if (args[i] != flag[i]) {
+            match = 0;
+            break;
+        }
+    }
+    if (match) {
+        const char *p = args + (int)(sizeof(flag) - 1);
+        long v = 0;
+        int digits = 0;
+        while (*p >= '0' && *p <= '9') {
+            if (v < 1000) {
+                v = v * 10 + (*p - '0'); /* saturate: never overflow */
+            }
+            digits++;
+            p++;
+        }
+        if (digits > 0 && (*p == ' ' || *p == '\0')) {
+            while (*p == ' ') {
+                p++;
+            }
+            if (v > 100) {
+                v = 100;
+            }
+            /* percent -> Q15. N=0 maps to the FLOOR, not 0: energy_q15==0 is the
+             * kernel's "use the 0.5 default" sentinel, the opposite of minimum. */
+            int e = (int)(((long)v * FIELD_ENERGY_MAX) / 100);
+            if (e < FIELD_ENERGY_MIN) {
+                e = FIELD_ENERGY_MIN;
+            }
+            if (e > FIELD_ENERGY_MAX) {
+                e = FIELD_ENERGY_MAX;
+            }
+            energy_q15 = e;
+            args = p; /* the text follows the consumed flag */
+        }
+    }
+
     long n = str_len(args);
     if (n <= 0) {
-        out("qsh: imprint: usage: imprint <text>\r\n");
+        out("qsh: imprint: usage: imprint [--energy <0-100>] <text>\r\n");
         return;
     }
     if (n > FIELD_PAT_MAX) {
@@ -212,7 +259,7 @@ static void cmd_imprint(const char *args) {
     field_imprint_req_t req;
     req.region = QSH_FIELD_REGION;
     req.len = (unsigned)n;
-    req.energy_q15 = 0; /* kernel default */
+    req.energy_q15 = energy_q15;
     for (long i = 0; i < FIELD_PAT_MAX; i++) {
         req.pattern[i] = i < n ? (unsigned char)args[i] : 0;
     }
@@ -286,6 +333,55 @@ static void cmd_recall(const char *args) {
  * process that HOLDS a field cap (ghost_test proves the capless side):
  * a cross-region request must be exactly EPERM even for a cap holder,
  * and a degenerate probe must be a clean n=0, never a kernel fault. */
+/* Read-only field introspection (epic #127 B1): SYS_FIELD_INFO reports live
+ * count, capacity, and per-slot metadata WITHOUT reinforcing anything — the
+ * honest counterpart to recall. The FIELDINFO:/FIELDSLOT: prefixes are merge
+ * gates; preview bytes are sanitised to printable-non-quote so stored content
+ * can never forge or break a FIELDSLOT line. */
+static void cmd_field(void) {
+    field_info_out_t info;
+    long r = field_info_(QSH_FIELD_REGION, &info);
+    if (r < 0) {
+        char b[64];
+        int o = ghost_put(b, 0, "qsh: field denied (err ");
+        o = ghost_put_u(b, o, (unsigned)(-r));
+        o = ghost_put(b, o, ")\r\n");
+        out_bytes(b, o);
+        return;
+    }
+    char b[160];
+    int o = ghost_put(b, 0, "FIELDINFO: region=");
+    o = ghost_put_u(b, o, info.region);
+    o = ghost_put(b, o, " live=");
+    o = ghost_put_u(b, o, info.live);
+    o = ghost_put(b, o, " cap=");
+    o = ghost_put_u(b, o, info.capacity);
+    o = ghost_put(b, o, "\r\n");
+    out_bytes(b, o);
+    for (unsigned i = 0; i < info.live && i < FIELD_SLOTS; i++) {
+        const field_slot_info_t *s = &info.slots[i];
+        o = ghost_put(b, 0, "FIELDSLOT: slot=");
+        o = ghost_put_u(b, o, s->slot);
+        o = ghost_put(b, o, " len=");
+        o = ghost_put_u(b, o, s->len);
+        o = ghost_put(b, o, " energy=");
+        o = ghost_put_u(b, o, (unsigned)(((long)s->energy_q15 * 100) / FIELD_ENERGY_MAX));
+        o = ghost_put(b, o, " eff=");
+        o = ghost_put_u(b, o, (unsigned)(((long)s->eff_energy_q15 * 100) / FIELD_ENERGY_MAX));
+        o = ghost_put(b, o, " retr=");
+        o = ghost_put_u(b, o, s->retrievals);
+        o = ghost_put(b, o, " age=");
+        o = ghost_put_u(b, o, s->age_ticks);
+        o = ghost_put(b, o, " preview=\"");
+        for (unsigned k = 0; k < s->len && k < FIELD_PREVIEW; k++) {
+            char c = (char)s->preview[k];
+            b[o++] = (c >= 32 && c < 127 && c != '"') ? c : '.';
+        }
+        o = ghost_put(b, o, "\"\r\n");
+        out_bytes(b, o);
+    }
+}
+
 static void cmd_fieldtest(void) {
     field_imprint_req_t req;
     req.region = QSH_FIELD_REGION + 1; /* a region the shell holds NO cap for */
@@ -1243,6 +1339,8 @@ static void execute(const char *line) {
         out("qsh: recall: usage: recall <probe text>\r\n");
     } else if (is_cmd(line, "fieldtest")) {
         cmd_fieldtest();
+    } else if (is_cmd(line, "field")) {
+        cmd_field();
     } else if ((a = arg_of(line, "net2")) != 0) {
         cmd_net2(a);
     } else if (is_cmd(line, "net2")) {

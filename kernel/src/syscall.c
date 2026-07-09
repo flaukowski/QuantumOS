@@ -1263,6 +1263,41 @@ static uint64_t sys_recall(uint32_t pid, uint64_t req_ptr, uint64_t out_ptr) {
     return 0;
 }
 
+/* SYS_FIELD_INFO — read-only enumeration of a field region (epic #127 B1). The
+ * honest, non-mutating counterpart to SYS_RECALL: it reports live count,
+ * capacity, and per-slot metadata WITHOUT reinforcing anything, so it is safe
+ * under a READ-only capability (recall is the only writer). */
+static uint64_t sys_field_info(uint32_t pid, uint64_t region_arg, uint64_t out_ptr) {
+    /* Capless-first: a caller with no field-read capability at all observes
+     * exactly EPERM before ANY user memory is touched (the ghost_test rule). */
+    uint32_t any_region = 0;
+    if (cap_find(pid, CAP_RESOURCE_FIELD, CAP_READ, &any_region) != CAP_SUCCESS) {
+        return SYSCALL_EPERM;
+    }
+    uint32_t region = (uint32_t)region_arg;
+    /* The cap must name EXACTLY the requested region — checked BEFORE the
+     * output pointer is examined, so a wrong-region caller also gets EPERM
+     * without revealing anything about (or requiring) a valid buffer. */
+    if (cap_find_resource(pid, CAP_RESOURCE_FIELD, CAP_READ, region) != CAP_SUCCESS) {
+        return SYSCALL_EPERM;
+    }
+    if (!in_user_range(out_ptr) || !in_user_range(out_ptr + sizeof(field_info_out_k_t) - 1)) {
+        return SYSCALL_EFAULT;
+    }
+    /* Static is safe: syscalls run cli'd on one CPU (the sys_recall precedent).
+     * field_region_info zeroes the whole struct before filling, so no residue
+     * from a prior call's region survives into the copy-out. */
+    static field_info_out_k_t out;
+    if (field_region_info(region, &out, timer_get_ticks()) < 0) {
+        return SYSCALL_EINVAL;
+    }
+    uint8_t *udst = (uint8_t *)out_ptr;
+    for (size_t i = 0; i < sizeof(out); i++) {
+        udst[i] = ((const uint8_t *)&out)[i];
+    }
+    return 0;
+}
+
 /* ============================================================================
  * Dispatch
  * ============================================================================ */
@@ -1363,6 +1398,9 @@ static void syscall_dispatch(cpu_state_t *state) {
         break;
     case SYS_RECALL:
         state->rax = sys_recall(pid, state->rdi, state->rsi);
+        break;
+    case SYS_FIELD_INFO:
+        state->rax = sys_field_info(pid, state->rdi, state->rsi);
         break;
     default:
         state->rax = SYSCALL_ENOSYS;

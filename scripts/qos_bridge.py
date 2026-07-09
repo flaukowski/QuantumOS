@@ -321,7 +321,10 @@ class QosTimeout(QosError):
 # marker prefixes as well stops agent-controlled text from impersonating a
 # result line (the host parses those prefixes as ground truth).
 QSH_LINE_MAX = 119
-_QSH_MARKERS = ("qsh:", "FIELD:", "PS:", "MEM:", "TIME:")
+# 'FIELDINFO:'/'FIELDSLOT:' are NOT covered by 'FIELD:' — 'FIELDINFO:'.startswith
+# ('FIELD:') is False — so they must be listed explicitly or stored content could
+# forge a field-info line (epic #127 B1).
+_QSH_MARKERS = ("qsh:", "FIELD:", "FIELDINFO:", "FIELDSLOT:", "PS:", "MEM:", "TIME:")
 
 
 def _qsh_text(value, budget, what="argument"):
@@ -824,17 +827,48 @@ class QosVM:
             body, _m = self._wait_markers(start, (sentinel,), deadline_s, what)
             return body
 
-    def imprint(self, text, deadline_s=10.0):
+    def imprint(self, text, energy_pct=None, deadline_s=10.0):
         """Kernel holographic field imprint via qsh (same space as a human at
-        the prompt). Returns the assigned slot."""
+        the prompt). `energy_pct` (1..100) sets the slot's importance via the
+        `imprint --energy` argument; omitted → the field default (~50%).
+        Returns the assigned slot."""
         self._ensure_verified()
-        _qsh_text(text, QSH_LINE_MAX - len("imprint "), "imprint text")
+        if energy_pct is not None:
+            energy_pct = int(energy_pct)
+            if not 1 <= energy_pct <= 100:
+                raise QosError(f"energy_pct must be 1..100: {energy_pct}")
+            prefix = f"imprint --energy {energy_pct} "
+        else:
+            prefix = "imprint "
+        _qsh_text(text, QSH_LINE_MAX - len(prefix), "imprint text")
         _ok = re.compile(r"^FIELD: imprinted slot (\d+)", re.M)
         _err = re.compile(r"^qsh: imprint(?: failed| : usage|:)", re.M)
-        _txt, m = self._qsh("imprint " + text, (_ok, _err), deadline_s)
+        _txt, m = self._qsh(prefix + text, (_ok, _err), deadline_s)
         if m.re is _err:
             raise QosError("imprint rejected by qsh")
         return {"slot": int(m.group(1)), "identity": self.identity()}
+
+    def field_info(self, region=0, deadline_s=10.0):
+        """READ-ONLY field enumeration (epic #127 B1): live count, capacity, and
+        per alive slot {slot, len, energy (% of max), eff (decayed %), retrievals,
+        age, preview}. Unlike recall this does NOT reinforce — repeated calls do
+        not perturb the field. (qsh reaches only its granted region 0.)"""
+        self._ensure_verified()
+        text = self._collect(["field"], deadline_s, "field")
+        m = re.search(r"^FIELDINFO: region=(\d+) live=(\d+) cap=(\d+)", text, re.M)
+        if not m:
+            raise QosError("field: no FIELDINFO line")
+        slots = []
+        for s in re.finditer(
+                r'^FIELDSLOT: slot=(\d+) len=(\d+) energy=(\d+) eff=(\d+) '
+                r'retr=(\d+) age=(\d+) preview="(.*?)"', text, re.M):
+            slots.append({"slot": int(s.group(1)), "len": int(s.group(2)),
+                          "energy": int(s.group(3)), "eff": int(s.group(4)),
+                          "retrievals": int(s.group(5)), "age": int(s.group(6)),
+                          "preview": s.group(7)})
+        return {"region": int(m.group(1)), "live": int(m.group(2)),
+                "capacity": int(m.group(3)), "slots": slots,
+                "identity": self.identity()}
 
     def recall(self, text, deadline_s=10.0):
         """Kernel holographic field recall via qsh. Returns the winner text."""
@@ -997,10 +1031,10 @@ class QosVM:
 
         HONEST LIMITATIONS: the field slot is <= 64 BYTES, so longer content is
         truncated (reported per result); the field is ASCII-only (qsh line
-        protocol), so a non-ASCII memory is SKIPPED, not imprinted; and Kannaka
-        strength is NOT carried into the slot energy (qsh `imprint` takes no
-        energy argument — the slot gets the field default), so importance does
-        not survive the hop. One bad result never aborts the batch."""
+        protocol), so a non-ASCII memory is SKIPPED, not imprinted. Kannaka
+        strength IS now carried into the slot energy (as an `imprint --energy`
+        percent) so importance survives the hop (epic #127 B1). One bad result
+        never aborts the batch."""
         self._ensure_verified()
         results = _kannaka.recall(query, top_k)
         out = []
@@ -1010,13 +1044,17 @@ class QosVM:
             sim = r.get("similarity") if isinstance(r, dict) else None
             stored = content[:FIELD_PAT_MAX]
             truncated = len(content.encode("utf-8", "replace")) > FIELD_PAT_MAX
+            # Kannaka similarity/strength in [0,1] -> energy percent [1,100]; a
+            # missing/degenerate score floors at 1 (never 0 — 0 is the kernel's
+            # "use the default" sentinel).
+            pct = max(1, min(100, round(sim * 100))) if isinstance(sim, (int, float)) else None
             try:
                 if '"' in stored:
                     raise QosError("content contains a quote (field forge guard)")
-                res = self.imprint(stored)              # validates ASCII/budget
+                res = self.imprint(stored, energy_pct=pct)  # validates ASCII/budget
                 out.append({"slot": res["slot"], "kannaka_id": kid,
                             "content": stored, "truncated": truncated,
-                            "similarity": sim})
+                            "similarity": sim, "energy_pct": pct})
             except QosError as exc:
                 out.append({"slot": None, "kannaka_id": kid, "content": None,
                             "skipped": str(exc), "similarity": sim})
