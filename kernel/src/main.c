@@ -6,6 +6,7 @@
 #include <kernel/process.h>
 #include <kernel/scheduler.h>
 #include <kernel/capability.h>
+#include <kernel/manifest.h>
 #include <kernel/quantum.h>
 #include <kernel/service.h>
 #include <kernel/gdt.h>
@@ -297,6 +298,15 @@ static void core_services_init(void) {
     }
     if (cap_selftest() != CAP_SUCCESS) {
         boot_panic("Capability self-test failed");
+    }
+
+    // Intent-manifest self-test (epic #135): on the shipped system caps and
+    // manifests are minted from the same grants, so no citizen ever trips
+    // the MDENY path — this drives the real check helper to a deny and a
+    // quota refusal at every boot, recording the AUDIT_MDENY/AUDIT_QUOTA
+    // entries the CI gate parses. A constant-true check cannot ship green.
+    if (manifest_selftest() != 0) {
+        boot_panic("Manifest self-test failed");
     }
 
     // Initialize quantum resource manager (before processes — quantum-

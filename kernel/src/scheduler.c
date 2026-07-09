@@ -15,6 +15,7 @@
 #include <kernel/memory.h>
 #include <kernel/vmspace.h>
 #include <kernel/boot.h>
+#include <kernel/manifest.h>
 #ifdef SCHED_LOTTERY
 #include <kernel/quantum.h>
 #endif
@@ -91,6 +92,14 @@ static process_t *pick_next(uint32_t from_pid) {
 }
 
 void scheduler_tick(cpu_state_t *state) {
+    /* Manifest CPU accounting (epic #135): charge the interrupted process
+     * one tick BEFORE the quantum early-return — after it, this would count
+     * reschedules and undercount by SCHED_QUANTUM_TICKS x. IRQ context: IF
+     * is already 0, and unbound pids (kernel, idle) hit a dead entry. */
+    process_t *cur = process_get_current();
+    if (cur) {
+        manifest_tick(cur->pid);
+    }
     if (++quantum_counter < SCHED_QUANTUM_TICKS) {
         return;
     }

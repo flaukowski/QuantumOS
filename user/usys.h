@@ -40,9 +40,11 @@
 #define SYS_RECALL 30
 #define SYS_FIELD_INFO 31
 #define SYS_AUDIT 32
+#define SYS_MANIFEST 33
 #define AUDIT_OP_READ 0
 #define AUDIT_OP_STATS 1
-#define AUDIT_TEXT_MAX 12288 /* >= kernel AUDIT_MAX_BYTES (128*96) so a read is whole */
+#define AUDIT_TEXT_MAX 12288    /* >= kernel AUDIT_MAX_BYTES (128*96) so a read is whole */
+#define MANIFEST_TEXT_MAX 16384 /* >= kernel MANIFEST_TEXT_MAX so a read is whole */
 
 /* SYS_RESOLVE / SYS_UDP: still pending (poll again) / ring full. */
 #define RESOLVE_WOULDBLOCK (-11)
@@ -384,6 +386,13 @@ static inline long field_info_(unsigned int region, field_info_out_t *out) {
  * read-only introspection; returns bytes copied into buf. */
 static inline long audit_(long op, char *buf, long len) {
     return usys3(SYS_AUDIT, op, (long)buf, len);
+}
+
+/* Read the per-pid intent manifests (epic #135 Phase D increment 2). Dumps
+ * every bound manifest's declared allow-set, spawn quota, and cpu_ticks as
+ * text. Uncapped read-only introspection; returns bytes copied into buf. */
+static inline long manifest_(char *buf, long len) {
+    return usys2(SYS_MANIFEST, (long)buf, len);
 }
 
 /* Start an initrd ELF as a new ring-3 process. `cmd` is a command line:

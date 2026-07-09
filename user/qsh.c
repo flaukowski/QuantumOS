@@ -401,6 +401,20 @@ static void cmd_audit(void) {
     }
 }
 
+/* Intent manifests (epic #135 Phase D inc. 2): the KERNEL dumps every bound
+ * citizen's DECLARED intent — its allow-set, spawn quota (used/max), and CPU
+ * ticks — a policy layer above raw capabilities that a citizen cannot forge.
+ * `manifest` reads it read-only (SYS_MANIFEST). The MANIFEST: prefix is a
+ * merge gate; the static buffer is mandatory (the 16 KB user stack cannot
+ * hold a 16 KB dump — a stack buffer page-faults and kills the shell). */
+static void cmd_manifest(void) {
+    static char buf[MANIFEST_TEXT_MAX];
+    long n = manifest_(buf, sizeof(buf));
+    if (n > 0) {
+        out_bytes(buf, n);
+    }
+}
+
 static void cmd_fieldtest(void) {
     field_imprint_req_t req;
     req.region = QSH_FIELD_REGION + 1; /* a region the shell holds NO cap for */
@@ -1362,6 +1376,8 @@ static void execute(const char *line) {
         cmd_field();
     } else if (is_cmd(line, "audit")) {
         cmd_audit();
+    } else if (is_cmd(line, "manifest")) {
+        cmd_manifest();
     } else if ((a = arg_of(line, "net2")) != 0) {
         cmd_net2(a);
     } else if (is_cmd(line, "net2")) {

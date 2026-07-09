@@ -123,6 +123,23 @@ def qos_audit() -> dict:
 
 
 @mcp.tool()
+def qos_manifest() -> dict:
+    """Read the per-pid INTENT MANIFESTS (epic #135 Phase D increment 2): every
+    bound citizen's DECLARED intent — the allow-set of resources it may touch, its
+    spawn quota (used/max, where * = unlimited), and CPU ticks consumed. This is a
+    policy layer ABOVE raw capabilities: the KERNEL builds each manifest from the
+    same grants that mint the caps and enforces it at the capability-gated syscall
+    sites plus the first real quota (spawn), so a citizen cannot forge its own row.
+    Returns {truncated, manifests:{pid:{bound, spawn_used, spawn_max, cpu_ticks,
+    allow:[{res,id,perms}]}}}. Makes declared intent inspectable and the spawn
+    quota's enforcement observable. Refuses if the attestation is not verified."""
+    try:
+        return _vm.manifest()
+    except QosError as exc:
+        return _err(exc)
+
+
+@mcp.tool()
 def qos_run(program: str, args: str = "") -> dict:
     """Spawn a citizen off the initrd (e.g. '/bin/hello' or '/bin/args a b c')
     via qsh and return its console output and exit code. `program` must be

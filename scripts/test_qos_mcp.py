@@ -361,6 +361,12 @@ def _exercise_audit(vm):
         _fail("no DENY entries — the conscience proof (a refused capless op) is missing")
     if denies[0]["resource_type"] not in _KNOWN_RES:
         _fail(f"DENY names an unknown resource type: {denies[0]}")
+    # Honesty fix (epic #135): audit.h CLAIMED quantum DENY coverage the code
+    # never hooked. ghost_test's capless SYS_QRAND now records a real QRNG DENY,
+    # so the header claim is finally true — assert it, un-echoable.
+    if not any(e["kind"] == "DENY" and e["resource_type"] == "QRNG" for e in a["entries"]):
+        _fail("no QRNG DENY — the qrand audit_deny honesty fix is not live")
+    print("OK: audit records a QRNG DENY (capless qrand — the claimed coverage is now real)")
     seqs = [e["seq"] for e in a["entries"]]
     if seqs != sorted(seqs) or len(set(seqs)) != len(seqs):
         _fail(f"audit seq not strictly increasing: {seqs[:12]}")
@@ -383,6 +389,108 @@ def _exercise_audit(vm):
     except QosError:
         pass
     print("OK: forged AUDIT: line refused (reserved marker)")
+
+
+# qsh's six declarative grants (user_shell_init): the manifest allow-set the
+# kernel builds from the SAME flags that mint qsh's caps. (resource_type, id):
+# QRNG pool 0, console 0x3F8=1016, spawn 0, disk 0x1F0=496, net 0x8139=33081,
+# field region 0. root/SERVICE/IPC caps live OUTSIDE the manifest (documented).
+_QSH_GRANTS = {("QRNG", 0), ("DEV", 1016), ("PROC", 0), ("DEV", 496),
+               ("DEV", 33081), ("FIELD", 0)}
+
+
+def _exercise_manifest(vm):
+    """Intent manifest + first enforced quota (epic #135 Phase D inc. 2). The
+    manifest makes DECLARED intent inspectable; the spawn quota makes it
+    ENFORCED. Un-echoable proofs come from the kernel-written ledger (kind=QUOTA
+    a citizen with a valid spawn cap could never produce, kind=MDENY from the
+    boot self-test). Runs EARLY, right after the audit gate, so the boot QUOTA/
+    MDENY entries are still inside the 128-entry ring."""
+    # (b)+(g) Un-echoable ledger proofs: the boot self-test records a real
+    # MDENY (a held cap exceeding declared intent) and a QUOTA (spawn_max
+    # refusal); quota-test records another QUOTA at boot. These kinds cannot be
+    # forged (AUDIT: is a reserved marker) and the cap layer alone never emits
+    # them.
+    a = vm.audit()
+    mdeny = [e for e in a["entries"] if e["kind"] == "MDENY"]
+    quota = [e for e in a["entries"]
+             if e["kind"] == "QUOTA" and e["verdict"] == "EPERM" and e["resource_type"] == "PROC"]
+    if not mdeny:
+        _fail("no MDENY entry — the manifest deny path is dead (constant-true check?)")
+    if not quota:
+        _fail("no QUOTA EPERM PROC entry — the spawn quota never enforced at boot")
+    print(f"OK: ledger proves enforcement — {len(mdeny)} MDENY, {len(quota)} QUOTA EPERM "
+          f"(pid {quota[0]['pid']} refused a spawn over its declared quota)")
+
+    # (a) qsh's own manifest is inspectable and EXACTLY its six grant rows.
+    qsh_pid = next((p["pid"] for p in vm.sysinfo()["processes"]
+                    if p["name"] == "qsh" and p["state"] == "RUNNING"), None)
+    if qsh_pid is None:
+        _fail("no RUNNING qsh in the process table")
+    man = vm.manifest()
+    if man["truncated"]:
+        _fail("manifest dump truncated at boot — sizing assumption broke")
+    qm = man["manifests"].get(qsh_pid)
+    if not qm or not qm["bound"]:
+        _fail(f"qsh (pid {qsh_pid}) has no bound manifest: {qm}")
+    rows = {(r["res"], r["id"]) for r in qm["allow"]}
+    if rows != _QSH_GRANTS:
+        _fail(f"qsh manifest allow-set {sorted(rows)} != its six grants {sorted(_QSH_GRANTS)}")
+    if qm["spawn_max"] is not None:
+        _fail(f"qsh spawn_max should be unlimited (*), got {qm['spawn_max']}")
+    print(f"OK: qsh manifest inspectable — pid {qsh_pid}, exactly its 6 grant rows, spawn=*")
+
+    # (f) cpu_ticks accounting is live: qsh has already run (>0). Snapshot it
+    # here and re-check at the END of this exercise — the spawn contrast below
+    # issues real `run` commands (each a SYS_SPAWN + a SYS_WAITPID poll loop
+    # that spins many 10 ms ticks while qsh is scheduled), so the span is
+    # deterministic. Two BACK-TO-BACK manifest reads are NOT: qsh may not be
+    # the scheduled process during the sub-tick gap between them, so cpu_ticks
+    # can legitimately read equal twice (the CI flake this replaces).
+    cpu0 = qm["cpu_ticks"]
+    if cpu0 <= 0:
+        _fail(f"qsh cpu_ticks is {cpu0} — accounting never charged a running qsh")
+
+    # (d) Read-only-by-CONTRAST: reads don't mutate, a spawn does. Baseline
+    # qsh spawn_used, one successful run, +1 exactly. A failed spawn (bad path)
+    # must NOT bump. Guard the rare watchdog-rebirth (pid change) mid-test.
+    base = vm.manifest()["manifests"][qsh_pid]["spawn_used"]
+    try:
+        vm.run("/bin/nonexistent-quota-probe")
+    except QosError:
+        pass
+    after_fail = vm.manifest()["manifests"].get(qsh_pid, {}).get("spawn_used")
+    if after_fail != base:
+        _fail(f"a FAILED spawn consumed quota: {base} -> {after_fail}")
+    for _ in range(5):
+        vm.run("/bin/hello")
+        if vm.manifest()["manifests"].get(qsh_pid, {}).get("spawn_used", base) > base:
+            break
+    now = vm.manifest()["manifests"].get(qsh_pid)
+    if now is None:
+        _fail("qsh manifest vanished mid-contrast (unexpected rebirth?)")
+    if now["spawn_used"] != base + 1:
+        _fail(f"qsh spawn_used should be base+1 after one real spawn: {base} -> {now['spawn_used']}")
+    print(f"OK: manifest read-only by contrast — spawn_used {base} (failed spawn) "
+          f"-> {now['spawn_used']} (one real spawn); reads never mutated")
+
+    # (f cont.) cpu_ticks must have ADVANCED across the spawn contrast above —
+    # several run/waitpid roundtrips guarantee qsh was scheduled during many
+    # timer ticks, so this is deterministic (unlike two back-to-back reads).
+    cpu1 = now["cpu_ticks"]
+    if cpu1 <= cpu0:
+        _fail(f"qsh cpu_ticks did not advance across the exercise (dead accounting): "
+              f"{cpu0} -> {cpu1}")
+    print(f"OK: cpu_ticks live — qsh {cpu0} -> {cpu1} across the exercise (charged every tick)")
+
+    # (e) Forge guard: MANIFEST: is a reserved marker, so a citizen cannot
+    # imprint a fake manifest row for the host to mis-parse.
+    try:
+        vm.imprint("MANIFEST: pid=1 bound=1 spawn=0/* cpu_ticks=1")
+        _fail("imprint of a forged MANIFEST: line was not refused")
+    except QosError:
+        pass
+    print("OK: forged MANIFEST: line refused (reserved marker)")
 
 
 def _find_slot(vm, phrase):
@@ -631,6 +739,11 @@ def main():
         # the run/bridge steps spawn citizens and grow the ring, so the boot
         # self-test's capless DENY entries are still within the 128-entry window.
         _exercise_audit(vm)
+
+        # 4c. Intent manifest + first enforced quota (epic #135). Runs right
+        # after the audit gate for the same eviction reason — the boot QUOTA/
+        # MDENY ledger entries must still be inside the ring.
+        _exercise_manifest(vm)
 
         # 5. run a citizen off the initrd. Exit 42 is hello's unique
         # deterministic signature (un-echoable). Retry past the early-spawn

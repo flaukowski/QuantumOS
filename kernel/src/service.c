@@ -13,6 +13,7 @@
 #include <kernel/process.h>
 #include <kernel/scheduler.h>
 #include <kernel/capability.h>
+#include <kernel/manifest.h>
 #include <kernel/quantum.h>
 #include <kernel/com2_uart.h>
 #include <kernel/console.h>
@@ -201,6 +202,11 @@ static svc_result_t start_slot(service_slot_t *slot) {
         /* In-kernel thread service */
         if (kernel_thread_create(slot->info.name, slot->def.entry, PRIORITY_NORMAL, &pid) !=
             STATUS_SUCCESS) {
+            /* Every return after svc_irq_save must restore: leaving here
+             * with IF=0 forever (no timer, no scheduler) turns a graceful
+             * SVC_ERROR_SPAWN_FAILED into a system hang. (Pre-existing
+             * leak found by the epic #135 design panel.) */
+            svc_irq_restore(irqflags);
             slot->info.state = SERVICE_STATE_CRASHED;
             slot->starting = 0;
             return SVC_ERROR_SPAWN_FAILED;
@@ -304,6 +310,61 @@ static svc_result_t start_slot(service_slot_t *slot) {
         }
     }
 
+    /* Bind the intent manifest from the SAME grant flags that minted the
+     * caps above, inside the SAME cli window (epic #135): intent and
+     * authority are never half-committed, and a watchdog rebirth re-binds
+     * exactly like it re-mints. This OVERWRITES the restrictive default
+     * finalize_user_process bound (manifest_bind is last-write-wins). */
+    {
+        manifest_t man;
+        memset(&man, 0, sizeof(man));
+        man.bound = 1;
+        man.spawn_max = slot->def.spawn_max;
+        if (slot->def.grant_quantum_pool) {
+            man.entries[man.entry_count].resource_type = CAP_RESOURCE_QUANTUM;
+            man.entries[man.entry_count].resource_id = QUANTUM_POOL_RESOURCE_ID;
+            man.entries[man.entry_count].permissions = CAP_QUANTUM | CAP_READ;
+            man.entry_count++;
+        }
+        if (slot->def.grant_com2) {
+            man.entries[man.entry_count].resource_type = CAP_RESOURCE_DEVICE;
+            man.entries[man.entry_count].resource_id = DEVICE_ID_COM2;
+            man.entries[man.entry_count].permissions = CAP_DEVICE | CAP_READ | CAP_WRITE;
+            man.entry_count++;
+        }
+        if (slot->def.grant_console) {
+            man.entries[man.entry_count].resource_type = CAP_RESOURCE_DEVICE;
+            man.entries[man.entry_count].resource_id = DEVICE_ID_CONSOLE;
+            man.entries[man.entry_count].permissions = CAP_DEVICE | CAP_READ | CAP_WRITE;
+            man.entry_count++;
+        }
+        if (slot->def.grant_spawn) {
+            man.entries[man.entry_count].resource_type = CAP_RESOURCE_PROCESS;
+            man.entries[man.entry_count].resource_id = SPAWN_RESOURCE_ID;
+            man.entries[man.entry_count].permissions = CAP_EXECUTE;
+            man.entry_count++;
+        }
+        if (slot->def.grant_fswrite) {
+            man.entries[man.entry_count].resource_type = CAP_RESOURCE_DEVICE;
+            man.entries[man.entry_count].resource_id = DEVICE_ID_DISK;
+            man.entries[man.entry_count].permissions = CAP_DEVICE | CAP_READ | CAP_WRITE;
+            man.entry_count++;
+        }
+        if (slot->def.grant_net) {
+            man.entries[man.entry_count].resource_type = CAP_RESOURCE_DEVICE;
+            man.entries[man.entry_count].resource_id = DEVICE_ID_NET;
+            man.entries[man.entry_count].permissions = CAP_DEVICE | CAP_READ;
+            man.entry_count++;
+        }
+        if (slot->def.grant_field && slot->def.field_region < FIELD_REGION_COUNT) {
+            man.entries[man.entry_count].resource_type = CAP_RESOURCE_FIELD;
+            man.entries[man.entry_count].resource_id = slot->def.field_region;
+            man.entries[man.entry_count].permissions = CAP_READ | CAP_WRITE;
+            man.entry_count++;
+        }
+        manifest_bind(pid, &man);
+    }
+
     slot->info.pid = pid;
     slot->info.pid_generation = process_get_generation(pid);
     slot->info.start_time = timer_get_ticks();
@@ -311,8 +372,8 @@ static svc_result_t start_slot(service_slot_t *slot) {
     slot->info.state = SERVICE_STATE_RUNNING;
     slot->starting = 0;
 
-    /* All caps minted and pid/generation recorded — the reborn process may
-     * now be scheduled with full authority. */
+    /* All caps minted, manifest bound, pid/generation recorded — the reborn
+     * process may now be scheduled with full authority. */
     svc_irq_restore(irqflags);
 
     if (!boot_is_quiet()) {

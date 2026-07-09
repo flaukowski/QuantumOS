@@ -14,6 +14,7 @@
 #include <kernel/boot.h>
 #include <kernel/types.h>
 #include <kernel/capability.h>
+#include <kernel/manifest.h>
 #include <kernel/quantum.h>
 #include <kernel/gdt.h>
 #include <kernel/vmspace.h>
@@ -450,6 +451,13 @@ status_t process_destroy(uint32_t pid) {
     cap_revoke_all_for_process(pid);
     process->capability_root = CAP_ID_INVALID;
     process->capability_count = 0;
+
+    /* Clear the intent manifest with the caps (epic #135). INVARIANT: this
+     * must run before state=UNUSED below — every pid-reuse path funnels
+     * through process_destroy, so clear-here + bind-before-schedule is what
+     * keeps a recycled pid from inheriting its predecessor's intent. Do not
+     * hoist this below the UNUSED store. */
+    manifest_clear(pid);
 
     /* Free the private address space (page tables + user frames). Safe
      * here because process_destroy never runs on the current process,

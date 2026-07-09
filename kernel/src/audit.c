@@ -134,6 +134,10 @@ static const char *kind_name(uint16_t k) {
         return "DENY";
     case AUDIT_SPAWN:
         return "SPAWN";
+    case AUDIT_MDENY:
+        return "MDENY";
+    case AUDIT_QUOTA:
+        return "QUOTA";
     default:
         return "EMPTY";
     }

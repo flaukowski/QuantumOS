@@ -351,8 +351,21 @@ bool service_check_resource_limit(const service_capability_t *cap, uint32_t reso
 ### Service Isolation
 - **Separate Address Spaces**: Each service runs in isolated memory
 - **Limited Capabilities**: Services only get capabilities they need
-- **Resource Limits**: CPU, memory, and quantum resource quotas
-- **Audit Logging**: All service operations are logged
+- **Intent Manifest + Resource Limits** (epic #135): each service carries a
+  per-pid **intent manifest** — the allow-set built from its grant flags,
+  bound in the same interrupt-off window that mints its caps and checked at
+  every capability-gated syscall. The `spawn_max` quota is the **first
+  ENFORCED** resource limit: it caps successful `SYS_SPAWN`s per incarnation
+  (checked before side effects, charged on success, refusal recorded as
+  `AUDIT_QUOTA`), and `cpu_ticks` accounting is live. HONEST STATUS: the
+  legacy `cpu_limit` / `memory_limit` / `quantum_limit` fields in
+  `service_config_t` below are NOT yet enforced — a runtime memory quota in
+  particular is currently vacuous (page faults kill; there is no runtime
+  per-process allocation to meter). `spawn_max` is the enforced one today.
+- **Audit + Manifest Logging**: capability GRANT/DENY/SPAWN plus manifest
+  MDENY (a held cap exceeding declared intent) and QUOTA denials are recorded
+  in the kernel authority ledger (`SYS_AUDIT`); declared intent is readable
+  via `SYS_MANIFEST`.
 
 ## Service Monitoring
 
