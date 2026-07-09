@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
 """
-QuantumOS MCP server (epic #99): expose a running QuantumOS to agents as
-tools. Any MCP-speaking agent can boot a VM, query its ghostd field, imprint
-and recall associative memories at the kernel field, run a citizen off the
-initrd, and shut it down — every result carrying the boot's Lamport-verified
-identity.
+QuantumOS MCP server (epics #99, #125): expose a running QuantumOS to agents
+as tools. Any MCP-speaking agent can boot a VM; query its ghostd field; imprint
+and recall associative memories at the kernel field; run a citizen off the
+initrd (with arguments); read a structured machine snapshot (uptime, memory,
+process table, date); draw quantum-seeded entropy; write/rm/sync overlay files;
+have the OS fetch a URL over its own TCP stack; and shut it down — every result
+carrying the boot's Lamport-verified identity.
 
 This is a THIN wrapper: all logic (framing, attestation, the QEMU lifecycle,
 the verified-gate) lives in qos_bridge.QosVM. The tools here are one-line
@@ -89,12 +91,65 @@ def qos_recall(text: str) -> dict:
 
 
 @mcp.tool()
-def qos_run(program: str) -> dict:
-    """Spawn a citizen off the initrd (e.g. '/bin/hello') via qsh and return
-    its console output and exit code. `program` must be /bin/<name>. Refuses
-    if the attestation is not verified."""
+def qos_run(program: str, args: str = "") -> dict:
+    """Spawn a citizen off the initrd (e.g. '/bin/hello' or '/bin/args a b c')
+    via qsh and return its console output and exit code. `program` must be
+    /bin/<name>; `args` is an optional argument string (validated — no control
+    bytes, bounded to the qsh line, no result-marker impersonation). Refuses if
+    the attestation is not verified."""
     try:
-        return _vm.run(program)
+        return _vm.run(program, args=args)
+    except QosError as exc:
+        return _err(exc)
+
+
+@mcp.tool()
+def qos_sysinfo() -> dict:
+    """One structured snapshot of the running machine: uptime (ticks + seconds),
+    memory (heap-free bytes, free/total frames), the live process table
+    (pid/name/state), and the RTC date. Refuses if not verified."""
+    try:
+        return _vm.sysinfo()
+    except QosError as exc:
+        return _err(exc)
+
+
+@mcp.tool()
+def qos_qrand() -> dict:
+    """Draw 64 bits of quantum-seeded entropy from the guest (SYS_QRAND,
+    capability-gated in-kernel). Returns lowercase hex. Refuses if not
+    verified."""
+    try:
+        return _vm.qrand()
+    except QosError as exc:
+        return _err(exc)
+
+
+@mcp.tool()
+def qos_fetch(host: str, port: int = 80, allow_private: bool = False) -> dict:
+    """Have QuantumOS fetch http://host:port/ over its own TCP stack; returns
+    the status line, byte count, and whether the transfer completed.
+
+    This reaches the HOST network namespace via SLIRP NAT (loopback, DNS, and
+    outbound internet are live), NOT a sandbox — so loopback/RFC1918 targets
+    are refused by default (SSRF guard); set allow_private=True to override.
+    The response BODY is not returned (qsh's `http` prints only the status line
+    and byte count). Refuses if the attestation is not verified."""
+    try:
+        return _vm.fetch(host, port=port, allow_private=allow_private)
+    except QosError as exc:
+        return _err(exc)
+
+
+@mcp.tool()
+def qos_fs(op: str, path: str = "", text: str = "") -> dict:
+    """Overlay-filesystem operation over qsh. op is 'write' (path + text),
+    'rm' (path), or 'sync' (flush the RAM overlay to disk). Paths and text are
+    validated before they reach the qsh line. read/ls are not offered yet —
+    their console output is not machine-framed (a filed guest follow-up).
+    Refuses if the attestation is not verified."""
+    try:
+        return _vm.fs(op, path=path, text=text)
     except QosError as exc:
         return _err(exc)
 

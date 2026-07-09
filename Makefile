@@ -111,7 +111,7 @@ OBJECTS = $(KERNEL_SOURCES:$(KERNEL_DIR)/src/%.c=$(BUILD_DIR)/%.o) \
 -include $(OBJECTS:.o=.d)
 
 # Targets
-.PHONY: all clean kernel run debug dump test test-list test-coverage ci-smoke ci-smoke-disk ci-smoke-net ci-smoke-http ci-smoke-httpd ci-smoke-quiet ci-smoke-resonant ci-smoke-qseed ci-smoke-swarm ci-smoke-mcp ci-smoke-iso ci-smoke-kbd ci-smoke-noserial ci-smoke-screen swarm-pingpong
+.PHONY: all clean kernel run debug dump test test-list test-coverage ci-smoke ci-smoke-disk ci-smoke-net ci-smoke-http ci-smoke-httpd ci-smoke-quiet ci-smoke-resonant ci-smoke-qseed ci-smoke-swarm ci-smoke-mcp ci-smoke-mcp-gate ci-smoke-iso ci-smoke-kbd ci-smoke-noserial ci-smoke-screen swarm-pingpong
 
 all: kernel
 
@@ -1508,9 +1508,18 @@ swarm-pingpong: kernel
 # integration job with no pip. Anti-vacuous: verified+qseed-bound attestation,
 # live>=3 ghostd field, TWO discriminated recalls, hello's unique exit-42, and
 # a CRC-valid crypto-tamper that must be refused.
-ci-smoke-mcp: kernel
-	@echo "=== QuantumOS MCP Server Lifecycle Test (epic #99) ==="
-	timeout -k 5 150s python3 scripts/test_qos_mcp.py
+# The gate timeout lives in exactly ONE place (MCP_GATE_TIMEOUT) and the CI
+# integration job invokes `make ci-smoke-mcp-gate` with the SAME target — no
+# duplicated `timeout ... python3 test_qos_mcp.py` literal to drift out of sync
+# (the #93 Makefile/ci.yml desync lesson). ci-smoke-mcp-gate has NO `kernel`
+# prerequisite, so the artifact-based CI job does not rebuild the kernel.
+MCP_GATE_TIMEOUT ?= 240s
+
+ci-smoke-mcp: kernel ci-smoke-mcp-gate
+
+ci-smoke-mcp-gate:
+	@echo "=== QuantumOS MCP Server Lifecycle Test (epics #99, #125) ==="
+	timeout -k 5 $(MCP_GATE_TIMEOUT) python3 scripts/test_qos_mcp.py
 
 # ISO/GRUB boot path (epic #101): boot the GRUB-built ISO with -cdrom —
 # NOT QEMU's -kernel shortcut — so the real bootloader handoff (menu,
