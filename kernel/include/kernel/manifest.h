@@ -84,6 +84,23 @@ void manifest_bind(uint32_t pid, const manifest_t *m);
  * process_destroy beside cap_revoke_all_for_process. */
 void manifest_clear(uint32_t pid);
 
+/* Append ONE allow row to an already-bound manifest — the runtime intent
+ * extension SYS_CAP_DERIVE performs when it delegates a capability (epic #137):
+ * a delegated cap is inert unless the recipient's manifest also allows the
+ * resource. Self-contained irqsave (the same discipline manifest_bind uses;
+ * the health monitor rebinds from IF=1). Returns true if the row is present
+ * after the call: false if the pid is unbound (caller must pre-check) or the
+ * manifest is full (entry_count >= MANIFEST_MAX_ENTRIES); an existing
+ * (resource_type, resource_id) row is an idempotent no-op success. Perms are
+ * recorded for inspection, NOT matched by manifest_check. */
+bool manifest_grant(uint32_t pid, uint32_t resource_type, uint32_t resource_id,
+                    uint32_t permissions);
+
+/* True if pid has a BOUND manifest with a free entry slot. SYS_CAP_DERIVE
+ * pre-checks this BEFORE minting the child cap, so manifest_grant cannot fail
+ * after a capability already exists (no undo path). */
+bool manifest_has_room(uint32_t pid);
+
 /* Intent check for a capability-gated syscall site. Call AFTER cap_find
  * succeeds. Returns 1 (allowed: unbound pid, or a bound manifest with a
  * matching {resource_type, resource_id} row) or 0 (bound manifest without a

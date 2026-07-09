@@ -141,6 +141,14 @@ cap_result_t cap_find(uint32_t pid, cap_resource_type_t resource_type, uint32_t 
 cap_result_t cap_find_resource(uint32_t pid, cap_resource_type_t resource_type,
                                uint32_t required_perms, uint32_t resource_id);
 
+/* Like cap_find_resource, but also yields the matched capability's cap_id
+ * (handle). Used by SYS_CAP_DERIVE (epic #137): the delegator names its own
+ * parent cap by (resource_type, resource_id) — never by a ring-3 handle — and
+ * the kernel resolves the cap_id here to feed cap_derive. required_perms should
+ * include CAP_GRANT so only a grantable parent is selected. */
+cap_result_t cap_find_id(uint32_t pid, cap_resource_type_t resource_type, uint32_t required_perms,
+                         uint32_t resource_id, uint32_t *cap_id_out);
+
 /* Revoke everything owned by a process (called on process destroy) */
 void cap_revoke_all_for_process(uint32_t pid);
 

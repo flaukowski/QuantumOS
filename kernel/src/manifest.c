@@ -64,6 +64,51 @@ void manifest_clear(uint32_t pid) {
     man_irq_restore(flags);
 }
 
+bool manifest_grant(uint32_t pid, uint32_t resource_type, uint32_t resource_id,
+                    uint32_t permissions) {
+    if (pid >= MAX_PROCESSES) {
+        return false;
+    }
+    uint64_t flags = man_irq_save();
+    manifest_t *m = &manifest_table[pid];
+    bool ok = false;
+    if (m->bound) {
+        /* Idempotent: an existing (rtype,rid) row is success — the delegated
+         * resource is already allowed. */
+        for (uint8_t i = 0; i < m->entry_count; i++) {
+            if (m->entries[i].resource_type == resource_type &&
+                m->entries[i].resource_id == resource_id) {
+                ok = true;
+                break;
+            }
+        }
+        /* >= not ==: entries[] indices are 0..MANIFEST_MAX_ENTRIES-1, and
+         * manifest_bind clamps entry_count with '>', so a full manifest reads
+         * exactly MANIFEST_MAX_ENTRIES — appending then would write past the
+         * array. */
+        if (!ok && m->entry_count < MANIFEST_MAX_ENTRIES) {
+            m->entries[m->entry_count].resource_type = resource_type;
+            m->entries[m->entry_count].resource_id = resource_id;
+            m->entries[m->entry_count].permissions = permissions;
+            m->entry_count++;
+            ok = true;
+        }
+    }
+    man_irq_restore(flags);
+    return ok;
+}
+
+bool manifest_has_room(uint32_t pid) {
+    if (pid >= MAX_PROCESSES) {
+        return false;
+    }
+    uint64_t flags = man_irq_save();
+    const manifest_t *m = &manifest_table[pid];
+    bool room = m->bound && m->entry_count < MANIFEST_MAX_ENTRIES;
+    man_irq_restore(flags);
+    return room;
+}
+
 int manifest_check(uint32_t pid, uint32_t resource_type, uint32_t resource_id,
                    uint32_t permissions) {
     if (pid >= MAX_PROCESSES) {

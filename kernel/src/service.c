@@ -95,6 +95,11 @@ static service_slot_t *slot_by_pid(uint32_t pid) {
     return NULL;
 }
 
+bool service_pid_is_monitored(uint32_t pid) {
+    service_slot_t *slot = slot_by_pid(pid);
+    return slot && slot->monitored;
+}
+
 /* ============================================================================
  * Manager API
  * ============================================================================ */
@@ -295,8 +300,15 @@ static svc_result_t start_slot(service_slot_t *slot) {
                 field_region_scrub(slot->def.field_region);
             }
             uint32_t fldcap = CAP_ID_INVALID;
-            if (cap_create(pid, CAP_RESOURCE_FIELD, slot->def.field_region, CAP_READ | CAP_WRITE, 0,
-                           &fldcap) != CAP_SUCCESS) {
+            /* A delegable field cap also carries CAP_GRANT so this citizen may
+             * cap_derive a narrowed slice of the region to a sub-agent (epic
+             * #137). Only the delegator sets grant_field_delegable. */
+            uint32_t fldperms = CAP_READ | CAP_WRITE;
+            if (slot->def.grant_field_delegable) {
+                fldperms |= CAP_GRANT;
+            }
+            if (cap_create(pid, CAP_RESOURCE_FIELD, slot->def.field_region, fldperms, 0, &fldcap) !=
+                CAP_SUCCESS) {
                 boot_log("service: field cap grant failed");
                 boot_log(slot->info.name);
             } else if (inherit) {
@@ -359,7 +371,8 @@ static svc_result_t start_slot(service_slot_t *slot) {
         if (slot->def.grant_field && slot->def.field_region < FIELD_REGION_COUNT) {
             man.entries[man.entry_count].resource_type = CAP_RESOURCE_FIELD;
             man.entries[man.entry_count].resource_id = slot->def.field_region;
-            man.entries[man.entry_count].permissions = CAP_READ | CAP_WRITE;
+            man.entries[man.entry_count].permissions =
+                CAP_READ | CAP_WRITE | (slot->def.grant_field_delegable ? CAP_GRANT : 0);
             man.entry_count++;
         }
         manifest_bind(pid, &man);

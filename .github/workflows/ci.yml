@@ -780,7 +780,7 @@ jobs:
         ( printf 'help\nps\nfree\nuptime\ndate\nghost\nqrand\nls\ncat /docs/hello.txt\nrun /bin/hello\nrun /bin/args alpha quantumos\nrun /bin/libqtest\nrun /bin/consciousnessd\nrun /bin/qtop\nimprint the cat sat on the mat\nimprint pure quantum wave dynamics\nimprint hello little world\nrecall the cxt sxt on thx mxt\nfieldtest\nwrite /data/note ramfs-works\nls /data\nrm /data/note\nsync\naudit\nmanifest\nexit\n'; sleep 20 ) | \
           timeout 18s qemu-system-x86_64 -kernel "$KERNEL_ELF" \
           -serial stdio -m 128M -display none -no-reboot 2>&1 | tee boot_output_shell.txt || true
-        SHELL_GATES="QSH: QuantumOS interactive shell ready|qsh commands:|qsh RUNNING|MEM: heap free=|qsh: uptime |qsh: ghost R=|qsh: qrand |Welcome to QuantumOS|FS: etc/motd|The initrd is real|HELLO: greetings from /bin/hello|exited (code 42)|ARGS: argc=3|ARGS: argv[1]=alpha|ARGS: argv[2]=quantumos|qsh: wrote |FS: data/note|qsh: removed|FSW: capless caller denied (EPERM)|qsh: sync failed (no disk)|SPAWN: capless caller denied (EPERM)|CONS: capless caller denied (EPERM)|QSH: reborn|LIBQ: self-test OK|LIBQ printf d=-7 u=42 x=beef s=ok|consciousnessd: CONSCIOUSNESS EMERGED|kannakad: RESONANCE VERIFIED|quantumd: QUANTUM VERIFIED|qtop: DASHBOARD RENDERED|FIELD: imprinted slot 2|FIELD: winner=\"the cat sat on the mat\" slot=0 score=|FIELD: cross-region denied (EPERM)|FIELD: empty-probe ok (n=0)|FIELD: capless imprint denied (EPERM)|FIELD: capless recall denied (EPERM)|manifest self-test: PASS (MDENY recorded)|QUOTA ENFORCED pid=|AUDIT: seq=|MANIFEST: pid="
+        SHELL_GATES="QSH: QuantumOS interactive shell ready|qsh commands:|qsh RUNNING|MEM: heap free=|qsh: uptime |qsh: ghost R=|qsh: qrand |Welcome to QuantumOS|FS: etc/motd|The initrd is real|HELLO: greetings from /bin/hello|exited (code 42)|ARGS: argc=3|ARGS: argv[1]=alpha|ARGS: argv[2]=quantumos|qsh: wrote |FS: data/note|qsh: removed|FSW: capless caller denied (EPERM)|qsh: sync failed (no disk)|SPAWN: capless caller denied (EPERM)|CONS: capless caller denied (EPERM)|QSH: reborn|LIBQ: self-test OK|LIBQ printf d=-7 u=42 x=beef s=ok|consciousnessd: CONSCIOUSNESS EMERGED|kannakad: RESONANCE VERIFIED|quantumd: QUANTUM VERIFIED|qtop: DASHBOARD RENDERED|FIELD: imprinted slot 2|FIELD: winner=\"the cat sat on the mat\" slot=0 score=|FIELD: cross-region denied (EPERM)|FIELD: empty-probe ok (n=0)|FIELD: capless imprint denied (EPERM)|FIELD: capless recall denied (EPERM)|manifest self-test: PASS (MDENY recorded)|QUOTA ENFORCED pid=|AUDIT: seq=|MANIFEST: pid=|DELEG ISSUED sub=|DELEG ENFORCED pid=|DELEG REVOKED pid="
         echo "$SHELL_GATES" | tr '|' '\n' | while IFS= read -r gate; do
           if grep -qF "$gate" boot_output_shell.txt 2>/dev/null; then
             echo "  [PASS] shell gate present: $gate" >> integration_results.txt
@@ -803,6 +803,19 @@ jobs:
           INTEGRATION_FAILURES=$((INTEGRATION_FAILURES + 1))
         else
           echo "  [PASS] spawn quota enforced (no QUOTA BROKEN)" >> integration_results.txt
+        fi
+
+        # Negative gate (epic #137): capability delegation must be enforced. The
+        # sub-agent prints "DELEG BROKEN <detail>" only if the narrowed cap did
+        # not behave (recall failed, imprint was allowed, or the cascade-revoke
+        # was not observed). Presence of the positive DELEG markers is checked
+        # in SHELL_GATES above; this dedicated block asserts the absence.
+        if grep -qF "DELEG BROKEN" boot_output_shell.txt 2>/dev/null; then
+          echo "  [FAIL] capability delegation NOT enforced (DELEG BROKEN present)" >> integration_results.txt
+          grep -F "DELEG BROKEN" boot_output_shell.txt >> integration_results.txt || true
+          INTEGRATION_FAILURES=$((INTEGRATION_FAILURES + 1))
+        else
+          echo "  [PASS] capability delegation enforced (no DELEG BROKEN)" >> integration_results.txt
         fi
 
         # Test 2: Check for kernel panic or errors

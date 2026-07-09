@@ -87,7 +87,7 @@ ASSEMBLY_SOURCES = $(wildcard $(KERNEL_DIR)/src/*.S)
 # objects (symbols _binary_<name>_elf_start/_end)
 USER_DIR = user
 USER_BUILD = $(BUILD_DIR)/user
-USER_PROGS = init echo client hbsvc ghostd ghost_test paradoxd paradox_test swarm_svc qsh quantumd kannakad fieldsyncd httpd quota_test
+USER_PROGS = init echo client hbsvc ghostd ghost_test paradoxd paradox_test swarm_svc qsh quantumd kannakad fieldsyncd httpd quota_test delegation_test subagentd
 USER_ELF_OBJS = $(USER_PROGS:%=$(USER_BUILD)/%_elf.o)
 
 # libq: the freestanding ring-3 runtime, built as a static archive and linked
@@ -807,6 +807,29 @@ ci-smoke: kernel
 		echo ""; echo "=== Smoke Test FAILED ==="; exit 1; \
 	fi
 	@echo "SUCCESS: spawn quota ENFORCED (second over-quota spawn refused; no QUOTA BROKEN)"
+	@# epic #137: cross-ring capability delegation. The delegator hands a
+	@# NARROWED READ-only field cap to the sub-agent; the sub-agent proves the
+	@# narrowing ({recall ok, imprint EPERM}) -> DELEG ENFORCED, then proves
+	@# DELEGATED provenance: the delegator exits, the reaper cascade-revokes the
+	@# derived cap, and the sub-agent's recall flips to EPERM -> DELEG REVOKED.
+	@# A static grant survives an unrelated process's death — only a derived cap
+	@# cascades — so REVOKED is the un-fakeable delegated-vs-static distinguisher.
+	@if ! grep -q "DELEG ENFORCED pid=" /tmp/qemu-boot.log 2>/dev/null; then \
+		echo "ERROR: delegated cap not enforced (DELEG ENFORCED pid=)"; \
+		echo "Boot log:"; cat /tmp/qemu-boot.log 2>/dev/null || true; \
+		echo ""; echo "=== Smoke Test FAILED ==="; exit 1; \
+	fi
+	@if ! grep -q "DELEG REVOKED pid=" /tmp/qemu-boot.log 2>/dev/null; then \
+		echo "ERROR: delegated cap did not cascade-revoke on delegator exit (DELEG REVOKED pid=)"; \
+		echo "Boot log:"; cat /tmp/qemu-boot.log 2>/dev/null || true; \
+		echo ""; echo "=== Smoke Test FAILED ==="; exit 1; \
+	fi
+	@if grep -q "DELEG BROKEN" /tmp/qemu-boot.log 2>/dev/null; then \
+		echo "ERROR: capability delegation was NOT enforced (DELEG BROKEN present)"; \
+		grep "DELEG BROKEN" /tmp/qemu-boot.log 2>/dev/null || true; \
+		echo ""; echo "=== Smoke Test FAILED ==="; exit 1; \
+	fi
+	@echo "SUCCESS: capability delegation proven (narrowed cap enforced + cascade-revoked; no BROKEN)"
 	@# Supervision gate: after the piped 'exit', the watchdog must restart the
 	@# shell, which reintroduces itself as reborn.
 	@if ! grep -q "QSH: reborn" /tmp/qemu-boot.log 2>/dev/null; then \

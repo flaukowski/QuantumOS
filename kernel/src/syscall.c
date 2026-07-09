@@ -55,6 +55,8 @@ extern const uint8_t _binary_kannakad_elf_start[], _binary_kannakad_elf_end[];
 extern const uint8_t _binary_fieldsyncd_elf_start[], _binary_fieldsyncd_elf_end[];
 extern const uint8_t _binary_httpd_elf_start[], _binary_httpd_elf_end[];
 extern const uint8_t _binary_quota_test_elf_start[], _binary_quota_test_elf_end[];
+extern const uint8_t _binary_delegation_test_elf_start[], _binary_delegation_test_elf_end[];
+extern const uint8_t _binary_subagentd_elf_start[], _binary_subagentd_elf_end[];
 
 /* Argument vector ABI (epic #62). MUST stay byte-identical to user_args_t
  * in user/usys.h — there is no shared header across the ring boundary. The
@@ -82,6 +84,7 @@ void user_fieldsync_demo_init(uint32_t ghostd_pid);
 void user_httpd_init(void);
 void user_kannaka_demo_init(void);
 void user_quota_test_init(void);
+void user_delegation_demo_init(void);
 
 /* int 0x80 stub (kernel/src/interrupts.S) */
 extern void isr128(void);
@@ -1436,6 +1439,125 @@ static uint64_t sys_manifest(uint32_t pid, uint64_t user_ptr, uint64_t len) {
     return n;
 }
 
+/* SYS_CAP_DERIVE — cross-ring capability delegation (epic #137 Phase D inc. 3).
+ * A citizen holding CAP_GRANT hands a strictly-NARROWED slice of one of its own
+ * capabilities to a sub-agent, and the delegation is bounded by AND reflected
+ * in the intent manifest (#135): the delegator may only delegate a resource it
+ * is itself declared to touch, and the derive EXTENDS the recipient's manifest
+ * so the delegated cap is actually usable. Naming the parent by
+ * (resource_type, resource_id) — never a ring-3 handle — keeps cap_ids out of
+ * ring 3 and closes the forgery surface. Returns 0, or a negative errno.
+ *
+ * The request must match user/usys.h cap_derive_req_t byte-for-byte (24 B, no
+ * shared header across the ring). */
+typedef struct __attribute__((packed)) {
+    uint32_t resource_type; /* which of MY OWN caps (by type+id, not a handle) */
+    uint32_t resource_id;
+    uint32_t permissions; /* the narrowed subset to hand over */
+    uint32_t target_pid;  /* the sub-agent (must be an IPC peer) */
+    uint64_t expiration;  /* 0 = none/inherit (cap_derive clamps <= parent) */
+} cap_derive_req_k_t;
+_Static_assert(sizeof(cap_derive_req_k_t) == 24, "cap_derive_req ABI drift");
+
+static uint64_t cap_derive_errno(cap_result_t r) {
+    switch (r) {
+    case CAP_SUCCESS:
+        return 0;
+    case CAP_ERROR_NO_SPACE:
+        return SYSCALL_EIO;
+    default:
+        return SYSCALL_EPERM; /* escalation / denied / not-owner / expired / invalid */
+    }
+}
+
+static uint64_t sys_cap_derive(uint32_t pid, uint64_t req_ptr) {
+    /* Whole-struct endpoint validation (the sys_udp precedent). */
+    if (!in_user_range(req_ptr) || !in_user_range(req_ptr + sizeof(cap_derive_req_k_t) - 1)) {
+        return SYSCALL_EFAULT;
+    }
+    cap_derive_req_k_t req;
+    const uint8_t *usrc = (const uint8_t *)req_ptr;
+    for (size_t i = 0; i < sizeof(req); i++) {
+        ((uint8_t *)&req)[i] = usrc[i];
+    }
+
+    /* A no-rights derive is meaningless — never touch the cap table. */
+    if (req.permissions == 0) {
+        return SYSCALL_EINVAL;
+    }
+    /* ONE-HOP: never hand over CAP_GRANT/CAP_REVOKE, so a sub-agent can never
+     * itself re-delegate. Delegation is provably a single hop. */
+    if (req.permissions & (CAP_GRANT | CAP_REVOKE)) {
+        return SYSCALL_EPERM;
+    }
+
+    /* Target must be a live ring-3 process, not self, not the kernel/idle
+     * (PROCESS_TYPE_USER excludes them). */
+    if (req.target_pid == pid || req.target_pid == KERNEL_PROCESS_ID ||
+        req.target_pid >= MAX_PROCESSES) {
+        return SYSCALL_EPERM;
+    }
+    process_t *target = process_get_by_pid(req.target_pid);
+    if (!target || target->type != PROCESS_TYPE_USER ||
+        (target->state != PROCESS_STATE_RUNNING && target->state != PROCESS_STATE_READY)) {
+        return SYSCALL_EPERM;
+    }
+    /* Refuse a MONITORED service target: its watchdog restart rebinds its
+     * manifest and cascade-revokes the derived cap, so the delegation would
+     * silently evaporate. */
+    if (service_pid_is_monitored(req.target_pid)) {
+        return SYSCALL_EPERM;
+    }
+    /* IPC-PEER requirement: the caller may only delegate to a pid it holds an
+     * IPC send-cap for — so it can reach only peers it was explicitly wired to.
+     * This is what stops a CAP_GRANT holder from injecting a cap into an
+     * arbitrary victim (qsh/kannakad/etc, which it has no IPC cap for). */
+    if (cap_find_resource(pid, CAP_RESOURCE_IPC, CAP_WRITE, req.target_pid) != CAP_SUCCESS) {
+        audit_deny(pid, CAP_RESOURCE_IPC, req.target_pid, CAP_WRITE);
+        return SYSCALL_EPERM;
+    }
+    /* Transitive INTENT bound: X may only delegate a resource X is itself
+     * declared (manifest-allowed) to touch. Records MDENY on a miss. */
+    if (!manifest_check(pid, req.resource_type, req.resource_id, req.permissions)) {
+        return SYSCALL_EPERM;
+    }
+    /* Idempotent: if the target already holds a covering cap, succeed WITHOUT
+     * minting another — bounds the shared cap table against a looping delegator
+     * (the manifest row is already present too). */
+    if (cap_find_resource(req.target_pid, req.resource_type, req.permissions, req.resource_id) ==
+        CAP_SUCCESS) {
+        return 0;
+    }
+    /* Resolve MY grantable parent by (rtype,rid) — need_perms includes CAP_GRANT
+     * so a non-grant same-resource cap is never selected (which cap_derive would
+     * then reject). This also proves I actually hold the resource I'm handing
+     * over (not just a dangling manifest row). */
+    uint32_t parent_id = CAP_ID_INVALID;
+    if (cap_find_id(pid, req.resource_type, req.permissions | CAP_GRANT, req.resource_id,
+                    &parent_id) != CAP_SUCCESS) {
+        audit_deny(pid, req.resource_type, req.resource_id, req.permissions | CAP_GRANT);
+        return SYSCALL_EPERM;
+    }
+    /* Target manifest must have room BEFORE we mint (>= guards the entries[]
+     * bound) — so the manifest extend below cannot fail after a cap exists (no
+     * undo path). Syscalls run cli'd on one CPU, so this check-then-act is
+     * atomic vs the IF=1 health monitor. */
+    if (!manifest_has_room(req.target_pid)) {
+        return SYSCALL_EIO;
+    }
+
+    uint32_t child_id = CAP_ID_INVALID;
+    cap_result_t r =
+        cap_derive(parent_id, pid, req.target_pid, req.permissions, req.expiration, &child_id);
+    if (r != CAP_SUCCESS) {
+        return cap_derive_errno(r);
+    }
+    /* Extend the recipient's manifest so the delegated cap is USABLE (else
+     * authorize() would MDENY it). Room was pre-checked, so this cannot fail. */
+    manifest_grant(req.target_pid, req.resource_type, req.resource_id, req.permissions);
+    return 0;
+}
+
 /* ============================================================================
  * Dispatch
  * ============================================================================ */
@@ -1545,6 +1667,9 @@ static void syscall_dispatch(cpu_state_t *state) {
         break;
     case SYS_MANIFEST:
         state->rax = sys_manifest(pid, state->rdi, state->rsi);
+        break;
+    case SYS_CAP_DERIVE:
+        state->rax = sys_cap_derive(pid, state->rdi);
         break;
     default:
         state->rax = SYSCALL_ENOSYS;
@@ -2104,6 +2229,11 @@ void user_swarm_demo_init(uint32_t ghostd_pid) {
      * the shell — it briefly consumes a spawn cap the shell also holds, so
      * ordering it after keeps the boot roster stable. */
     user_quota_test_init();
+
+    /* Epic #137: cross-ring capability delegation — a delegator hands a
+     * narrowed field cap to a sub-agent. Last, so its IPC/derive activity
+     * never perturbs the earlier citizens. */
+    user_delegation_demo_init();
 }
 
 /* Bring up qsh — the interactive shell (epic #62 phase 1, #63) — as a
@@ -2207,4 +2337,65 @@ void user_quota_test_init(void) {
     } else {
         boot_log("Warning: quota-test service failed to start");
     }
+}
+
+/* Bring up the capability-DELEGATION demo (epic #137 Phase D increment 3): a
+ * delegator that holds CAP_GRANT over field region 2 and a sub-agent that holds
+ * nothing. At runtime the delegator hands the sub-agent a NARROWED READ-only
+ * cap over region 2 via SYS_CAP_DERIVE — "an agent hands a narrowed intent to a
+ * sub-agent." Both are registered but NOT monitored (the sub-agent must not be
+ * restarted, which would rebind its manifest and drop the delegated row; the
+ * delegator must be able to EXIT so the reaper cascade-revokes the derived cap,
+ * proving delegated provenance). They coordinate over a capability-checked IPC
+ * pair minted here (the qsh<->ghostd pattern). Both spawn READY but do not run
+ * until the timer starts after user_init, so the IPC caps exist before either
+ * citizen sends. */
+void user_delegation_demo_init(void) {
+    service_definition_t subagentd_def = {
+        .name = "subagentd",
+        .entry = NULL, /* user-process service; NO grants — capless by design */
+        .user_elf_start = _binary_subagentd_elf_start,
+        .user_elf_end = _binary_subagentd_elf_end,
+        .dependencies = {NULL},
+        .max_restarts = 1,
+    };
+    service_definition_t delegation_def = {
+        .name = "delegation-test",
+        .entry = NULL,
+        .user_elf_start = _binary_delegation_test_elf_start,
+        .user_elf_end = _binary_delegation_test_elf_end,
+        .dependencies = {NULL},
+        .max_restarts = 1,
+        /* The sole CAP_GRANT holder: READ|WRITE|GRANT over field region 2. */
+        .grant_field = 1,
+        .field_region = 2,
+        .grant_field_delegable = 1,
+    };
+
+    uint32_t sub_sid = 0, del_sid = 0, sub_pid = 0, del_pid = 0;
+    service_info_t info;
+    if (service_register(&subagentd_def, &sub_sid) == SVC_SUCCESS &&
+        service_start("subagentd", NULL) == SVC_SUCCESS &&
+        service_status(sub_sid, &info) == SVC_SUCCESS) {
+        sub_pid = info.pid;
+    }
+    if (service_register(&delegation_def, &del_sid) == SVC_SUCCESS &&
+        service_start("delegation-test", NULL) == SVC_SUCCESS &&
+        service_status(del_sid, &info) == SVC_SUCCESS) {
+        del_pid = info.pid;
+    }
+    if (sub_pid == 0 || del_pid == 0) {
+        boot_log("Warning: delegation demo failed to start");
+        return;
+    }
+
+    /* Capability-checked IPC pair: the delegator can reach the sub-agent (the
+     * SYS_CAP_DERIVE IPC-peer requirement) and vice versa. Both directions, so
+     * the sub-agent can send its "ready"/"proven" and the delegator its
+     * "go". NOT monitored — leave both to run their one-shot proof and idle. */
+    uint32_t cap = CAP_ID_INVALID;
+    cap_create(del_pid, CAP_RESOURCE_IPC, sub_pid, CAP_READ | CAP_WRITE, 0, &cap);
+    cap_create(sub_pid, CAP_RESOURCE_IPC, del_pid, CAP_READ | CAP_WRITE, 0, &cap);
+
+    boot_log("delegation-test: cross-ring capability delegation demo (ring 3)");
 }
