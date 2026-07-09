@@ -34,7 +34,23 @@ typedef struct {
     uint8_t phase[GHOST_N];
 } fsyn_frame_t;
 
-static uint8_t peer_ip[4];
+/* The configured peer set (epic #139 N-way society): up to GHOST_MAX_PEERS
+ * packed IPs read from SYSINFO_PEER_COUNT / SYSINFO_PEER<index>. A 2-VM boot
+ * has exactly one. */
+static uint32_t peer_pk[GHOST_MAX_PEERS];
+static int peer_count;
+
+/* Is a received frame's source one of our configured peers? Drops forged /
+ * stray sources on the shared L2 before they reach ghostd's per-peer slots
+ * (closes slot-exhaustion + self-coupling). */
+static int in_peer_set(uint32_t pk) {
+    for (int i = 0; i < peer_count; i++) {
+        if (peer_pk[i] == pk) {
+            return 1;
+        }
+    }
+    return 0;
+}
 
 /* Ask the local ghostd for a phase snapshot (IPC). Fills phase[256].
  * Returns 1 on a valid reply, 0 otherwise. */
@@ -67,8 +83,10 @@ static int ghost_snapshot(uint8_t *phase_out) {
     return 0;
 }
 
-/* Forward the peer's phases into ghostd (GHOST_COUPLE, no reply). */
-static void ghost_couple(const uint8_t *phase) {
+/* Forward one peer's phases into ghostd (GHOST_COUPLE, no reply), tagged with
+ * that peer's packed source IP so ghostd keys a per-peer slot and folds the
+ * MEAN field over N peers. */
+static void ghost_couple(const uint8_t *phase, uint32_t src) {
     ghost_wide_t req;
     for (unsigned i = 0; i < sizeof(req); i++) {
         ((uint8_t *)&req)[i] = 0;
@@ -77,34 +95,43 @@ static void ghost_couple(const uint8_t *phase) {
     for (int i = 0; i < GHOST_N; i++) {
         req.phase[i] = phase[i];
     }
+    req.src = src;
     send_msg((const char *)&req, (long)sizeof(req));
 }
 
+/* Print "FIELDSYNC: <label> A.B.C.D" for a packed IP. */
+static void log_ip(const char *label, uint32_t pk) {
+    char b[80];
+    int o = ghost_put(b, 0, label);
+    for (int i = 0; i < 4; i++) {
+        o = ghost_put_u(b, o, (unsigned)((pk >> (8 * i)) & 0xFF));
+        if (i < 3) {
+            b[o++] = '.';
+        }
+    }
+    b[o] = 0;
+    write_str(b);
+}
+
 void _start(void) {
-    uint32_t pk = (uint32_t)sysinfo(SYSINFO_PEER, 0, 0);
-    if (pk == 0) {
+    /* Read the configured peer set. SYSINFO_PEER_COUNT is 1 for a 2-VM boot
+     * and 0 for a default (no peer=) boot — in which case idle exactly as
+     * before (no UDP bind, same message) so every non-society boot is
+     * unaffected. */
+    peer_count = (int)sysinfo(SYSINFO_PEER_COUNT, 0, 0);
+    if (peer_count > GHOST_MAX_PEERS) {
+        peer_count = GHOST_MAX_PEERS;
+    }
+    if (peer_count <= 0) {
         write_str("FIELDSYNC: no peer configured — idle");
         for (;;) {
             heartbeat();
             yield();
         }
     }
-    peer_ip[0] = (uint8_t)pk;
-    peer_ip[1] = (uint8_t)(pk >> 8);
-    peer_ip[2] = (uint8_t)(pk >> 16);
-    peer_ip[3] = (uint8_t)(pk >> 24);
-
-    {
-        char b[80];
-        int o = ghost_put(b, 0, "FIELDSYNC: coupling to peer ");
-        for (int i = 0; i < 4; i++) {
-            o = ghost_put_u(b, o, peer_ip[i]);
-            if (i < 3) {
-                b[o++] = '.';
-            }
-        }
-        b[o] = 0;
-        write_str(b);
+    for (int i = 0; i < peer_count; i++) {
+        peer_pk[i] = (uint32_t)sysinfo(SYSINFO_PEER, (void *)(long)i, 0);
+        log_ip("FIELDSYNC: coupling to peer ", peer_pk[i]);
     }
 
     udp_req_t bindreq;
@@ -145,37 +172,38 @@ void _start(void) {
             if (f->magic != FSYN_MAGIC) {
                 continue; /* not ours — drop */
             }
-            ghost_couple(f->phase);
-            char b[80];
-            int o = ghost_put(b, 0, "FIELDSYNC: frame from ");
-            for (int i = 0; i < 4; i++) {
-                o = ghost_put_u(b, o, r.ip[i]);
-                if (i < 3) {
-                    b[o++] = '.';
-                }
+            uint32_t src = (uint32_t)r.ip[0] | ((uint32_t)r.ip[1] << 8) |
+                           ((uint32_t)r.ip[2] << 16) | ((uint32_t)r.ip[3] << 24);
+            /* Only fold frames from a CONFIGURED peer — a forged/stray source
+             * on the shared L2 (or our own echo) never reaches ghostd's slots. */
+            if (!in_peer_set(src)) {
+                continue;
             }
-            b[o] = 0;
-            write_str(b);
+            ghost_couple(f->phase, src);
+            log_ip("FIELDSYNC: frame from ", src);
         }
 
-        /* ~1 Hz: snapshot our field and send it to the peer. */
+        /* ~1 Hz: snapshot our field and send it to EACH peer (N-1 unicasts on
+         * the shared L2 — the mean field is all-to-all). */
         if (ticks() - last_send >= 100) {
             last_send = ticks();
             fsyn_frame_t out;
             out.magic = FSYN_MAGIC;
             if (ghost_snapshot(out.phase)) {
-                udp_req_t s;
-                for (unsigned i = 0; i < sizeof(s); i++) {
-                    ((unsigned char *)&s)[i] = 0;
+                for (int pi = 0; pi < peer_count; pi++) {
+                    udp_req_t s;
+                    for (unsigned i = 0; i < sizeof(s); i++) {
+                        ((unsigned char *)&s)[i] = 0;
+                    }
+                    s.sock = sock;
+                    for (int i = 0; i < 4; i++) {
+                        s.ip[i] = (uint8_t)((peer_pk[pi] >> (8 * i)) & 0xFF);
+                    }
+                    s.port = FSYN_PORT;
+                    s.buf = &out;
+                    s.len = sizeof(out);
+                    udp_(UDP_SENDTO, &s); /* WOULDBLOCK ok — next round retries */
                 }
-                s.sock = sock;
-                for (int i = 0; i < 4; i++) {
-                    s.ip[i] = peer_ip[i];
-                }
-                s.port = FSYN_PORT;
-                s.buf = &out;
-                s.len = sizeof(out);
-                udp_(UDP_SENDTO, &s); /* WOULDBLOCK ok — next round retries */
             } else if (!wiring_warned) {
                 /* send_msg to ghostd failed: either no cap (EPERM) or a
                  * stale pid after a watchdog rebirth (EIO). Peer IPC caps

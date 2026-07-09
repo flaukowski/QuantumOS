@@ -276,9 +276,10 @@
 /* SYS_SYSINFO operations (rdi) */
 #define SYSINFO_PS 0
 #define SYSINFO_MEM 1
-#define SYSINFO_TIME 2  /* "TIME: YYYY-MM-DD HH:MM:SS" from the CMOS RTC */
-#define SYSINFO_QUIET 3 /* no buffer; returns 1 if the kernel booted `quiet` */
-#define SYSINFO_PEER 4  /* no buffer; returns the packed peer= IP (epic #97) */
+#define SYSINFO_TIME 2       /* "TIME: YYYY-MM-DD HH:MM:SS" from the CMOS RTC */
+#define SYSINFO_QUIET 3      /* no buffer; returns 1 if the kernel booted `quiet` */
+#define SYSINFO_PEER 4       /* no buffer; arg2 = index; returns packed peer= IP (0=oob) */
+#define SYSINFO_PEER_COUNT 5 /* no buffer; returns the configured peer count (epic #139) */
 
 /* Bytes SYS_CONS will move per call at most (bounds the kernel bounce buffer). */
 #define CONS_MAX_BYTES 256

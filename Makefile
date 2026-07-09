@@ -111,7 +111,7 @@ OBJECTS = $(KERNEL_SOURCES:$(KERNEL_DIR)/src/%.c=$(BUILD_DIR)/%.o) \
 -include $(OBJECTS:.o=.d)
 
 # Targets
-.PHONY: all clean kernel run debug dump test test-list test-coverage ci-smoke ci-smoke-disk ci-smoke-net ci-smoke-http ci-smoke-httpd ci-smoke-quiet ci-smoke-resonant ci-smoke-qseed ci-smoke-swarm ci-smoke-mcp ci-smoke-mcp-gate ci-smoke-society ci-smoke-society-gate ci-smoke-iso ci-smoke-kbd ci-smoke-noserial ci-smoke-screen swarm-pingpong
+.PHONY: all clean kernel run debug dump test test-list test-coverage ci-smoke ci-smoke-disk ci-smoke-net ci-smoke-http ci-smoke-httpd ci-smoke-quiet ci-smoke-resonant ci-smoke-qseed ci-smoke-swarm ci-smoke-mcp ci-smoke-mcp-gate ci-smoke-society ci-smoke-society-gate ci-smoke-society3 ci-smoke-society3-gate ci-smoke-iso ci-smoke-kbd ci-smoke-noserial ci-smoke-screen swarm-pingpong
 
 all: kernel
 
@@ -1582,6 +1582,18 @@ ci-smoke-society: kernel ci-smoke-society-gate
 ci-smoke-society-gate:
 	@echo "=== QuantumOS Agent Society Test (epic #131) ==="
 	timeout -k 5 $(SOCIETY_GATE_TIMEOUT) python3 scripts/test_qos_society.py
+
+# N-way society (epic #139): THREE kernels mean-field-couple on a shared mcast
+# L2. A separate gate/timeout from the 2-node one (a 3-body field converges
+# slower and the mcast transport differs) — the proven ci-smoke-society stays
+# untouched (the #93 single-source lesson). SEPARATE timeout, single-sourced.
+SOCIETY3_GATE_TIMEOUT ?= 300s
+
+ci-smoke-society3: kernel ci-smoke-society3-gate
+
+ci-smoke-society3-gate:
+	@echo "=== QuantumOS N-Way Society Test (epic #139, three kernels) ==="
+	timeout -k 5 $(SOCIETY3_GATE_TIMEOUT) python3 scripts/test_qos_society3.py
 
 # ISO/GRUB boot path (epic #101): boot the GRUB-built ISO with -cdrom —
 # NOT QEMU's -kernel shortcut — so the real bootloader handoff (menu,

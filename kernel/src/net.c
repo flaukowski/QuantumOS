@@ -65,18 +65,35 @@ void net_set_static_ip(const uint8_t ip[4]) {
     static_pending = 1;
 }
 
-/* Field-coupling peer (epic #97): the `peer=` boot token names the other
- * node's IP. Stored packed so SYSINFO_PEER can hand it to fieldsyncd in a
- * single uncapped syscall return (0 = no peer configured). */
-static uint32_t peer_ip_packed;
+/* Field-coupling peers (epic #97; N-way society #139): the `peer=` boot token
+ * names the other node(s) — one IP for a 2-VM society, a comma list for N.
+ * Stored packed so SYSINFO_PEER<index> hands each to fieldsyncd in a single
+ * uncapped syscall return, and SYSINFO_PEER_COUNT reports how many. */
+static uint32_t peer_ip_packed[MAX_PEERS];
+static int peer_count;
 
-void net_set_peer_ip(const uint8_t ip[4]) {
-    peer_ip_packed = (uint32_t)ip[0] | ((uint32_t)ip[1] << 8) | ((uint32_t)ip[2] << 16) |
-                     ((uint32_t)ip[3] << 24);
+/* Append one peer IP (bounded INTERNALLY — peer= is an untrusted boot-cmdline
+ * boundary, so the array must never be overrun regardless of the parser). */
+void net_add_peer_ip(const uint8_t ip[4]) {
+    if (peer_count >= MAX_PEERS) {
+        return;
+    }
+    peer_ip_packed[peer_count++] = (uint32_t)ip[0] | ((uint32_t)ip[1] << 8) |
+                                   ((uint32_t)ip[2] << 16) | ((uint32_t)ip[3] << 24);
 }
 
+/* Legacy single-peer accessor: peer[0] (0 = none). */
 uint32_t net_get_peer_ip(void) {
-    return peer_ip_packed;
+    return peer_count > 0 ? peer_ip_packed[0] : 0;
+}
+
+int net_get_peer_count(void) {
+    return peer_count;
+}
+
+/* Peer at index i, packed (0 if out of range). */
+uint32_t net_get_peer_at(int i) {
+    return (i >= 0 && i < peer_count) ? peer_ip_packed[i] : 0;
 }
 
 /* ---- packet headers (all packed). eth_hdr_t / ip_hdr_t / udp_hdr_t are

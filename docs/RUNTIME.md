@@ -69,7 +69,7 @@ append):
 | 13 | SYS_QSEED      | `qseed_value`             | boot qseed provenance (cap)      |
 | 14 | SYS_FIELD_SNAP | `field_snapshot`          | framebuffer field viz            |
 | 15 | SYS_CONS       | `cons_read/write`         | raw console I/O (cap)            |
-| 16 | SYS_SYSINFO    | `sysinfo`/`sysinfo_quiet` | ps/mem/time/quiet introspection  |
+| 16 | SYS_SYSINFO    | `sysinfo`/`sysinfo_quiet` | ps/mem/time/quiet/peer introspection |
 | 17–20 | SYS_OPEN…READDIR | `open_`/`read_`/`close_`/`readdir_` | initrd + RAM overlay read |
 | 21–22 | SYS_SPAWN/WAITPID | `spawn_`/`waitpid_`  | exec a /bin ELF, reap it         |
 | 23–25 | SYS_FWRITE/UNLINK/SYNC | `fwrite_`/`unlink_`/`sync_` | RAM overlay writes + disk persist (cap) |
@@ -251,6 +251,13 @@ and printed as framed lines — a memory gauge from the real frame allocator, th
 wall clock, a decorative resonance-field wave (`fx_sin`, phase-shifted by
 uptime), and the live process table. It renders once and exits — a `top` for
 QuantumOS. A ci-smoke gate asserts `DASHBOARD RENDERED`.
+
+`SYS_SYSINFO` also carries the uncapped bufferless config queries a coupling
+service reads: `SYSINFO_QUIET` (booted `quiet`?), `SYSINFO_PEER` (arg 2 =
+index → the packed `peer=` IP at that index, 0 out of range), and
+`SYSINFO_PEER_COUNT` (how many peers `peer=` configured — 1 for a 2-VM
+society, up to `MAX_PEERS` for the N-way mean-field society of epic #139).
+These name no authority; they only report boot config.
 
 Together the four citizens map the constellation onto QuantumOS:
 consciousness-core → consciousnessd, kannaka-memory → kannakad,
