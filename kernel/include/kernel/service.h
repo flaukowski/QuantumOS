@@ -135,6 +135,12 @@ typedef struct {
      * epic #95 rule). Inheritance is consumed once per boot per region;
      * watchdog rebirths and successors always scrub. qsh only. */
     uint8_t field_inherit;
+    /* Grant CAP_GRANT alongside grant_field (epic #137): the field cap over
+     * field_region is minted CAP_READ|CAP_WRITE|CAP_GRANT so this citizen —
+     * and ONLY this citizen — may cap_derive a NARROWED slice of that region
+     * to a sub-agent via SYS_CAP_DERIVE. Keeps the CAP_GRANT blast radius to a
+     * single auditable delegator; qsh deliberately does NOT set it. */
+    uint8_t grant_field_delegable;
     /* Manifest spawn quota (epic #135): successful SYS_SPAWNs allowed per
      * incarnation (a watchdog rebirth re-binds the manifest, resetting the
      * counter — a soft, per-incarnation bound). 0 = bound but unlimited.
@@ -175,6 +181,12 @@ int32_t service_current_restart_count(void);
 
 /* Look up a service id by name */
 svc_result_t service_find(const char *name, uint32_t *service_id_out);
+
+/* True if `pid` is a currently-RUNNING, health-MONITORED service. Used by
+ * SYS_CAP_DERIVE (epic #137) to refuse delegating to a monitored service: its
+ * watchdog restart rebinds its manifest from grant flags and cascade-revokes
+ * the derived cap, so a delegated row would silently evaporate. */
+bool service_pid_is_monitored(uint32_t pid);
 
 /* Boot self-test: registers demo services, verifies dependency-ordered
  * startup and the status/list API */

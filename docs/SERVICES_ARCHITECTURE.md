@@ -366,6 +366,16 @@ bool service_check_resource_limit(const service_capability_t *cap, uint32_t reso
   MDENY (a held cap exceeding declared intent) and QUOTA denials are recorded
   in the kernel authority ledger (`SYS_AUDIT`); declared intent is readable
   via `SYS_MANIFEST`.
+- **Capability Delegation** (epic #137): a service may set
+  `grant_field_delegable` alongside `grant_field` to mint its field cap with
+  `CAP_GRANT`, making it the (sole, auditable) DELEGATOR — at runtime it may
+  `SYS_CAP_DERIVE` a strictly-narrowed slice of that region to a sub-agent it
+  is wired to over IPC. The derive is bounded by the delegator's own manifest
+  and extends the recipient's manifest (`manifest_grant`), is one-hop
+  (`CAP_GRANT`/`CAP_REVOKE` never handed over), and cascade-revokes when the
+  delegator dies. `service_pid_is_monitored` lets the kernel refuse delegating
+  to a monitored service (whose restart would rebind its manifest and drop the
+  delegated row). Proven by the `delegation-test` → `subagentd` boot demo.
 
 ## Service Monitoring
 

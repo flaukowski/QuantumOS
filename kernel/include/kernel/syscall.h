@@ -229,6 +229,17 @@
                          * and cpu_ticks as text. Reading mutates nothing.
                          * Returns bytes copied. */
 
+#define SYS_CAP_DERIVE                                                                             \
+    34 /* rdi = cap_derive_req ptr; delegate a NARROWED slice of one
+                         * of the caller's own capabilities to a sub-agent (epic
+                         * #137 Phase D increment 3). Bounded by AND reflected in
+                         * the intent manifest: the caller may only delegate a
+                         * resource it is declared to touch, and the derive
+                         * extends the recipient's manifest. One-hop only
+                         * (CAP_GRANT/REVOKE are refused in the handed perms).
+                         * Names the parent by (resource_type,resource_id), never
+                         * a handle. Returns 0 or a negative errno. */
+
 /* SYS_RESOLVE / SYS_UDP: still pending (poll again) / queue-ring full. */
 #define RESOLVE_WOULDBLOCK ((uint64_t) - 11)
 

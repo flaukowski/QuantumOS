@@ -493,6 +493,66 @@ def _exercise_manifest(vm):
     print("OK: forged MANIFEST: line refused (reserved marker)")
 
 
+def _exercise_delegation(vm):
+    """Cross-ring capability delegation (epic #137 Phase D inc. 3). At boot the
+    delegator (delegation-test) hands a NARROWED READ-only slice of field region
+    2 to the sub-agent (subagentd) via SYS_CAP_DERIVE. The un-echoable,
+    derive-UNIQUE proof is subagentd's manifest gaining a FIELD:2 allow row: it
+    has NO field grant flag, so that row is structurally impossible at boot and
+    can only come from the runtime derive. Runs EARLY (right after the manifest
+    gate) so the boot derive-GRANT / overreach-DENY are still in the 128-ring."""
+    # subagentd idles forever (present); the delegator EXITS by design (its
+    # death is what cascade-revokes the derived cap), so it is gone from the
+    # table by now — that absence is expected, not an error.
+    procs = vm.sysinfo()["processes"]
+    sub_pid = next((p["pid"] for p in procs if p["name"] == "subagentd"), None)
+    if sub_pid is None:
+        _fail("no subagentd in the process table (delegation demo didn't start)")
+
+    # PRIMARY provenance (durable, un-echoable, derive-unique): subagentd's
+    # manifest carries a FIELD:2 allow row. subagentd has no field grant, so a
+    # bind-time manifest could never contain it — only SYS_CAP_DERIVE's runtime
+    # manifest_grant appends it. (The row persists even after the delegator's
+    # cascade-revoke — cosmetic there, durable evidence here.)
+    man = vm.manifest()
+    sm = man["manifests"].get(sub_pid)
+    if not sm or not sm["bound"]:
+        _fail(f"subagentd (pid {sub_pid}) has no bound manifest: {sm}")
+    field2 = [r for r in sm["allow"] if r["res"] == "FIELD" and r["id"] == 2]
+    if not field2:
+        _fail(f"subagentd manifest has no delegated FIELD:2 row (derive didn't extend it): {sm}")
+    if field2[0]["perms"] != 0x1:
+        _fail(f"delegated manifest row perms {field2[0]['perms']:#x} != READ(0x1) — not narrowed")
+    print(f"OK: delegation provenance — subagentd (pid {sub_pid}) manifest gained a FIELD:2 "
+          f"READ row it could only get at runtime (no field grant flag)")
+
+    # Ledger corroboration (early read → still in the ring): a narrowed GRANT
+    # for the sub-agent, and the overreach DENY when it tried to WRITE.
+    a = vm.audit()
+    dgrant = [e for e in a["entries"] if e["pid"] == sub_pid and e["kind"] == "GRANT"
+              and e["resource_type"] == "FIELD" and e["resource_id"] == "2" and e["perms"] == 0x1]
+    if not dgrant:
+        _fail(f"no narrowed FIELD:2 READ GRANT for subagentd pid {sub_pid} in the ledger")
+    overreach = [e for e in a["entries"] if e["pid"] == sub_pid and e["kind"] == "DENY"
+                 and e["resource_type"] == "FIELD" and (e["perms"] & 0x2)]
+    if not overreach:
+        _fail(f"no overreach WRITE DENY for subagentd pid {sub_pid} (narrowing unproven)")
+    print(f"OK: ledger corroborates — narrowed GRANT (FIELD:2 READ) + overreach WRITE DENY "
+          f"for subagentd pid {sub_pid}")
+
+    # ONE-HOP: the ONLY legitimate GRANT-bearing FIELD cap is the delegator's
+    # own boot grant (perms 0xb = READ|WRITE|GRANT). A derived cap can never
+    # carry CAP_GRANT (the kernel masks it), so ANY other FIELD GRANT with 0x08
+    # — e.g. a narrowed-but-still-grantable 0x09 handed to a third pid — would be
+    # laundering. Del_pid-independent (the delegator has exited): key on perms.
+    launder = [e for e in a["entries"] if e["kind"] == "GRANT" and e["resource_type"] == "FIELD"
+               and (e["perms"] & 0x08) and e["perms"] != 0x0B]
+    if launder:
+        _fail(f"a GRANT-bearing FIELD cap other than the delegator's exists (not one-hop): "
+              f"{launder[0]}")
+    print("OK: delegation is one-hop (the narrowed cap carries no CAP_GRANT to re-delegate)")
+
+
 def _find_slot(vm, phrase):
     """The field slot whose preview is a prefix of `phrase` (previews are the
     first <= 16 stored bytes), or None."""
@@ -744,6 +804,10 @@ def main():
         # after the audit gate for the same eviction reason — the boot QUOTA/
         # MDENY ledger entries must still be inside the ring.
         _exercise_manifest(vm)
+
+        # 4d. Cross-ring capability delegation (epic #137). Also early — the
+        # boot derive-GRANT / overreach-DENY must still be in the 128-ring.
+        _exercise_delegation(vm)
 
         # 5. run a citizen off the initrd. Exit 42 is hello's unique
         # deterministic signature (un-echoable). Retry past the early-spawn

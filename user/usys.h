@@ -41,6 +41,7 @@
 #define SYS_FIELD_INFO 31
 #define SYS_AUDIT 32
 #define SYS_MANIFEST 33
+#define SYS_CAP_DERIVE 34
 #define AUDIT_OP_READ 0
 #define AUDIT_OP_STATS 1
 #define AUDIT_TEXT_MAX 12288    /* >= kernel AUDIT_MAX_BYTES (128*96) so a read is whole */
@@ -393,6 +394,34 @@ static inline long audit_(long op, char *buf, long len) {
  * text. Uncapped read-only introspection; returns bytes copied into buf. */
 static inline long manifest_(char *buf, long len) {
     return usys2(SYS_MANIFEST, (long)buf, len);
+}
+
+/* SYS_CAP_DERIVE (epic #137 Phase D increment 3): delegate a NARROWED slice of
+ * one of the caller's own capabilities to a sub-agent. The parent cap is named
+ * by (resource_type, resource_id) — the caller never passes a handle. `perms`
+ * is the narrowed subset to hand over (must NOT include CAP_GRANT/CAP_REVOKE —
+ * delegation is one-hop); `target_pid` must be an IPC peer of the caller;
+ * `expiration` 0 = none (clamped <= parent). Returns 0, or a negative errno
+ * (-4 EPERM: not grantable / not a valid IPC-peer target / intent-exceeding;
+ * -1 EINVAL: perms==0). MUST stay byte-identical to cap_derive_req_k_t in
+ * kernel/src/syscall.c — there is no shared header across the ring. */
+/* Ring-3 mirror of the kernel capability permission bits (capability.h) and
+ * resource types, for building a cap_derive_req_t. */
+#define CAP_READ 0x01
+#define CAP_WRITE 0x02
+#define CAP_RESOURCE_FIELD 6 /* cap_resource_type_t: holographic field regions */
+
+typedef struct {
+    unsigned int resource_type;
+    unsigned int resource_id;
+    unsigned int permissions;
+    unsigned int target_pid;
+    unsigned long long expiration;
+} cap_derive_req_t;
+_Static_assert(sizeof(cap_derive_req_t) == 24, "cap_derive_req twin ABI drift");
+
+static inline long cap_derive_(cap_derive_req_t *req) {
+    return usys1(SYS_CAP_DERIVE, (long)req);
 }
 
 /* Start an initrd ELF as a new ring-3 process. `cmd` is a command line:

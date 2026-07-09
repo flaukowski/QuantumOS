@@ -81,6 +81,30 @@ append):
 | 31 | SYS_FIELD_INFO | `field_info_`             | read-only field enumeration (cap) |
 | 32 | SYS_AUDIT      | `audit_`                  | read the capability authority ledger (uncapped RO) |
 | 33 | SYS_MANIFEST   | `manifest_`               | read the per-pid intent manifests (uncapped RO) |
+| 34 | SYS_CAP_DERIVE | `cap_derive_`             | delegate a narrowed capability to a sub-agent (cap) |
+
+**Cross-ring capability delegation (epic #137).** `SYS_CAP_DERIVE` lets a
+citizen holding `CAP_GRANT` hand a strictly-**narrowed** slice of one of
+its own capabilities to a sub-agent — "an agent hands a narrowed intent to
+a sub-agent." The caller names its parent capability by
+`(resource_type, resource_id)` (never a ring-3 handle, so no handle
+forgery) and the narrowed permission subset; `CAP_GRANT`/`CAP_REVOKE` are
+refused in the handed permissions, so delegation is provably **one-hop**
+(the sub-agent cannot itself re-delegate). The kernel bounds the derive by
+AND reflects it in the intent manifest (epic #135): the caller may only
+delegate a resource it is itself declared to touch (a transitive outer
+bound, `manifest_check` on the delegator), and the derive **extends the
+recipient's manifest** (`manifest_grant`) so the delegated cap is actually
+usable — a delegated cap whose resource is absent from the recipient's
+manifest would otherwise be denied. The target must be an IPC peer of the
+caller (so a `CAP_GRANT` holder can inject a cap only into a process it was
+explicitly wired to), a live ring-3, non-self, manifest-bound, non-monitored
+process. The op is idempotent (a covering cap already held → success without
+minting). Delegation narrows PERMISSIONS and EXPIRY, not the resource
+(region granularity is the unit). When the delegator dies, cascade
+revocation kills the derived cap — the un-fakeable proof that authority was
+*delegated* (a static grant survives an unrelated process's death). Proven
+every boot by the `delegation-test` → `subagentd` demo.
 
 **The intent manifest + spawn quota (epic #135).** Above raw
 capabilities sits a per-pid **intent manifest**: the allow-set of
