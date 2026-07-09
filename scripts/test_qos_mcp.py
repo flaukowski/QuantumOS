@@ -440,13 +440,16 @@ def _exercise_manifest(vm):
         _fail(f"qsh spawn_max should be unlimited (*), got {qm['spawn_max']}")
     print(f"OK: qsh manifest inspectable — pid {qsh_pid}, exactly its 6 grant rows, spawn=*")
 
-    # (f) cpu_ticks accounting is live: qsh has run (>0) and advances between
-    # reads (each manifest roundtrip spans many 10 ms timer ticks).
-    t0 = vm.manifest()["manifests"].get(qsh_pid, {}).get("cpu_ticks", 0)
-    t1 = vm.manifest()["manifests"].get(qsh_pid, {}).get("cpu_ticks", 0)
-    if not (t0 > 0 and t1 > t0):
-        _fail(f"qsh cpu_ticks not advancing (dead accounting): {t0} -> {t1}")
-    print(f"OK: cpu_ticks live — qsh {t0} -> {t1} (advances every timer tick)")
+    # (f) cpu_ticks accounting is live: qsh has already run (>0). Snapshot it
+    # here and re-check at the END of this exercise — the spawn contrast below
+    # issues real `run` commands (each a SYS_SPAWN + a SYS_WAITPID poll loop
+    # that spins many 10 ms ticks while qsh is scheduled), so the span is
+    # deterministic. Two BACK-TO-BACK manifest reads are NOT: qsh may not be
+    # the scheduled process during the sub-tick gap between them, so cpu_ticks
+    # can legitimately read equal twice (the CI flake this replaces).
+    cpu0 = qm["cpu_ticks"]
+    if cpu0 <= 0:
+        _fail(f"qsh cpu_ticks is {cpu0} — accounting never charged a running qsh")
 
     # (d) Read-only-by-CONTRAST: reads don't mutate, a spawn does. Baseline
     # qsh spawn_used, one successful run, +1 exactly. A failed spawn (bad path)
@@ -470,6 +473,15 @@ def _exercise_manifest(vm):
         _fail(f"qsh spawn_used should be base+1 after one real spawn: {base} -> {now['spawn_used']}")
     print(f"OK: manifest read-only by contrast — spawn_used {base} (failed spawn) "
           f"-> {now['spawn_used']} (one real spawn); reads never mutated")
+
+    # (f cont.) cpu_ticks must have ADVANCED across the spawn contrast above —
+    # several run/waitpid roundtrips guarantee qsh was scheduled during many
+    # timer ticks, so this is deterministic (unlike two back-to-back reads).
+    cpu1 = now["cpu_ticks"]
+    if cpu1 <= cpu0:
+        _fail(f"qsh cpu_ticks did not advance across the exercise (dead accounting): "
+              f"{cpu0} -> {cpu1}")
+    print(f"OK: cpu_ticks live — qsh {cpu0} -> {cpu1} across the exercise (charged every tick)")
 
     # (e) Forge guard: MANIFEST: is a reserved marker, so a citizen cannot
     # imprint a fake manifest row for the host to mis-parse.
