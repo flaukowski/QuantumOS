@@ -178,7 +178,7 @@ $(USER_BUILD)/%_elf.o: $(USER_BUILD)/%.elf
 ROOTFS_DIR = rootfs
 ROOTFS_FILES = $(shell find $(ROOTFS_DIR) -type f 2>/dev/null)
 ROOTFS_STAGE = $(BUILD_DIR)/rootfs-stage
-INITRD_BIN_PROGS = hello args libqtest consciousnessd qtop qprobe
+INITRD_BIN_PROGS = hello args libqtest consciousnessd qtop qprobe life
 
 $(BUILD_DIR)/initrd.tar: $(ROOTFS_FILES) $(INITRD_BIN_PROGS:%=$(USER_BUILD)/%.elf)
 	@mkdir -p $(BUILD_DIR)
@@ -419,7 +419,7 @@ ci-smoke: kernel
 	@echo "[1/3] Build verified: $(BUILD_DIR)/kernel.elf exists"
 	@test -f $(BUILD_DIR)/kernel.elf || (echo "ERROR: Kernel not built" && exit 1)
 	@echo "[2/3] Running QEMU boot test (14 second timeout, shell session piped into the console)..."
-	@( printf 'help\nps\nfree\nuptime\ndate\nghost\nqrand\nls\ncat /docs/hello.txt\nrun /bin/hello\nrun /bin/args alpha quantumos\nrun /bin/libqtest\nrun /bin/consciousnessd\nrun /bin/qtop\nimprint the cat sat on the mat\nimprint pure quantum wave dynamics\nimprint hello little world\nrecall the cxt sxt on thx mxt\nfieldtest\nwrite /data/note ramfs-works\nls /data\nrm /data/note\nsync\nexit\n'; sleep 20 ) | \
+	@( printf 'help\nps\nfree\nuptime\ndate\nghost\nqrand\nls\ncat /docs/hello.txt\nrun /bin/hello\nrun /bin/args alpha quantumos\nrun /bin/libqtest\nrun /bin/consciousnessd\nrun /bin/qtop\nrun /bin/life\nimprint the cat sat on the mat\nimprint pure quantum wave dynamics\nimprint hello little world\nrecall the cxt sxt on thx mxt\nfieldtest\nwrite /data/note ramfs-works\nls /data\nrm /data/note\nsync\nexit\n'; sleep 20 ) | \
 		timeout 14s qemu-system-x86_64 -kernel $(BUILD_DIR)/kernel.elf32 \
 		-serial stdio -m 128M -display none -no-reboot 2>&1 | tee /tmp/qemu-boot.log || true
 	@echo ""
@@ -658,6 +658,16 @@ ci-smoke: kernel
 		echo ""; echo "=== Smoke Test FAILED ==="; exit 1; \
 	fi
 	@echo "SUCCESS: qtop snapshot dashboard rendered from SYS_SYSINFO (DASHBOARD RENDERED)"
+	@# sixth citizen (issue #102): 'run /bin/life' runs Conway's Game of Life on
+	@# a torus. A glider is 5 cells and stays 5 while it moves, so a live count
+	@# COMPUTED from the evolved grid == 5 after 16 generations proves the step
+	@# function is correct (a broken neighbour count explodes or dies).
+	@if ! grep -q "LIFE: glider intact after 16 generations (live=5)" /tmp/qemu-boot.log 2>/dev/null; then \
+		echo "ERROR: /bin/life did not keep the glider intact (LIFE: glider intact ... live=5)"; \
+		echo "Boot log:"; cat /tmp/qemu-boot.log 2>/dev/null || true; \
+		echo ""; echo "=== Smoke Test FAILED ==="; exit 1; \
+	fi
+	@echo "SUCCESS: /bin/life Game of Life glider computed correctly (live=5 after 16 gens)"
 	@# epic #95: the kernel holographic field. Three imprints land in
 	@# slots 0..2, a ~15%-corrupted probe must recall the EXACT stored
 	@# content (a line form echoed input cannot produce), a cap-holder's
