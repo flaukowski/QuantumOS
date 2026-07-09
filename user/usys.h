@@ -39,6 +39,10 @@
 #define SYS_IMPRINT 29
 #define SYS_RECALL 30
 #define SYS_FIELD_INFO 31
+#define SYS_AUDIT 32
+#define AUDIT_OP_READ 0
+#define AUDIT_OP_STATS 1
+#define AUDIT_TEXT_MAX 12288 /* >= kernel AUDIT_MAX_BYTES (128*96) so a read is whole */
 
 /* SYS_RESOLVE / SYS_UDP: still pending (poll again) / ring full. */
 #define RESOLVE_WOULDBLOCK (-11)
@@ -373,6 +377,13 @@ _Static_assert(sizeof(field_info_out_t) == 332, "field info out twin ABI drift")
 
 static inline long field_info_(unsigned int region, field_info_out_t *out) {
     return usys2(SYS_FIELD_INFO, (long)region, (long)out);
+}
+
+/* Read the capability authority ledger (epic #133 Phase D). op = AUDIT_OP_READ
+ * (all live GRANT/DENY/SPAWN entries as text) or AUDIT_OP_STATS. Uncapped
+ * read-only introspection; returns bytes copied into buf. */
+static inline long audit_(long op, char *buf, long len) {
+    return usys3(SYS_AUDIT, op, (long)buf, len);
 }
 
 /* Start an initrd ELF as a new ring-3 process. `cmd` is a command line:

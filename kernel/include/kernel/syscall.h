@@ -213,6 +213,14 @@
                          * EXACTLY the region — writes NOTHING, the honest
                          * non-mutating counterpart to SYS_RECALL. Returns 0. */
 
+#define SYS_AUDIT                                                                                  \
+    32 /* rdi = op (AUDIT_OP_READ/STATS), rsi = buf, rdx = len; read
+                         * the capability authority ledger (epic #133 Phase D).
+                         * Uncapped read-only introspection (the SYS_SYSINFO
+                         * class): formats kernel-recorded GRANT/DENY/SPAWN text.
+                         * Names no authority — it only reports. Returns bytes
+                         * copied. */
+
 /* SYS_RESOLVE / SYS_UDP: still pending (poll again) / queue-ring full. */
 #define RESOLVE_WOULDBLOCK ((uint64_t) - 11)
 

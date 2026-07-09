@@ -9,6 +9,7 @@
  * SPDX-License-Identifier: GPL-2.0-only
  */
 
+#include <kernel/audit.h>
 #include <kernel/capability.h>
 #include <kernel/interrupts.h>
 #include <kernel/boot.h>
@@ -112,6 +113,7 @@ cap_result_t cap_create(uint32_t owner_pid, cap_resource_type_t resource_type, u
 
     stats.created++;
     stats.active++;
+    audit_grant(owner_pid, resource_type, resource_id, permissions);
     return CAP_SUCCESS;
 }
 
@@ -159,6 +161,7 @@ cap_result_t cap_derive(uint32_t parent_cap_id, uint32_t requester_pid, uint32_t
 
     stats.derived++;
     stats.active++;
+    audit_grant(new_owner_pid, child->cap.resource_type, child->cap.resource_id, permissions);
     return CAP_SUCCESS;
 }
 
