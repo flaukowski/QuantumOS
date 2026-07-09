@@ -124,6 +124,8 @@ static void cmd_help(void) {
     out(A_CAT "  system " A0 A_CMD "ps" A0 " " A_CMD "free" A0 " " A_CMD "uptime" A0 " " A_CMD
               "date" A0 " " A_CMD "pid" A0 " " A_CMD "echo" A0 "  " A_DIM "inspect the machine" A0
               "\r\n");
+    out("         " A_CMD "audit" A0 "          " A_DIM
+        "capability ledger: who was granted/denied what (kernel-recorded)" A0 "\r\n");
     out(A_CAT "  shell  " A0 A_CMD "clear" A0 " " A_CMD "help" A0 " " A_CMD "exit" A0 "\r\n");
 }
 
@@ -379,6 +381,23 @@ static void cmd_field(void) {
         }
         o = ghost_put(b, o, "\"\r\n");
         out_bytes(b, o);
+    }
+}
+
+/* Capability authority ledger (epic #133 Phase D): the KERNEL records every
+ * capability GRANT, DENY, and SPAWN — a citizen cannot forge or suppress its own
+ * entry. `audit` reads it read-only (SYS_AUDIT), first the stats line then every
+ * live entry. The AUDIT: prefix is a merge gate. (Read over COM1: a cryptographic
+ * export over the attested COM2 channel is a filed follow-up.) */
+static void cmd_audit(void) {
+    static char buf[AUDIT_TEXT_MAX];
+    long n = audit_(AUDIT_OP_STATS, buf, sizeof(buf));
+    if (n > 0) {
+        out_bytes(buf, n);
+    }
+    n = audit_(AUDIT_OP_READ, buf, sizeof(buf));
+    if (n > 0) {
+        out_bytes(buf, n);
     }
 }
 
@@ -1341,6 +1360,8 @@ static void execute(const char *line) {
         cmd_fieldtest();
     } else if (is_cmd(line, "field")) {
         cmd_field();
+    } else if (is_cmd(line, "audit")) {
+        cmd_audit();
     } else if ((a = arg_of(line, "net2")) != 0) {
         cmd_net2(a);
     } else if (is_cmd(line, "net2")) {

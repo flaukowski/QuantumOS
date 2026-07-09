@@ -324,7 +324,7 @@ QSH_LINE_MAX = 119
 # 'FIELDINFO:'/'FIELDSLOT:' are NOT covered by 'FIELD:' — 'FIELDINFO:'.startswith
 # ('FIELD:') is False — so they must be listed explicitly or stored content could
 # forge a field-info line (epic #127 B1).
-_QSH_MARKERS = ("qsh:", "FIELD:", "FIELDINFO:", "FIELDSLOT:", "PS:", "MEM:", "TIME:")
+_QSH_MARKERS = ("qsh:", "FIELD:", "FIELDINFO:", "FIELDSLOT:", "AUDIT:", "PS:", "MEM:", "TIME:")
 
 
 def _qsh_text(value, budget, what="argument"):
@@ -917,6 +917,34 @@ class QosVM:
                     "identity": self.identity()}
         return {"winner": None, "slot": None, "score": None, "n": 0,
                 "identity": self.identity()}
+
+    def audit(self, deadline_s=12.0):
+        """Read the kernel capability AUTHORITY LEDGER read-only (epic #133): the
+        kernel-recorded GRANT / DENY / SPAWN events. The KERNEL writes it, so a
+        citizen cannot forge or suppress its own entry. Returns {total, dropped,
+        capacity, entries:[{seq,tick,pid,kind,resource_type,resource_id,perms,
+        verdict,count}]}. Honest scope: an authority ledger (grants+denials+
+        spawns), NOT a full syscall trace; successful exercise of held authority
+        and revoke/expire are not recorded. Read over COM1; a cryptographic
+        export over the attested COM2 channel is a follow-up (a malicious citizen
+        could newline-inject a forged line — the host anchors ^AUDIT: and the
+        line-forge guard mitigates, but v1 trusts the shipped citizens)."""
+        self._ensure_verified()
+        text = self._collect(["audit"], deadline_s, "audit")
+        st = re.search(r"^AUDIT: total=(\d+) dropped=(\d+) capacity=(\d+)", text, re.M)
+        entries = []
+        for m in re.finditer(
+                r"^AUDIT: seq=(\d+) tick=(\d+) pid=(\d+) kind=(\w+) res=(\w+):(\*|\d+) "
+                r"perms=0x([0-9a-fA-F]+) verdict=(\w+) count=(\d+)", text, re.M):
+            entries.append({"seq": int(m.group(1)), "tick": int(m.group(2)),
+                            "pid": int(m.group(3)), "kind": m.group(4),
+                            "resource_type": m.group(5), "resource_id": m.group(6),
+                            "perms": int(m.group(7), 16), "verdict": m.group(8),
+                            "count": int(m.group(9))})
+        return {"total": int(st.group(1)) if st else None,
+                "dropped": int(st.group(2)) if st else None,
+                "capacity": int(st.group(3)) if st else None,
+                "entries": entries, "identity": self.identity()}
 
     def run(self, program, args="", deadline_s=20.0):
         """Spawn a /bin citizen via qsh with an optional argument string and

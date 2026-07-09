@@ -11,6 +11,7 @@
  */
 
 #include <kernel/syscall.h>
+#include <kernel/audit.h>
 #include <kernel/process.h>
 #include <kernel/scheduler.h>
 #include <kernel/gdt.h>
@@ -336,6 +337,7 @@ static uint64_t sys_com2(uint32_t pid, uint64_t op, uint64_t user_ptr, uint64_t 
 
     if (op == SYS_COM2_WRITE) {
         if (cap_find_resource(pid, CAP_RESOURCE_DEVICE, CAP_WRITE, DEVICE_ID_COM2) != CAP_SUCCESS) {
+            audit_deny(pid, CAP_RESOURCE_DEVICE, DEVICE_ID_COM2, CAP_WRITE);
             return SYSCALL_EPERM;
         }
         const uint8_t *src = (const uint8_t *)user_ptr;
@@ -349,6 +351,7 @@ static uint64_t sys_com2(uint32_t pid, uint64_t op, uint64_t user_ptr, uint64_t 
 
     /* SYS_COM2_READ */
     if (cap_find_resource(pid, CAP_RESOURCE_DEVICE, CAP_READ, DEVICE_ID_COM2) != CAP_SUCCESS) {
+        audit_deny(pid, CAP_RESOURCE_DEVICE, DEVICE_ID_COM2, CAP_READ);
         return SYSCALL_EPERM;
     }
     uint32_t got = com2_read(tmp, (uint32_t)len);
@@ -387,6 +390,7 @@ static uint64_t sys_cons(uint32_t pid, uint64_t op, uint64_t user_ptr, uint64_t 
     if (op == SYS_CONS_WRITE) {
         if (cap_find_resource(pid, CAP_RESOURCE_DEVICE, CAP_WRITE, DEVICE_ID_CONSOLE) !=
             CAP_SUCCESS) {
+            audit_deny(pid, CAP_RESOURCE_DEVICE, DEVICE_ID_CONSOLE, CAP_WRITE);
             return SYSCALL_EPERM;
         }
         const uint8_t *src = (const uint8_t *)user_ptr;
@@ -400,6 +404,7 @@ static uint64_t sys_cons(uint32_t pid, uint64_t op, uint64_t user_ptr, uint64_t 
 
     /* SYS_CONS_READ */
     if (cap_find_resource(pid, CAP_RESOURCE_DEVICE, CAP_READ, DEVICE_ID_CONSOLE) != CAP_SUCCESS) {
+        audit_deny(pid, CAP_RESOURCE_DEVICE, DEVICE_ID_CONSOLE, CAP_READ);
         return SYSCALL_EPERM;
     }
     uint32_t got = console_read(tmp, (uint32_t)len);
@@ -1053,6 +1058,7 @@ static int parse_cmdline(const char *cmd, kuser_args_t *ka, char *path0, size_t 
 static uint64_t sys_spawn(uint32_t pid, uint64_t cmd_ptr) {
     if (cap_find_resource(pid, CAP_RESOURCE_PROCESS, CAP_EXECUTE, SPAWN_RESOURCE_ID) !=
         CAP_SUCCESS) {
+        audit_deny(pid, CAP_RESOURCE_PROCESS, SPAWN_RESOURCE_ID, CAP_EXECUTE);
         return SYSCALL_EPERM;
     }
 
@@ -1096,6 +1102,7 @@ static uint64_t sys_spawn(uint32_t pid, uint64_t cmd_ptr) {
     if (spawn_elf_args(name, data, data + size, &ka, &new_pid) != STATUS_SUCCESS) {
         return SYSCALL_EIO;
     }
+    audit_spawn(pid, new_pid);
     return new_pid;
 }
 
@@ -1194,6 +1201,7 @@ static uint64_t sys_imprint(uint32_t pid, uint64_t req_ptr) {
      * any field-write capability at all?". */
     uint32_t any_region = 0;
     if (cap_find(pid, CAP_RESOURCE_FIELD, CAP_WRITE, &any_region) != CAP_SUCCESS) {
+        audit_deny(pid, CAP_RESOURCE_FIELD, AUDIT_RESOURCE_ANY, CAP_WRITE);
         return SYSCALL_EPERM;
     }
     /* Whole-struct endpoint validation (the sys_udp precedent). */
@@ -1225,6 +1233,7 @@ static uint64_t sys_imprint(uint32_t pid, uint64_t req_ptr) {
 static uint64_t sys_recall(uint32_t pid, uint64_t req_ptr, uint64_t out_ptr) {
     uint32_t any_region = 0;
     if (cap_find(pid, CAP_RESOURCE_FIELD, CAP_READ, &any_region) != CAP_SUCCESS) {
+        audit_deny(pid, CAP_RESOURCE_FIELD, AUDIT_RESOURCE_ANY, CAP_READ);
         return SYSCALL_EPERM;
     }
     if (!in_user_range(req_ptr) || !in_user_range(req_ptr + sizeof(field_recall_req_k_t) - 1) ||
@@ -1272,6 +1281,7 @@ static uint64_t sys_field_info(uint32_t pid, uint64_t region_arg, uint64_t out_p
      * exactly EPERM before ANY user memory is touched (the ghost_test rule). */
     uint32_t any_region = 0;
     if (cap_find(pid, CAP_RESOURCE_FIELD, CAP_READ, &any_region) != CAP_SUCCESS) {
+        audit_deny(pid, CAP_RESOURCE_FIELD, AUDIT_RESOURCE_ANY, CAP_READ);
         return SYSCALL_EPERM;
     }
     uint32_t region = (uint32_t)region_arg;
@@ -1296,6 +1306,37 @@ static uint64_t sys_field_info(uint32_t pid, uint64_t region_arg, uint64_t out_p
         udst[i] = ((const uint8_t *)&out)[i];
     }
     return 0;
+}
+
+/* SYS_AUDIT — read the capability authority ledger (epic #133 Phase D). Uncapped
+ * read-only introspection (the SYS_SYSINFO precedent: it names no authority, it
+ * only reports). op AUDIT_OP_READ formats all live GRANT/DENY/SPAWN entries
+ * oldest->newest; AUDIT_OP_STATS reports total/dropped/capacity. Reading the log
+ * mints and denies nothing, so it never perturbs its own counters. */
+static uint64_t sys_audit(uint32_t pid, uint64_t op, uint64_t user_ptr, uint64_t len) {
+    (void)pid;
+    if (!in_user_range(user_ptr)) {
+        return SYSCALL_EFAULT;
+    }
+    static char tmp[AUDIT_MAX_BYTES];
+    size_t produced;
+    if (op == AUDIT_OP_STATS) {
+        produced = audit_format_stats(tmp, sizeof(tmp));
+    } else if (op == AUDIT_OP_READ) {
+        produced = audit_format(tmp, sizeof(tmp));
+    } else {
+        return SYSCALL_EINVAL;
+    }
+    if (len > produced) {
+        len = produced;
+    }
+    char *dst = (char *)user_ptr;
+    uint32_t n = 0;
+    while (n < len && in_user_range(user_ptr + n)) {
+        dst[n] = tmp[n];
+        n++;
+    }
+    return n;
 }
 
 /* ============================================================================
@@ -1401,6 +1442,9 @@ static void syscall_dispatch(cpu_state_t *state) {
         break;
     case SYS_FIELD_INFO:
         state->rax = sys_field_info(pid, state->rdi, state->rsi);
+        break;
+    case SYS_AUDIT:
+        state->rax = sys_audit(pid, state->rdi, state->rsi, state->rdx);
         break;
     default:
         state->rax = SYSCALL_ENOSYS;

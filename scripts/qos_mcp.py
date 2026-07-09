@@ -108,6 +108,21 @@ def qos_field_status() -> dict:
 
 
 @mcp.tool()
+def qos_audit() -> dict:
+    """Read the kernel capability AUTHORITY LEDGER (epic #133): the
+    kernel-recorded GRANT / DENY / SPAWN events — what authority each citizen was
+    granted and every capability-gated syscall it was refused. The KERNEL records
+    it, so a citizen cannot forge or suppress its own entry: this makes 'authority
+    IS the capability set, and every attempt to exceed it is provable' observable
+    (conscience before wallet). Returns {total, dropped, capacity, entries}. It is
+    an authority ledger, NOT a full action trace. Refuses if not verified."""
+    try:
+        return _vm.audit()
+    except QosError as exc:
+        return _err(exc)
+
+
+@mcp.tool()
 def qos_run(program: str, args: str = "") -> dict:
     """Spawn a citizen off the initrd (e.g. '/bin/hello' or '/bin/args a b c')
     via qsh and return its console output and exit code. `program` must be

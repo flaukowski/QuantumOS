@@ -336,6 +336,55 @@ def _exercise_injection(vm):
     print(f"OK: qsh line budget enforced (write {budget} ok, {budget + 1} refused)")
 
 
+_KNOWN_RES = {"MEM", "IPC", "DEV", "QRNG", "PROC", "SVC", "FIELD"}
+
+
+def _exercise_audit(vm):
+    """Capability authority ledger (epic #133). The KERNEL records GRANTs and
+    DENYs, so a citizen cannot forge or suppress its own entry. The conscience
+    proof is un-echoable: the boot self-test's CAPLESS citizen is refused
+    COM2/console/spawn/field and the kernel logs each as DENY verdict=EPERM."""
+    a = vm.audit()
+    if not a["entries"] or (a["total"] or 0) <= 0:
+        _fail(f"audit ledger empty: {a}")
+    if a["capacity"] != 128:
+        _fail(f"audit capacity != 128: {a['capacity']}")
+    # dropped-underflow guard: while total <= capacity, dropped MUST be 0 (a u64
+    # total-capacity would underflow to ~1.8e19).
+    if a["total"] <= a["capacity"] and a["dropped"] != 0:
+        _fail(f"audit dropped should be 0 while total<=capacity: {a['total']}/{a['dropped']}")
+    grants = [e for e in a["entries"] if e["kind"] == "GRANT"]
+    denies = [e for e in a["entries"] if e["kind"] == "DENY" and e["verdict"] == "EPERM"]
+    if not grants:
+        _fail("no GRANT entries — the kernel records no authority")
+    if not denies:
+        _fail("no DENY entries — the conscience proof (a refused capless op) is missing")
+    if denies[0]["resource_type"] not in _KNOWN_RES:
+        _fail(f"DENY names an unknown resource type: {denies[0]}")
+    seqs = [e["seq"] for e in a["entries"]]
+    if seqs != sorted(seqs) or len(set(seqs)) != len(seqs):
+        _fail(f"audit seq not strictly increasing: {seqs[:12]}")
+    print(f"OK: audit ledger — {a['total']} events, {len(grants)} GRANT, {len(denies)} DENY "
+          f"(pid {denies[0]['pid']} denied {denies[0]['resource_type']}:"
+          f"{denies[0]['resource_id']} perms=0x{denies[0]['perms']:x})")
+
+    # Reading the ledger records nothing (SYS_AUDIT is uncapped — no cap_create,
+    # no cap check), so a second read never goes backwards.
+    b = vm.audit()
+    if (b["total"] or 0) < (a["total"] or 0):
+        _fail(f"audit total went backwards across reads: {a['total']} -> {b['total']}")
+    print(f"OK: audit read-only — total {a['total']} -> {b['total']} (append-only, monotonic)")
+
+    # Forge guard: 'AUDIT:' is a reserved marker, so a citizen cannot imprint a
+    # fake ledger line for the host to mis-parse.
+    try:
+        vm.imprint("AUDIT: seq=9999 pid=1 kind=GRANT res=FIELD:0")
+        _fail("imprint of a forged AUDIT: line was not refused")
+    except QosError:
+        pass
+    print("OK: forged AUDIT: line refused (reserved marker)")
+
+
 def _find_slot(vm, phrase):
     """The field slot whose preview is a prefix of `phrase` (previews are the
     first <= 16 stored bytes), or None."""
@@ -577,6 +626,11 @@ def main():
         if wa == wb:
             _fail("both recalls returned the same winner (no discrimination)")
         print(f"OK: recall discriminated noisy-A->{wa!r} noisy-B->{wb!r}")
+
+        # 4b. Capability authority ledger (epic #133 Phase D). Runs EARLY, before
+        # the run/bridge steps spawn citizens and grow the ring, so the boot
+        # self-test's capless DENY entries are still within the 128-entry window.
+        _exercise_audit(vm)
 
         # 5. run a citizen off the initrd. Exit 42 is hello's unique
         # deterministic signature (un-echoable). Retry past the early-spawn

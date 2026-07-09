@@ -115,8 +115,14 @@ then a `FIELDSLOT:` line per live slot with its energy, effective
 energy, retrievals, age, and a bounded preview; unlike `recall` it does
 NOT reinforce, so it never perturbs the field), `fieldtest` (asserts the
 cross-region EPERM and degenerate-probe n=0 contracts from the
-cap-holding side; `ghost_test` proves the capless side), `clear`,
-`exit`.
+cap-holding side; `ghost_test` proves the capless side), `audit`
+(epic #133 Phase D: `SYS_AUDIT`, the capability AUTHORITY LEDGER — the
+KERNEL records every capability GRANT, DENY, and SPAWN, so a citizen
+cannot forge or suppress its own entry; `audit` prints `AUDIT: total=…`
+then an `AUDIT: seq=… pid=… kind=GRANT|DENY|SPAWN res=TYPE:id perms=…
+verdict=OK|EPERM` line per event — read-only introspection that makes
+"authority IS the capability set, and every attempt to exceed it is
+provable" observable), `clear`, `exit`.
 
 `exit` is a supervised death: the shell terminates, its heartbeat goes
 silent, and the service watchdog restarts it (~2 s); the reborn shell
