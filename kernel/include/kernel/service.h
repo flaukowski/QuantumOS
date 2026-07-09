@@ -22,7 +22,10 @@
  * Constants
  * ============================================================================ */
 
-#define MAX_SERVICES 16
+/* 24, not 16: the boot roster reached 15/16 with quota-test (epic #135), and
+ * service_register exhaustion is only a boot_log warning — the next citizen
+ * would fail with no obvious cause. Headroom is cheap (one slot ~= 700 B). */
+#define MAX_SERVICES 24
 #define SERVICE_NAME_MAX 64
 #define SERVICE_MAX_DEPS 8
 #define SERVICE_DEFAULT_MAX_RESTARTS 3
@@ -132,6 +135,13 @@ typedef struct {
      * epic #95 rule). Inheritance is consumed once per boot per region;
      * watchdog rebirths and successors always scrub. qsh only. */
     uint8_t field_inherit;
+    /* Manifest spawn quota (epic #135): successful SYS_SPAWNs allowed per
+     * incarnation (a watchdog rebirth re-binds the manifest, resetting the
+     * counter — a soft, per-incarnation bound). 0 = bound but unlimited.
+     * Only meaningful alongside grant_spawn. quota-test proves enforcement
+     * with spawn_max=1; qsh stays 0 — a finite shell quota would brick
+     * long-lived agent sessions no CI boot can ever exercise. */
+    uint32_t spawn_max;
 } service_definition_t;
 
 /* ============================================================================

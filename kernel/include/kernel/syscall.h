@@ -221,6 +221,14 @@
                          * Names no authority — it only reports. Returns bytes
                          * copied. */
 
+#define SYS_MANIFEST                                                                               \
+    33 /* rdi = buf, rsi = len; read the per-pid intent manifests
+                         * (epic #135 Phase D increment 2). Uncapped read-only
+                         * introspection (the SYS_AUDIT class): dumps every bound
+                         * manifest's declared allow-set, spawn quota (used/max),
+                         * and cpu_ticks as text. Reading mutates nothing.
+                         * Returns bytes copied. */
+
 /* SYS_RESOLVE / SYS_UDP: still pending (poll again) / queue-ring full. */
 #define RESOLVE_WOULDBLOCK ((uint64_t) - 11)
 

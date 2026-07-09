@@ -12,6 +12,7 @@
 
 #include <kernel/syscall.h>
 #include <kernel/audit.h>
+#include <kernel/manifest.h>
 #include <kernel/process.h>
 #include <kernel/scheduler.h>
 #include <kernel/gdt.h>
@@ -53,6 +54,7 @@ extern const uint8_t _binary_quantumd_elf_start[], _binary_quantumd_elf_end[];
 extern const uint8_t _binary_kannakad_elf_start[], _binary_kannakad_elf_end[];
 extern const uint8_t _binary_fieldsyncd_elf_start[], _binary_fieldsyncd_elf_end[];
 extern const uint8_t _binary_httpd_elf_start[], _binary_httpd_elf_end[];
+extern const uint8_t _binary_quota_test_elf_start[], _binary_quota_test_elf_end[];
 
 /* Argument vector ABI (epic #62). MUST stay byte-identical to user_args_t
  * in user/usys.h — there is no shared header across the ring boundary. The
@@ -79,6 +81,7 @@ void user_quantum_demo_init(void);
 void user_fieldsync_demo_init(uint32_t ghostd_pid);
 void user_httpd_init(void);
 void user_kannaka_demo_init(void);
+void user_quota_test_init(void);
 
 /* int 0x80 stub (kernel/src/interrupts.S) */
 extern void isr128(void);
@@ -92,6 +95,23 @@ static int in_user_range(uint64_t addr) {
     return addr >= USER_VBASE && addr < 0x80000000UL;
 }
 
+/* Two-layer authority gate for a specific resource (epic #135): the
+ * capability layer first (a missing cap records AUDIT_DENY), then the intent
+ * manifest (a held-but-undeclared cap records AUDIT_MDENY inside
+ * manifest_check). Returns 1 if the op is authorised by BOTH layers, 0
+ * otherwise — the caller returns SYSCALL_EPERM on 0. On the shipped system
+ * caps and manifests are minted from the same grants, so layer 2 refuses
+ * nothing today; it is the outer bound cap delegation (a follow-up) will be
+ * checked against. Consolidates the audit_deny hook the epic #133 sites had
+ * with the audit gap ones (fs/net) so every gated site now records a DENY. */
+static int authorize(uint32_t pid, uint32_t rtype, uint32_t perm, uint32_t rid) {
+    if (cap_find_resource(pid, rtype, perm, rid) != CAP_SUCCESS) {
+        audit_deny(pid, rtype, rid, perm);
+        return 0;
+    }
+    return manifest_check(pid, rtype, rid, perm);
+}
+
 /* Print "[user pid=N] msg" atomically enough for the boot console.
  * Tees to the VGA screen console (no-op until enabled): on serial-less
  * hardware SYS_WRITE was invisible — the third real-laptop finding was
@@ -99,11 +119,30 @@ static int in_user_range(uint64_t addr) {
  * output. The pid keeps the serial log's 16-digit hex form on screen
  * too, so the two transcripts stay grep-compatible. */
 static void user_console_write(uint32_t pid, const char *msg) {
-    early_console_write("[user pid=");
-    early_console_write_hex(pid);
-    early_console_write("] ");
-    early_console_write(msg);
-    early_console_write("\r\n");
+    /* PER-LINE prefixing (epic #135): re-emit the prefix after every run of
+     * CR/LF so no citizen byte can ever land at column 0 of the serial log.
+     * Without this, one SYS_WRITE containing "\n MANIFEST:..." forges a line
+     * the host's anchored ^AUDIT:/^MANIFEST:/^FIELDINFO: parsers ingest as
+     * kernel ground truth — the documented #133 residual, closed here for
+     * every current and future anchored marker at once. (All shipped
+     * citizens emit single-line writes; their output is byte-identical.) */
+    const char *p = msg;
+    do {
+        char seg[128]; /* sys_write's buf is 128 — a segment never exceeds it */
+        size_t n = 0;
+        while (*p && *p != '\r' && *p != '\n' && n < sizeof(seg) - 1) {
+            seg[n++] = *p++;
+        }
+        seg[n] = '\0';
+        while (*p == '\r' || *p == '\n') {
+            p++; /* swallow the newline run; we emit our own CRLF */
+        }
+        early_console_write("[user pid=");
+        early_console_write_hex(pid);
+        early_console_write("] ");
+        early_console_write(seg);
+        early_console_write("\r\n");
+    } while (*p);
     if (vga_console_active()) {
         uint64_t p = pid; /* widen BEFORE shifting: >>60 on a u32 is UB */
         char hex[17];
@@ -282,8 +321,16 @@ static uint64_t sys_qrand(uint32_t pid, uint64_t user_ptr, uint64_t len) {
 
     if (len == 0) {
         /* Provenance query: no buffer touched. Still requires the cap so a
-         * capless caller cannot even learn the entropy provenance. */
+         * capless caller cannot even learn the entropy provenance. The
+         * capless denial now records an AUDIT_DENY over QRNG (epic #135) —
+         * the ledger's "quantum" DENY coverage was CLAIMED by audit.h but
+         * never actually hooked; ghost_test's capless draw now proves it. */
         if (quantum_user_random(pid, NULL, 0, &seed_present) != QUANTUM_SUCCESS) {
+            audit_deny(pid, CAP_RESOURCE_QUANTUM, QUANTUM_POOL_RESOURCE_ID, CAP_QUANTUM | CAP_READ);
+            return SYSCALL_EPERM;
+        }
+        if (!manifest_check(pid, CAP_RESOURCE_QUANTUM, QUANTUM_POOL_RESOURCE_ID,
+                            CAP_QUANTUM | CAP_READ)) {
             return SYSCALL_EPERM;
         }
         return seed_present ? 1 : 0;
@@ -300,6 +347,13 @@ static uint64_t sys_qrand(uint32_t pid, uint64_t user_ptr, uint64_t len) {
      * only as far as the caller's mapped user half extends. */
     uint8_t tmp[QRAND_MAX_BYTES];
     if (quantum_user_random(pid, tmp, (uint32_t)len, &seed_present) != QUANTUM_SUCCESS) {
+        audit_deny(pid, CAP_RESOURCE_QUANTUM, QUANTUM_POOL_RESOURCE_ID, CAP_QUANTUM | CAP_READ);
+        return SYSCALL_EPERM;
+    }
+    /* Held the cap — now the intent bound (epic #135). Checked before the
+     * drawn bytes reach user memory. */
+    if (!manifest_check(pid, CAP_RESOURCE_QUANTUM, QUANTUM_POOL_RESOURCE_ID,
+                        CAP_QUANTUM | CAP_READ)) {
         return SYSCALL_EPERM;
     }
 
@@ -336,8 +390,7 @@ static uint64_t sys_com2(uint32_t pid, uint64_t op, uint64_t user_ptr, uint64_t 
     uint8_t tmp[COM2_MAX_BYTES];
 
     if (op == SYS_COM2_WRITE) {
-        if (cap_find_resource(pid, CAP_RESOURCE_DEVICE, CAP_WRITE, DEVICE_ID_COM2) != CAP_SUCCESS) {
-            audit_deny(pid, CAP_RESOURCE_DEVICE, DEVICE_ID_COM2, CAP_WRITE);
+        if (!authorize(pid, CAP_RESOURCE_DEVICE, CAP_WRITE, DEVICE_ID_COM2)) {
             return SYSCALL_EPERM;
         }
         const uint8_t *src = (const uint8_t *)user_ptr;
@@ -350,8 +403,7 @@ static uint64_t sys_com2(uint32_t pid, uint64_t op, uint64_t user_ptr, uint64_t 
     }
 
     /* SYS_COM2_READ */
-    if (cap_find_resource(pid, CAP_RESOURCE_DEVICE, CAP_READ, DEVICE_ID_COM2) != CAP_SUCCESS) {
-        audit_deny(pid, CAP_RESOURCE_DEVICE, DEVICE_ID_COM2, CAP_READ);
+    if (!authorize(pid, CAP_RESOURCE_DEVICE, CAP_READ, DEVICE_ID_COM2)) {
         return SYSCALL_EPERM;
     }
     uint32_t got = com2_read(tmp, (uint32_t)len);
@@ -388,9 +440,7 @@ static uint64_t sys_cons(uint32_t pid, uint64_t op, uint64_t user_ptr, uint64_t 
     uint8_t tmp[CONS_MAX_BYTES];
 
     if (op == SYS_CONS_WRITE) {
-        if (cap_find_resource(pid, CAP_RESOURCE_DEVICE, CAP_WRITE, DEVICE_ID_CONSOLE) !=
-            CAP_SUCCESS) {
-            audit_deny(pid, CAP_RESOURCE_DEVICE, DEVICE_ID_CONSOLE, CAP_WRITE);
+        if (!authorize(pid, CAP_RESOURCE_DEVICE, CAP_WRITE, DEVICE_ID_CONSOLE)) {
             return SYSCALL_EPERM;
         }
         const uint8_t *src = (const uint8_t *)user_ptr;
@@ -403,8 +453,7 @@ static uint64_t sys_cons(uint32_t pid, uint64_t op, uint64_t user_ptr, uint64_t 
     }
 
     /* SYS_CONS_READ */
-    if (cap_find_resource(pid, CAP_RESOURCE_DEVICE, CAP_READ, DEVICE_ID_CONSOLE) != CAP_SUCCESS) {
-        audit_deny(pid, CAP_RESOURCE_DEVICE, DEVICE_ID_CONSOLE, CAP_READ);
+    if (!authorize(pid, CAP_RESOURCE_DEVICE, CAP_READ, DEVICE_ID_CONSOLE)) {
         return SYSCALL_EPERM;
     }
     uint32_t got = console_read(tmp, (uint32_t)len);
@@ -542,11 +591,14 @@ static uint64_t install_fd(process_t *cur, const uint8_t *data, uint32_t size, b
     return SYSCALL_EIO; /* fd table full */
 }
 
-/* Does the caller hold the volume-level filesystem-write capability?
+/* Does the caller hold the volume-level filesystem-write authority?
  * (CAP_RESOURCE_DEVICE over DEVICE_ID_DISK — writing files is writing
- * the persistence volume; per-file capabilities remain future work.) */
+ * the persistence volume; per-file capabilities remain future work.)
+ * Now two-layer (epic #135): capability + intent manifest, and it records
+ * an AUDIT_DENY on a capless attempt where the epic #133 sites already did
+ * but the fs sites did not — closing the documented ledger gap for DISK. */
 static int has_fs_write_cap(uint32_t pid) {
-    return cap_find_resource(pid, CAP_RESOURCE_DEVICE, CAP_WRITE, DEVICE_ID_DISK) == CAP_SUCCESS;
+    return authorize(pid, CAP_RESOURCE_DEVICE, CAP_WRITE, DEVICE_ID_DISK);
 }
 
 static uint64_t sys_open(uint32_t pid, uint64_t path_ptr, uint64_t flags) {
@@ -684,7 +736,7 @@ static uint64_t sys_sync_fs(uint32_t pid) {
  * IRQ); this call posts the request on the first invocation and polls on
  * the rest, so the caller loops with SYS_YIELD. */
 static uint64_t sys_resolve(uint32_t pid, uint64_t host_ptr, uint64_t out_ptr) {
-    if (cap_find_resource(pid, CAP_RESOURCE_DEVICE, CAP_READ, DEVICE_ID_NET) != CAP_SUCCESS) {
+    if (!authorize(pid, CAP_RESOURCE_DEVICE, CAP_READ, DEVICE_ID_NET)) {
         return SYSCALL_EPERM;
     }
     if (!in_user_range(out_ptr)) {
@@ -757,10 +809,10 @@ static uint64_t udp_map_err(long r) {
 }
 
 static uint64_t sys_udp(uint32_t pid, uint64_t op, uint64_t req_ptr) {
-    /* Capability FIRST — before any argument or network check — so the
+    /* Authority FIRST — before any argument or network check — so the
      * capless-denial gate fires even in the NIC-less default boot (the
-     * sys_resolve precedent). */
-    if (cap_find_resource(pid, CAP_RESOURCE_DEVICE, CAP_READ, DEVICE_ID_NET) != CAP_SUCCESS) {
+     * sys_resolve precedent). Two-layer since epic #135. */
+    if (!authorize(pid, CAP_RESOURCE_DEVICE, CAP_READ, DEVICE_ID_NET)) {
         return SYSCALL_EPERM;
     }
     /* The WHOLE struct must sit inside the user window — a struct whose
@@ -857,9 +909,9 @@ static uint64_t tcp_map_err(long r) {
 }
 
 static uint64_t sys_tcp(uint32_t pid, uint64_t op, uint64_t req_ptr) {
-    /* Capability FIRST (the sys_udp/sys_resolve precedent) so the capless
-     * gate fires even in the NIC-less default boot. */
-    if (cap_find_resource(pid, CAP_RESOURCE_DEVICE, CAP_READ, DEVICE_ID_NET) != CAP_SUCCESS) {
+    /* Authority FIRST (the sys_udp/sys_resolve precedent) so the capless
+     * gate fires even in the NIC-less default boot. Two-layer since #135. */
+    if (!authorize(pid, CAP_RESOURCE_DEVICE, CAP_READ, DEVICE_ID_NET)) {
         return SYSCALL_EPERM;
     }
     if (!in_user_range(req_ptr) || !in_user_range(req_ptr + sizeof(udp_req_k_t) - 1)) {
@@ -1056,9 +1108,15 @@ static int parse_cmdline(const char *cmd, kuser_args_t *ka, char *path0, size_t 
 }
 
 static uint64_t sys_spawn(uint32_t pid, uint64_t cmd_ptr) {
-    if (cap_find_resource(pid, CAP_RESOURCE_PROCESS, CAP_EXECUTE, SPAWN_RESOURCE_ID) !=
-        CAP_SUCCESS) {
-        audit_deny(pid, CAP_RESOURCE_PROCESS, SPAWN_RESOURCE_ID, CAP_EXECUTE);
+    if (!authorize(pid, CAP_RESOURCE_PROCESS, CAP_EXECUTE, SPAWN_RESOURCE_ID)) {
+        return SYSCALL_EPERM;
+    }
+    /* Spawn QUOTA precheck (epic #135) — the first ENFORCED quota. Runs
+     * BEFORE any side effect (copy-in, parse, initrd lookup) so a failed
+     * attempt never consumes a slot; a refusal records AUDIT_QUOTA. The
+     * charge happens only after spawn_elf_args succeeds (below), and the
+     * check-then-charge pair is race-free: syscalls run cli'd on one CPU. */
+    if (!manifest_spawn_precheck(pid)) {
         return SYSCALL_EPERM;
     }
 
@@ -1102,6 +1160,10 @@ static uint64_t sys_spawn(uint32_t pid, uint64_t cmd_ptr) {
     if (spawn_elf_args(name, data, data + size, &ka, &new_pid) != STATUS_SUCCESS) {
         return SYSCALL_EIO;
     }
+    /* Charge the quota only on a real spawn (epic #135) — failed lookups /
+     * loads above never reach here, so a typo'd `run /bin/nope` costs no
+     * quota. */
+    manifest_spawn_charge(pid);
     audit_spawn(pid, new_pid);
     return new_pid;
 }
@@ -1136,6 +1198,10 @@ static uint64_t sys_qseed(uint32_t pid) {
     uint32_t rid = 0;
     if (cap_find(pid, CAP_RESOURCE_QUANTUM, CAP_READ, &rid) != CAP_SUCCESS ||
         rid != QUANTUM_POOL_RESOURCE_ID) {
+        audit_deny(pid, CAP_RESOURCE_QUANTUM, QUANTUM_POOL_RESOURCE_ID, CAP_READ);
+        return SYSCALL_EPERM;
+    }
+    if (!manifest_check(pid, CAP_RESOURCE_QUANTUM, QUANTUM_POOL_RESOURCE_ID, CAP_READ)) {
         return SYSCALL_EPERM;
     }
     return quantum_boot_seed();
@@ -1213,10 +1279,12 @@ static uint64_t sys_imprint(uint32_t pid, uint64_t req_ptr) {
     for (size_t i = 0; i < sizeof(req); i++) {
         ((uint8_t *)&req)[i] = usrc[i];
     }
-    /* The cap must name EXACTLY the requested region (cap_find_resource,
-     * the sys_send_to precedent): holding region 0 must never reach
-     * region 1 — this comparison IS the isolation boundary. */
-    if (cap_find_resource(pid, CAP_RESOURCE_FIELD, CAP_WRITE, req.region) != CAP_SUCCESS) {
+    /* The cap must name EXACTLY the requested region (the sys_send_to
+     * precedent): holding region 0 must never reach region 1 — this
+     * comparison IS the isolation boundary. Two-layer since epic #135:
+     * capability + intent manifest, so the field region is part of the
+     * declared allow-set. */
+    if (!authorize(pid, CAP_RESOURCE_FIELD, CAP_WRITE, req.region)) {
         return SYSCALL_EPERM;
     }
     if (req.len == 0 || req.len > FIELD_PAT_MAX) {
@@ -1245,7 +1313,7 @@ static uint64_t sys_recall(uint32_t pid, uint64_t req_ptr, uint64_t out_ptr) {
     for (size_t i = 0; i < sizeof(req); i++) {
         ((uint8_t *)&req)[i] = usrc[i];
     }
-    if (cap_find_resource(pid, CAP_RESOURCE_FIELD, CAP_READ, req.region) != CAP_SUCCESS) {
+    if (!authorize(pid, CAP_RESOURCE_FIELD, CAP_READ, req.region)) {
         return SYSCALL_EPERM;
     }
     if (req.len == 0 || req.len > FIELD_PAT_MAX || req.k == 0 || req.k > FIELD_RANK_MAX) {
@@ -1288,7 +1356,7 @@ static uint64_t sys_field_info(uint32_t pid, uint64_t region_arg, uint64_t out_p
     /* The cap must name EXACTLY the requested region — checked BEFORE the
      * output pointer is examined, so a wrong-region caller also gets EPERM
      * without revealing anything about (or requiring) a valid buffer. */
-    if (cap_find_resource(pid, CAP_RESOURCE_FIELD, CAP_READ, region) != CAP_SUCCESS) {
+    if (!authorize(pid, CAP_RESOURCE_FIELD, CAP_READ, region)) {
         return SYSCALL_EPERM;
     }
     if (!in_user_range(out_ptr) || !in_user_range(out_ptr + sizeof(field_info_out_k_t) - 1)) {
@@ -1327,6 +1395,35 @@ static uint64_t sys_audit(uint32_t pid, uint64_t op, uint64_t user_ptr, uint64_t
     } else {
         return SYSCALL_EINVAL;
     }
+    if (len > produced) {
+        len = produced;
+    }
+    char *dst = (char *)user_ptr;
+    uint32_t n = 0;
+    while (n < len && in_user_range(user_ptr + n)) {
+        dst[n] = tmp[n];
+        n++;
+    }
+    return n;
+}
+
+/* SYS_MANIFEST — read the intent manifests (epic #135 Phase D increment 2).
+ * Uncapped read-only introspection (the SYS_AUDIT/SYS_SYSINFO class): dumps
+ * every BOUND per-pid manifest as text — the declared allow-set, the spawn
+ * quota (used/max), and live cpu_ticks. Same disclosure stance as the audit
+ * ledger for grants (already public there), with cpu_ticks the one added,
+ * documented timing signal. Reading mutates nothing. Copy-out mirrors
+ * sys_audit EXACTLY: format into a static kernel scratch, clamp the user
+ * length to what was produced, then a per-byte in_user_range copy — so a
+ * user-controlled length can never wrap past the user half into kernel
+ * memory (there is deliberately NO up-front whole-range check on raw len). */
+static uint64_t sys_manifest(uint32_t pid, uint64_t user_ptr, uint64_t len) {
+    (void)pid;
+    if (!in_user_range(user_ptr)) {
+        return SYSCALL_EFAULT;
+    }
+    static char tmp[MANIFEST_TEXT_MAX];
+    size_t produced = manifest_format(tmp, sizeof(tmp));
     if (len > produced) {
         len = produced;
     }
@@ -1446,6 +1543,9 @@ static void syscall_dispatch(cpu_state_t *state) {
     case SYS_AUDIT:
         state->rax = sys_audit(pid, state->rdi, state->rsi, state->rdx);
         break;
+    case SYS_MANIFEST:
+        state->rax = sys_manifest(pid, state->rdi, state->rsi);
+        break;
     default:
         state->rax = SYSCALL_ENOSYS;
         break;
@@ -1563,6 +1663,23 @@ static status_t finalize_user_process(address_space_t *as, const char *name, uin
     /* Bind the process to its private address space */
     proc->cr3 = as->cr3;
     proc->virtual_address_space = as->pml4;
+
+    /* Bind the restrictive DEFAULT manifest to EVERY ring-3 process (epic
+     * #135): a bare bound manifest with no allow rows and no spawn quota.
+     * This is the single choke point all three spawn paths funnel through
+     * (flat blob, ELF, SYS_SPAWN), so after it "unbound" is provably ring-0
+     * only — a manifest-checked capability a ring-3 process should not hold
+     * would MDENY. A SERVICE overwrites this immediately in start_slot with
+     * its grant-derived manifest (manifest_bind is last-write-wins, and both
+     * binds run inside start_slot's cli window). A SYS_SPAWN child or a
+     * capless boot citizen keeps this default: it declares "intended to do
+     * nothing privileged", which is exactly true. */
+    {
+        manifest_t def;
+        memset(&def, 0, sizeof(def));
+        def.bound = 1; /* entry_count 0, spawn_max 0 */
+        manifest_bind(proc->pid, &def);
+    }
 
     if (pid_out) {
         *pid_out = proc->pid;
@@ -1982,6 +2099,11 @@ void user_swarm_demo_init(uint32_t ghostd_pid) {
     /* Epic #62: the interactive shell is the last citizen up, once the
      * services it can talk to already exist. */
     user_shell_init(ghostd_pid);
+
+    /* Epic #135: the spawn-quota enforcement proof runs last of all, after
+     * the shell — it briefly consumes a spawn cap the shell also holds, so
+     * ordering it after keeps the boot roster stable. */
+    user_quota_test_init();
 }
 
 /* Bring up qsh — the interactive shell (epic #62 phase 1, #63) — as a
@@ -2049,4 +2171,40 @@ void user_shell_init(uint32_t ghostd_pid) {
     service_monitor(sid, true);
 
     boot_log("qsh: interactive shell online (ring 3, console capability)");
+}
+
+/* Bring up quota-test (epic #135) — the un-echoable proof that the spawn
+ * QUOTA is ENFORCED, not merely declared. Registered with grant_spawn +
+ * spawn_max=1, it spawns /bin/qprobe twice: the FIRST succeeds, the SECOND
+ * is refused by the manifest quota (EPERM -4, recorded in the ledger as
+ * AUDIT_QUOTA) — a denial the capability layer alone would never produce,
+ * since quota-test holds a valid spawn cap. It prints "QUOTA ENFORCED" only
+ * when the outcome is exactly {first>0, second==-4}, else "QUOTA BROKEN".
+ *
+ * DELIBERATELY NOT service_monitor()'d — unlike every other service here
+ * (quantumd:1646, kannakad:1672, ghostd, qsh:2171). quota-test needs the
+ * service framework only because grant_spawn is minted exclusively by
+ * start_slot; monitoring it would let the watchdog respawn it, re-running the
+ * proof and resetting the per-incarnation quota. It runs its proof once and
+ * then loops idle (no heartbeat). ghost_test avoids this by being a plain
+ * user_process_spawn_elf — not an option here, since we need grant_spawn. */
+void user_quota_test_init(void) {
+    service_definition_t quota_test_def = {
+        .name = "quota-test",
+        .entry = NULL, /* user-process service */
+        .user_elf_start = _binary_quota_test_elf_start,
+        .user_elf_end = _binary_quota_test_elf_end,
+        .dependencies = {NULL},
+        .max_restarts = 1,
+        .grant_spawn = 1,
+        .spawn_max = 1, /* the first enforced quota: one successful spawn */
+    };
+    uint32_t sid = 0;
+    if (service_register(&quota_test_def, &sid) == SVC_SUCCESS &&
+        service_start("quota-test", NULL) == SVC_SUCCESS) {
+        /* NO service_monitor(sid, true) — see the function comment. */
+        boot_log("quota-test: spawn-quota enforcement proof (ring 3)");
+    } else {
+        boot_log("Warning: quota-test service failed to start");
+    }
 }

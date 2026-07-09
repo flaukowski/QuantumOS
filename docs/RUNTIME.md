@@ -78,6 +78,27 @@ append):
 | 28 | SYS_TCP        | `tcp_`                    | ring-3 TCP client (cap)          |
 | 29 | SYS_IMPRINT    | `imprint_`                | store into a kernel field region (cap) |
 | 30 | SYS_RECALL     | `recall_`                 | ranked associative recall (cap)  |
+| 31 | SYS_FIELD_INFO | `field_info_`             | read-only field enumeration (cap) |
+| 32 | SYS_AUDIT      | `audit_`                  | read the capability authority ledger (uncapped RO) |
+| 33 | SYS_MANIFEST   | `manifest_`               | read the per-pid intent manifests (uncapped RO) |
+
+**The intent manifest + spawn quota (epic #135).** Above raw
+capabilities sits a per-pid **intent manifest**: the allow-set of
+`{resource_type, resource_id}` a citizen was *declared* to touch, built
+from the same grant flags that mint its caps and bound in the same
+interrupt-off window (`manifest_bind`), checked after `cap_find` at every
+capability-gated syscall (`manifest_check` → `AUDIT_MDENY` on a held cap
+that exceeds declared intent). The manifest also carries the **first
+enforced quota**: `spawn_max` limits successful `SYS_SPAWN`s per
+incarnation (checked before any spawn side effect, charged only on
+success → `AUDIT_QUOTA` on refusal) and `cpu_ticks` accounting. On the
+shipped system caps and manifests are minted from the same grants, so the
+intent check refuses nothing today — its value is inspectability
+(`SYS_MANIFEST`) and the outer bound capability delegation will be checked
+against; the spawn quota is the non-vacuous enforcement now (proven every
+boot by the `quota-test` citizen). A boot self-test drives the deny path
+live so it cannot ship as dead code. IPC caps stay OUTSIDE the manifest
+(pair-wise runtime wiring, not declarative intent).
 
 **The kernel holographic field (epic #95).** `SYS_IMPRINT` stores a
 byte pattern (≤ 64 bytes, with a Q15 importance) into one of the

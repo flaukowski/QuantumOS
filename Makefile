@@ -87,7 +87,7 @@ ASSEMBLY_SOURCES = $(wildcard $(KERNEL_DIR)/src/*.S)
 # objects (symbols _binary_<name>_elf_start/_end)
 USER_DIR = user
 USER_BUILD = $(BUILD_DIR)/user
-USER_PROGS = init echo client hbsvc ghostd ghost_test paradoxd paradox_test swarm_svc qsh quantumd kannakad fieldsyncd httpd
+USER_PROGS = init echo client hbsvc ghostd ghost_test paradoxd paradox_test swarm_svc qsh quantumd kannakad fieldsyncd httpd quota_test
 USER_ELF_OBJS = $(USER_PROGS:%=$(USER_BUILD)/%_elf.o)
 
 # libq: the freestanding ring-3 runtime, built as a static archive and linked
@@ -178,7 +178,7 @@ $(USER_BUILD)/%_elf.o: $(USER_BUILD)/%.elf
 ROOTFS_DIR = rootfs
 ROOTFS_FILES = $(shell find $(ROOTFS_DIR) -type f 2>/dev/null)
 ROOTFS_STAGE = $(BUILD_DIR)/rootfs-stage
-INITRD_BIN_PROGS = hello args libqtest consciousnessd qtop
+INITRD_BIN_PROGS = hello args libqtest consciousnessd qtop qprobe
 
 $(BUILD_DIR)/initrd.tar: $(ROOTFS_FILES) $(INITRD_BIN_PROGS:%=$(USER_BUILD)/%.elf)
 	@mkdir -p $(BUILD_DIR)
@@ -782,6 +782,31 @@ ci-smoke: kernel
 		echo ""; echo "=== Smoke Test FAILED ==="; exit 1; \
 	fi
 	@echo "SUCCESS: SYS_CONS capability gate proven (capless caller denied EPERM)"
+	@# epic #135: intent manifest + first ENFORCED quota. The kernel boot
+	@# self-test drives the real manifest check to a deny, recording an
+	@# AUDIT_MDENY that proves the deny path is live (on the shipped system
+	@# caps==intent, so no citizen ever trips it — this is what keeps a
+	@# constant-true check from shipping green).
+	@if ! grep -q "manifest self-test: PASS (MDENY recorded)" /tmp/qemu-boot.log 2>/dev/null; then \
+		echo "ERROR: manifest self-test did not pass (manifest self-test: PASS (MDENY recorded))"; \
+		echo "Boot log:"; cat /tmp/qemu-boot.log 2>/dev/null || true; \
+		echo ""; echo "=== Smoke Test FAILED ==="; exit 1; \
+	fi
+	@echo "SUCCESS: manifest self-test proven (deny path live, MDENY recorded)"
+	@# quota-test spawns /bin/qprobe twice; the SECOND must be refused by the
+	@# spawn quota (the first ENFORCED quota). It prints QUOTA ENFORCED only on
+	@# the exact {first ok, second EPERM} outcome, else QUOTA BROKEN.
+	@if ! grep -q "QUOTA ENFORCED pid=" /tmp/qemu-boot.log 2>/dev/null; then \
+		echo "ERROR: spawn quota did not enforce (QUOTA ENFORCED pid=)"; \
+		echo "Boot log:"; cat /tmp/qemu-boot.log 2>/dev/null || true; \
+		echo ""; echo "=== Smoke Test FAILED ==="; exit 1; \
+	fi
+	@if grep -q "QUOTA BROKEN" /tmp/qemu-boot.log 2>/dev/null; then \
+		echo "ERROR: spawn quota was NOT enforced (QUOTA BROKEN present)"; \
+		grep "QUOTA BROKEN" /tmp/qemu-boot.log 2>/dev/null || true; \
+		echo ""; echo "=== Smoke Test FAILED ==="; exit 1; \
+	fi
+	@echo "SUCCESS: spawn quota ENFORCED (second over-quota spawn refused; no QUOTA BROKEN)"
 	@# Supervision gate: after the piped 'exit', the watchdog must restart the
 	@# shell, which reintroduces itself as reborn.
 	@if ! grep -q "QSH: reborn" /tmp/qemu-boot.log 2>/dev/null; then \

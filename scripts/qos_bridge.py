@@ -324,7 +324,8 @@ QSH_LINE_MAX = 119
 # 'FIELDINFO:'/'FIELDSLOT:' are NOT covered by 'FIELD:' — 'FIELDINFO:'.startswith
 # ('FIELD:') is False — so they must be listed explicitly or stored content could
 # forge a field-info line (epic #127 B1).
-_QSH_MARKERS = ("qsh:", "FIELD:", "FIELDINFO:", "FIELDSLOT:", "AUDIT:", "PS:", "MEM:", "TIME:")
+_QSH_MARKERS = ("qsh:", "FIELD:", "FIELDINFO:", "FIELDSLOT:", "AUDIT:", "MANIFEST:", "PS:",
+                "MEM:", "TIME:")
 
 
 def _qsh_text(value, budget, what="argument"):
@@ -945,6 +946,41 @@ class QosVM:
                 "dropped": int(st.group(2)) if st else None,
                 "capacity": int(st.group(3)) if st else None,
                 "entries": entries, "identity": self.identity()}
+
+    def manifest(self, deadline_s=12.0):
+        """Read the per-pid INTENT MANIFESTS read-only (epic #135 Phase D inc. 2):
+        every bound citizen's DECLARED allow-set, spawn quota (used/max), and
+        cpu_ticks — a policy layer above raw capabilities that the KERNEL writes,
+        so a citizen cannot forge its own row. Returns {truncated, manifests:{pid:
+        {bound, spawn_used, spawn_max (None=unlimited), cpu_ticks, allow:[{res,id,
+        perms}]}}}. Same disclosure stance as the audit ledger for grants (already
+        public there); cpu_ticks is the one added, documented timing signal. Read
+        over COM1; the ^MANIFEST: anchor + the newline-injection prefixing in
+        user_console_write close the column-0 forgery the audit ledger documented."""
+        self._ensure_verified()
+        text = self._collect(["manifest"], deadline_s, "manifest")
+        manifests = {}
+        for m in re.finditer(
+                r"^MANIFEST: pid=(\d+) bound=(\d+) spawn=(\d+)/(\*|\d+) cpu_ticks=(\d+)",
+                text, re.M):
+            pid = int(m.group(1))
+            manifests[pid] = {
+                "bound": int(m.group(2)),
+                "spawn_used": int(m.group(3)),
+                "spawn_max": None if m.group(4) == "*" else int(m.group(4)),
+                "cpu_ticks": int(m.group(5)),
+                "allow": [],
+            }
+        for m in re.finditer(
+                r"^MANIFEST: pid=(\d+) allow res=(\w+):(\d+) perms=0x([0-9a-fA-F]+)",
+                text, re.M):
+            pid = int(m.group(1))
+            if pid in manifests:
+                manifests[pid]["allow"].append({
+                    "res": m.group(2), "id": int(m.group(3)),
+                    "perms": int(m.group(4), 16)})
+        return {"truncated": "MANIFEST: truncated=1" in text,
+                "manifests": manifests, "identity": self.identity()}
 
     def run(self, program, args="", deadline_s=20.0):
         """Spawn a /bin citizen via qsh with an optional argument string and

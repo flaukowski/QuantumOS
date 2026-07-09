@@ -119,10 +119,17 @@ cap-holding side; `ghost_test` proves the capless side), `audit`
 (epic #133 Phase D: `SYS_AUDIT`, the capability AUTHORITY LEDGER — the
 KERNEL records every capability GRANT, DENY, and SPAWN, so a citizen
 cannot forge or suppress its own entry; `audit` prints `AUDIT: total=…`
-then an `AUDIT: seq=… pid=… kind=GRANT|DENY|SPAWN res=TYPE:id perms=…
-verdict=OK|EPERM` line per event — read-only introspection that makes
-"authority IS the capability set, and every attempt to exceed it is
-provable" observable), `clear`, `exit`.
+then an `AUDIT: seq=… pid=… kind=GRANT|DENY|SPAWN|MDENY|QUOTA res=TYPE:id
+perms=… verdict=OK|EPERM` line per event — read-only introspection that
+makes "authority IS the capability set, and every attempt to exceed it is
+provable" observable), `manifest` (epic #135 Phase D: `SYS_MANIFEST`, the
+per-pid INTENT MANIFEST — a policy layer above raw capabilities that the
+KERNEL builds from each citizen's grant flags, so a citizen cannot forge
+its own row; `manifest` prints a `MANIFEST: pid=… bound=1 spawn=used/max
+cpu_ticks=…` line per bound citizen plus a `MANIFEST: pid=… allow
+res=TYPE:id perms=…` line per declared resource — declared intent made
+inspectable, and the spawn quota's enforcement observable), `clear`,
+`exit`.
 
 `exit` is a supervised death: the shell terminates, its heartbeat goes
 silent, and the service watchdog restarts it (~2 s); the reborn shell
