@@ -206,6 +206,12 @@
                          * also holds CAP_WRITE — a read-only capability never
                          * mutates. n=0 (nothing resonates, incl. a degenerate
                          * probe) is success, not an error. */
+#define SYS_FIELD_INFO                                                                             \
+    31 /* rdi = region, rsi = field_info_out ptr; read-only
+                         * enumeration of a field region's live slots (epic #127
+                         * B1). Gated on a CAP_RESOURCE_FIELD READ cap naming
+                         * EXACTLY the region — writes NOTHING, the honest
+                         * non-mutating counterpart to SYS_RECALL. Returns 0. */
 
 /* SYS_RESOLVE / SYS_UDP: still pending (poll again) / queue-ring full. */
 #define RESOLVE_WOULDBLOCK ((uint64_t) - 11)

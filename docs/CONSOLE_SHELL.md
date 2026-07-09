@@ -103,14 +103,20 @@ single `SYS_CONS` call so tick logs never split it.
 
 Builtins: `help`, `echo <text>`, `ps`, `free`, `uptime`, `pid`,
 `qrand`, `qseed`, `ghost` (STATUS query to `ghostd` over capability
-IPC), `imprint <text>` / `recall <probe>` (the kernel holographic
-field, epic #95: the shell holds the `CAP_RESOURCE_FIELD` capability
-over region 0, so the operator can store text and recover it later
-from a corrupted probe — `recall the cxt sxt` returns
-`FIELD: winner="the cat sat"` with the exact stored bytes),
-`fieldtest` (asserts the cross-region EPERM and degenerate-probe n=0
-contracts from the cap-holding side; `ghost_test` proves the capless
-side), `clear`, `exit`.
+IPC), `imprint [--energy <0-100>] <text>` / `recall <probe>` (the kernel
+holographic field, epic #95: the shell holds the `CAP_RESOURCE_FIELD`
+capability over region 0, so the operator can store text and recover it
+later from a corrupted probe — `recall the cxt sxt` returns
+`FIELD: winner="the cat sat"` with the exact stored bytes; the optional
+`--energy` percent sets the slot's importance, which drives recall
+ranking and eviction), `field` (epic #127 B1: `SYS_FIELD_INFO`, a
+READ-ONLY enumeration of the region — `FIELDINFO: region=0 live=N cap=8`
+then a `FIELDSLOT:` line per live slot with its energy, effective
+energy, retrievals, age, and a bounded preview; unlike `recall` it does
+NOT reinforce, so it never perturbs the field), `fieldtest` (asserts the
+cross-region EPERM and degenerate-probe n=0 contracts from the
+cap-holding side; `ghost_test` proves the capless side), `clear`,
+`exit`.
 
 `exit` is a supervised death: the shell terminates, its heartbeat goes
 silent, and the service watchdog restarts it (~2 s); the reborn shell

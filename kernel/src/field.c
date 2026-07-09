@@ -23,6 +23,8 @@
 _Static_assert(sizeof(field_imprint_req_k_t) == 76, "field imprint req ABI drift");
 _Static_assert(sizeof(field_recall_req_k_t) == 76, "field recall req ABI drift");
 _Static_assert(sizeof(field_recall_out_k_t) == 136, "field recall out ABI drift");
+_Static_assert(sizeof(field_slot_info_k_t) == 40, "field slot info ABI drift");
+_Static_assert(sizeof(field_info_out_k_t) == 332, "field info out ABI drift");
 
 typedef struct {
     uint8_t alive;
@@ -269,6 +271,54 @@ int64_t field_recall(uint32_t region, const uint8_t *probe, uint32_t len, uint32
         w->imprint_tick = now_ticks; /* reinforcement also refreshes decay */
     }
     return 0;
+}
+
+int64_t field_region_info(uint32_t region, field_info_out_k_t *out, uint64_t now_ticks) {
+    if (!out) {
+        return -1;
+    }
+    /* Zero the WHOLE struct FIRST. The syscall layer copies out every
+     * FIELD_SLOTS entry from a process-shared static buffer, so any dead-slot
+     * entry left un-rewritten would leak a prior call's (possibly other-region)
+     * preview bytes across the exact-region isolation boundary. This mirrors
+     * field_blob_write's "fully zeroed first — must never leak kernel memory". */
+    uint8_t *raw = (uint8_t *)out;
+    for (size_t i = 0; i < sizeof(*out); i++) {
+        raw[i] = 0;
+    }
+    if (region >= FIELD_REGION_COUNT) {
+        return -1;
+    }
+    /* const throughout: read-only is enforced structurally, not by convention
+     * (the reinforcing recall is the ONLY writer — the dropped qos_field_status
+     * fell through exactly this gap). */
+    const field_region_t *r = &regions[region];
+    out->region = region;
+    out->capacity = FIELD_SLOTS;
+    uint32_t live = 0;
+    for (int i = 0; i < FIELD_SLOTS; i++) {
+        const field_slot_t *s = &r->slot[i];
+        if (!s->alive) {
+            continue;
+        }
+        field_slot_info_k_t *si = &out->slots[live];
+        /* The SAME guarded age math effective_energy uses — the two fields are
+         * always mutually consistent and the subtraction can never underflow. */
+        uint64_t age = now_ticks >= s->imprint_tick ? now_ticks - s->imprint_tick : 0;
+        si->slot = (uint32_t)i;
+        si->len = s->len;
+        si->energy_q15 = s->energy_q15;
+        si->eff_energy_q15 = effective_energy(s, now_ticks);
+        si->retrievals = s->retrievals;
+        si->age_ticks = age > 0xFFFFFFFFULL ? 0xFFFFFFFFu : (uint32_t)age;
+        uint32_t pv = s->len < FIELD_PREVIEW ? s->len : FIELD_PREVIEW;
+        for (uint32_t b = 0; b < pv; b++) {
+            si->preview[b] = s->bytes[b];
+        }
+        live++;
+    }
+    out->live = live;
+    return (int64_t)live;
 }
 
 void field_region_scrub(uint32_t region) {

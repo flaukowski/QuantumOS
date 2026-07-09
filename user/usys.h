@@ -38,6 +38,7 @@
 #define SYS_TCP 28
 #define SYS_IMPRINT 29
 #define SYS_RECALL 30
+#define SYS_FIELD_INFO 31
 
 /* SYS_RESOLVE / SYS_UDP: still pending (poll again) / ring full. */
 #define RESOLVE_WOULDBLOCK (-11)
@@ -310,6 +311,10 @@ static inline long tcp_(long op, tcp_req_t *req) {
  * reinforcement only happens for callers who also hold the write right. */
 #define FIELD_PAT_MAX 64
 #define FIELD_RANK_MAX 8
+#define FIELD_SLOTS 8
+#define FIELD_PREVIEW 16
+#define FIELD_ENERGY_MAX 0x7FFF /* Q15 1.0 (mirror of kernel field.h) */
+#define FIELD_ENERGY_MIN 0x0800 /* Q15 floor: no zero-energy squatting */
 
 typedef struct {
     unsigned int region;
@@ -340,6 +345,34 @@ static inline long imprint_(field_imprint_req_t *req) {
 }
 static inline long recall_(field_recall_req_t *req, field_recall_out_t *out) {
     return usys2(SYS_RECALL, (long)req, (long)out);
+}
+
+/* SYS_FIELD_INFO read-only enumeration twins (epic #127 B1). Byte-identical to
+ * the kernel field_*_info_k_t (40 / 332 bytes); _Static_asserted so any drift
+ * fails BOTH builds. field_info_(region, out) returns 0, or -4 EPERM (capless /
+ * wrong region), -14 EFAULT (bad out), -22 EINVAL (bad region). */
+typedef struct {
+    unsigned int slot;
+    unsigned int len;
+    int energy_q15;     /* stored importance, stable */
+    int eff_energy_q15; /* after age decay, time-varying */
+    unsigned int retrievals;
+    unsigned int age_ticks; /* saturates at UINT32_MAX */
+    unsigned char preview[FIELD_PREVIEW];
+} field_slot_info_t;
+
+typedef struct {
+    unsigned int region;
+    unsigned int live;
+    unsigned int capacity;
+    field_slot_info_t slots[FIELD_SLOTS];
+} field_info_out_t;
+
+_Static_assert(sizeof(field_slot_info_t) == 40, "field slot info twin ABI drift");
+_Static_assert(sizeof(field_info_out_t) == 332, "field info out twin ABI drift");
+
+static inline long field_info_(unsigned int region, field_info_out_t *out) {
+    return usys2(SYS_FIELD_INFO, (long)region, (long)out);
 }
 
 /* Start an initrd ELF as a new ring-3 process. `cmd` is a command line:

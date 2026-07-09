@@ -336,6 +336,71 @@ def _exercise_injection(vm):
     print(f"OK: qsh line budget enforced (write {budget} ok, {budget + 1} refused)")
 
 
+def _find_slot(vm, phrase):
+    """The field slot whose preview is a prefix of `phrase` (previews are the
+    first <= 16 stored bytes), or None."""
+    for s in vm.field_info()["slots"]:
+        if s["preview"] and phrase.startswith(s["preview"]):
+            return s
+    return None
+
+
+def _exercise_field_info(vm):
+    """Read-only field introspection (epic #127 B1). The heart is a
+    positive/negative CONTRAST: field_info must NOT bump retrievals/energy, but
+    a recall (qsh holds CAP_WRITE) MUST — so 'retrievals stayed 0' alone is
+    vacuous; the recall bumping the SAME slot is what proves non-mutation."""
+    # Energy carried, un-echoable (computed in-kernel): --energy 90 vs default.
+    P = "field energy probe alpha unique"
+    Q = "field default probe beta unique"
+    vm.imprint(P, energy_pct=90)
+    vm.imprint(Q)
+    sp, sq = _find_slot(vm, P), _find_slot(vm, Q)
+    if not sp or not 86 <= sp["energy"] <= 93:
+        _fail(f"imprint --energy 90 not carried into the slot: {sp}")
+    if not sq or not 47 <= sq["energy"] <= 53:
+        _fail(f"default imprint energy not ~50%: {sq}")
+    print(f"OK: field energy carried — P={sp['energy']}% (--energy 90), "
+          f"Q={sq['energy']}% (default 50)")
+
+    # Read-only proof: 5 field_info calls leave P's retrievals AND raw energy
+    # unchanged (assert RAW energy, not eff — eff decays with ticks by design).
+    r0, e0 = sp["retrievals"], sp["energy"]
+    if r0 != 0:
+        _fail(f"fresh P should have 0 retrievals, got {r0}")
+    for _ in range(5):
+        s = _find_slot(vm, P)
+        if s["retrievals"] != r0 or s["energy"] != e0:
+            _fail(f"field_info MUTATED the field: {s} vs retr={r0} energy={e0}")
+    # A noisy recall reinforces the SAME slot — the contrast that makes the
+    # read-only claim non-vacuous.
+    vm.recall("field energy probe alpxa unique")
+    after = _find_slot(vm, P)
+    if not after or after["retrievals"] != r0 + 1:
+        _fail(f"recall did not reinforce P (contrast broken): {after}")
+    print(f"OK: field_info read-only (P retr stayed {r0} over 5 calls); "
+          f"recall bumped it to {after['retrievals']}")
+
+    # Capacity/eviction visibility: overfill region 0 -> live caps at capacity.
+    cap = vm.field_info()["capacity"]
+    for i in range(cap + 1):
+        vm.imprint(f"capfill varied phrase number {i} distinct xyz", energy_pct=40)
+    live = vm.field_info()["live"]
+    if live != cap or cap != 8:
+        _fail(f"field capacity not enforced at 8: live={live} cap={cap}")
+    print(f"OK: field capacity enforced (live=={live}==cap after overfill)")
+
+    # Forge guard: a stored line that mimics a field marker must be refused by
+    # the sanitizer (the new FIELDINFO:/FIELDSLOT: reserved prefixes).
+    for bad in ("FIELDINFO: region=0 live=99", "FIELDSLOT: slot=0 len=1 energy=99"):
+        try:
+            vm.imprint(bad)
+            _fail(f"imprint accepted a forged field marker: {bad!r}")
+        except QosError:
+            pass
+    print("OK: field marker forge refused (FIELDINFO:/FIELDSLOT: reserved)")
+
+
 def _exercise_bridge(vm, tmp):
     """Kannaka HRM bridge (epic #127) against a stub kannaka. The kernel field
     runs in the REAL guest, so every claim is end to end: stub-recall ->
@@ -384,7 +449,16 @@ def _exercise_bridge(vm, tmp):
         w = vm.recall("the bridge remembxrs everythxng")["winner"]
         if w != short:
             _fail(f"imported phrase not associatively recallable: {w!r}")
-        print("OK: bridge import — noisy-recall landed + 64B truncation + non-ASCII skipped")
+        # importance survives the hop: similarity 0.9 -> energy ~90% in the slot
+        # (epic #127 B1). Read it back read-only via field_info.
+        if rs[0].get("energy_pct") != 90:
+            _fail(f"bridge import did not map similarity->energy_pct: {rs[0]}")
+        ss = [s for s in vm.field_info()["slots"]
+              if s["preview"] and short.startswith(s["preview"])]
+        if not ss or not (86 <= ss[0]["energy"] <= 93):
+            _fail(f"imported importance did not reach the slot energy: {ss}")
+        print("OK: bridge import — noisy-recall landed + 64B truncation + "
+              f"non-ASCII skipped + importance carried (energy={ss[0]['energy']}%)")
 
         # 2. export: a NOISY probe recalls the field completion, the stub records
         #    the EXACT winner + importance (un-echoable field->HRM proof).
@@ -486,6 +560,13 @@ def main():
             _fail(f"two imprints collided on slot {sa}")
         print(f"OK: imprinted A->slot {sa}, B->slot {sb}")
 
+        # 3b. field_info EXACT count is un-echoable: region 0 was empty at boot
+        # (A->slot 0, B->slot 1 proved it), so exactly two are live right now.
+        fi = vm.field_info()
+        if fi["live"] != 2 or fi["capacity"] != 8:
+            _fail(f"field_info live/cap wrong after two imprints: {fi}")
+        print(f"OK: field_info live={fi['live']} cap={fi['capacity']} (exact count)")
+
         # 4. recall a typo'd copy of each -> its own phrase; winners differ.
         wa = vm.recall(PHRASE_A_NOISY)["winner"]
         wb = vm.recall(PHRASE_B_NOISY)["winner"]
@@ -524,6 +605,10 @@ def main():
         # binary is absent on the runner) — memories flow OS field <-> host HRM.
         with tempfile.TemporaryDirectory() as bridge_tmp:
             _exercise_bridge(vm, bridge_tmp)
+
+        # 5j. Read-only field introspection + imprint --energy (epic #127 B1).
+        # Runs last: it overfills region 0 to prove capacity enforcement.
+        _exercise_field_info(vm)
 
         # 6. tamper -> refusal, on the SAME code path the tools use.
         raw = vm.attestation.raw
