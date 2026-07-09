@@ -15,6 +15,14 @@
 
 *A real boot (GRUB ISO, graphical entry): the splash's two-source interference pattern animates as subsystems come up, then the kernel idle loop renders `ghostd`'s live oscillator field.*
 
+## 🌐 Try it in your browser — zero install
+
+**[flaukowski.github.io/QuantumOS](https://flaukowski.github.io/QuantumOS/)** boots the real 64-bit kernel in your tab — an unmodified `qemu-system-x86_64` compiled to WebAssembly — and drops you at a live `qsh` prompt. Type into it: it's the real OS, running for real.
+
+[![QuantumOS running in the browser: the colourful qsh console, with imprint/recall demonstrating holographic memory recalled from a typo'd cue](web/preview.png)](https://flaukowski.github.io/QuantumOS/)
+
+*The live demo: `imprint a cat sat on the mat`, then `recall a cxt sxt on thx mat` — the holographic field returns the stored phrase from a corrupted cue.*
+
 ## ✅ What runs today
 
 QuantumOS boots on x86-64 under QEMU (`make run`), and every claim below is gated in CI (`make ci-smoke`):

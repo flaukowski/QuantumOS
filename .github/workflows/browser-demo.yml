@@ -73,7 +73,7 @@ jobs:
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         run: |
           mkdir -p _site
-          cp web/index.html web/coi-serviceworker.js web/NOTICE _site/
+          cp web/index.html web/coi-serviceworker.js web/NOTICE web/preview.png _site/
           cp web/kernel.elf32 _site/
           cp -r web/qemu web/vendor _site/
           rm -f _site/qemu/fetch-wasm.sh
