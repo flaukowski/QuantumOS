@@ -87,7 +87,7 @@ ASSEMBLY_SOURCES = $(wildcard $(KERNEL_DIR)/src/*.S)
 # objects (symbols _binary_<name>_elf_start/_end)
 USER_DIR = user
 USER_BUILD = $(BUILD_DIR)/user
-USER_PROGS = init echo client hbsvc ghostd ghost_test paradoxd paradox_test swarm_svc qsh quantumd kannakad fieldsyncd httpd quota_test delegation_test subagentd
+USER_PROGS = init echo client hbsvc ghostd ghost_test paradoxd paradox_test swarm_svc qsh quantumd kannakad fieldsyncd httpd quota_test delegation_test subagentd cpu_hog
 USER_ELF_OBJS = $(USER_PROGS:%=$(USER_BUILD)/%_elf.o)
 
 # libq: the freestanding ring-3 runtime, built as a static archive and linked
@@ -817,6 +817,19 @@ ci-smoke: kernel
 		echo ""; echo "=== Smoke Test FAILED ==="; exit 1; \
 	fi
 	@echo "SUCCESS: spawn quota ENFORCED (second over-quota spawn refused; no QUOTA BROKEN)"
+	@# epic #144: CPU-quota enforcement. The cpu-hog citizen busy-spins with a
+	@# finite cpu_limit; the kernel TERMINATES it from the timer tick once its
+	@# scheduled-in cpu_ticks cross the budget, emitting an unforgeable kernel
+	@# "CPUKILL: pid=" line. (The hog is dead and cannot self-report; the ledger
+	@# entry is the load-bearing proof — see the MCP gate.) Convergence bound:
+	@# time-to-kill ~= cpu_limit x N_runnable x 10ms; cpu_limit=10 registered
+	@# early keeps this well inside the boot window.
+	@if ! grep -q "CPUKILL: pid=" /tmp/qemu-boot.log 2>/dev/null; then \
+		echo "ERROR: cpu-hog was not terminated for its CPU budget (CPUKILL: pid=)"; \
+		echo "Boot log:"; cat /tmp/qemu-boot.log 2>/dev/null || true; \
+		echo ""; echo "=== Smoke Test FAILED ==="; exit 1; \
+	fi
+	@echo "SUCCESS: CPU quota ENFORCED (cpu-hog terminated over budget; CPUKILL recorded)"
 	@# epic #137: cross-ring capability delegation. The delegator hands a
 	@# NARROWED READ-only field cap to the sub-agent; the sub-agent proves the
 	@# narrowing ({recall ok, imprint EPERM}) -> DELEG ENFORCED, then proves

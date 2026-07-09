@@ -357,11 +357,16 @@ bool service_check_resource_limit(const service_capability_t *cap, uint32_t reso
   every capability-gated syscall. The `spawn_max` quota is the **first
   ENFORCED** resource limit: it caps successful `SYS_SPAWN`s per incarnation
   (checked before side effects, charged on success, refusal recorded as
-  `AUDIT_QUOTA`), and `cpu_ticks` accounting is live. HONEST STATUS: the
-  legacy `cpu_limit` / `memory_limit` / `quantum_limit` fields in
-  `service_config_t` below are NOT yet enforced — a runtime memory quota in
-  particular is currently vacuous (page faults kill; there is no runtime
-  per-process allocation to meter). `spawn_max` is the enforced one today.
+  `AUDIT_QUOTA`). A service's **`cpu_limit`** is the second enforced limit
+  (epic #144): once a citizen's scheduled-in `cpu_ticks` exceed it, the kernel
+  terminates it from the timer tick (recording `AUDIT_CPUKILL`), so a busy-spin
+  runaway cannot hog the CPU. `cpu_limit` is opt-in (0 = unlimited); a service
+  that sets it may NOT be `service_monitor`'d (the kernel refuses — a watchdog
+  respawn would reset the budget and re-kill it forever). HONEST STATUS: the
+  `memory_limit` / `quantum_limit` fields in `service_config_t` below are still
+  NOT enforced — a runtime memory quota in particular is vacuous (page faults
+  kill; there is no runtime per-process allocation to meter). `spawn_max` and
+  `cpu_limit` are the enforced ones today.
 - **Audit + Manifest Logging**: capability GRANT/DENY/SPAWN plus manifest
   MDENY (a held cap exceeding declared intent) and QUOTA denials are recorded
   in the kernel authority ledger (`SYS_AUDIT`); declared intent is readable

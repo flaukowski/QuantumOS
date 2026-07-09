@@ -36,11 +36,12 @@
 
 /* Record kinds — 1-based so a zeroed .bss slot (kind 0) is never a real entry. */
 #define AUDIT_KIND_EMPTY 0
-#define AUDIT_GRANT 1 /* a capability was minted for pid (cap_create/cap_derive) */
-#define AUDIT_DENY 2  /* a cap-gated syscall was refused (caller lacked the right) */
-#define AUDIT_SPAWN 3 /* a process was created (EXECUTE authority exercised) */
-#define AUDIT_MDENY 4 /* a HELD capability exceeded declared intent (manifest deny) */
-#define AUDIT_QUOTA 5 /* a manifest quota refused the operation (e.g. spawn_max) */
+#define AUDIT_GRANT 1   /* a capability was minted for pid (cap_create/cap_derive) */
+#define AUDIT_DENY 2    /* a cap-gated syscall was refused (caller lacked the right) */
+#define AUDIT_SPAWN 3   /* a process was created (EXECUTE authority exercised) */
+#define AUDIT_MDENY 4   /* a HELD capability exceeded declared intent (manifest deny) */
+#define AUDIT_QUOTA 5   /* a manifest quota refused the operation (e.g. spawn_max) */
+#define AUDIT_CPUKILL 6 /* a process was TERMINATED for exceeding its cpu_limit (epic #144) */
 
 /* Verdicts — 1-based likewise. */
 #define AUDIT_V_OK 1

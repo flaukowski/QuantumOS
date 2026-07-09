@@ -57,6 +57,7 @@ extern const uint8_t _binary_httpd_elf_start[], _binary_httpd_elf_end[];
 extern const uint8_t _binary_quota_test_elf_start[], _binary_quota_test_elf_end[];
 extern const uint8_t _binary_delegation_test_elf_start[], _binary_delegation_test_elf_end[];
 extern const uint8_t _binary_subagentd_elf_start[], _binary_subagentd_elf_end[];
+extern const uint8_t _binary_cpu_hog_elf_start[], _binary_cpu_hog_elf_end[];
 
 /* Argument vector ABI (epic #62). MUST stay byte-identical to user_args_t
  * in user/usys.h — there is no shared header across the ring boundary. The
@@ -85,6 +86,7 @@ void user_httpd_init(void);
 void user_kannaka_demo_init(void);
 void user_quota_test_init(void);
 void user_delegation_demo_init(void);
+void user_cpu_hog_init(void);
 
 /* int 0x80 stub (kernel/src/interrupts.S) */
 extern void isr128(void);
@@ -1867,6 +1869,11 @@ void user_init(void) {
     }
     boot_log("User processes spawned (init ELF, 2x canary, 1x rogue)");
 
+    /* CPU-quota enforcement proof (epic #144): brought up EARLY so its budget
+     * kill lands well within the boot window (it accrues cpu_ticks only while
+     * scheduled, diluted across the roster — starting first gives it margin). */
+    user_cpu_hog_init();
+
     user_ipc_demo_init();
     user_ghost_demo_init();
     user_quantum_demo_init();
@@ -2404,4 +2411,35 @@ void user_delegation_demo_init(void) {
     cap_create(sub_pid, CAP_RESOURCE_IPC, del_pid, CAP_READ | CAP_WRITE, 0, &cap);
 
     boot_log("delegation-test: cross-ring capability delegation demo (ring 3)");
+}
+
+/* Bring up cpu-hog (epic #144) — the un-echoable proof that the manifest CPU
+ * quota is ENFORCED, not merely accounted. A ring-3 service with a finite
+ * cpu_limit that busy-spins forever: once its scheduled-in cpu_ticks cross the
+ * limit, the kernel terminates it from the timer tick. Only a user-process
+ * service can carry a cpu_limit (start_slot copies def.cpu_limit into the
+ * manifest). Registered NOT monitored — the kernel also refuses to monitor a
+ * cpu_limit service, since a watchdog respawn would reset the budget and
+ * re-kill it forever. The kill leaves a CPUKILL authority-ledger entry for its
+ * pid, and the pid vanishes from the process/manifest tables — the external,
+ * un-forgeable proof (the hog is dead and cannot self-report). */
+void user_cpu_hog_init(void) {
+    service_definition_t cpu_hog_def = {
+        .name = "cpu-hog",
+        .entry = NULL, /* user-process service */
+        .user_elf_start = _binary_cpu_hog_elf_start,
+        .user_elf_end = _binary_cpu_hog_elf_end,
+        .dependencies = {NULL},
+        .max_restarts = 1,
+        .cpu_limit = 10, /* ~10 scheduled-in ticks then terminated */
+    };
+    uint32_t sid = 0;
+    if (service_register(&cpu_hog_def, &sid) == SVC_SUCCESS &&
+        service_start("cpu-hog", NULL) == SVC_SUCCESS) {
+        /* NOT service_monitor'd — the kernel refuses it anyway (see the
+         * function comment). */
+        boot_log("cpu-hog: CPU-quota enforcement proof (ring 3, finite budget)");
+    } else {
+        boot_log("Warning: cpu-hog service failed to start");
+    }
 }
