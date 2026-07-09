@@ -44,8 +44,10 @@ QosVM.shutdown() in the finally + atexit.
 """
 
 import http.server
+import json
 import sys
 import os
+import tempfile
 import threading
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -55,6 +57,40 @@ from qos_bridge import (
     QosVM, QosError, QosRefused, attestation_from_bytes,
     QSH_LINE_MAX, FrameParser, FRAME_SIG, FRAME_ATTEST, FRAME_PKDIGEST, MAGIC,
 )
+
+# A stand-in for kannaka.exe (absent on the QuantumOS CI runner). `recall` echoes
+# the canned JSON at QOS_STUB_RECALL; `remember` records "importance\ttext" to
+# the store — BUT honours KANNAKA_READONLY by no-op'ing the record (mirroring the
+# real binary), so the gate can prove KannakaCLI strips an inherited READONLY.
+_STUB_KANNAKA = r'''import json, os, sys
+def main():
+    a = sys.argv[1:]
+    if not a:
+        sys.exit(2)
+    if a[0] == "recall":
+        p = os.environ.get("QOS_STUB_RECALL")
+        sys.stdout.write(open(p, encoding="utf-8").read() if p and os.path.exists(p) else "[]")
+        return 0
+    if a[0] == "remember":
+        text, imp, i = None, "0.5", 1
+        while i < len(a):
+            if a[i] == "--importance" and i + 1 < len(a):
+                imp = a[i + 1]; i += 2; continue
+            if a[i].startswith("--"):
+                i += 2; continue
+            if text is None:
+                text = a[i]
+            i += 1
+        ro = os.environ.get("KANNAKA_READONLY", "")
+        if ro and ro.lower() not in ("0", "false"):
+            sys.stdout.write("00000000-0000-0000-0000-000000000000"); return 0
+        with open(os.path.join(os.environ.get("KANNAKA_DATA_DIR", "."),
+                               "remembered.tsv"), "a", encoding="utf-8") as f:
+            f.write(imp + "\t" + (text or "") + "\n")
+        sys.stdout.write("11111111-1111-1111-1111-111111111111"); return 0
+    sys.exit(2)
+sys.exit(main())
+'''
 
 _PROC_STATES = {"UNUSED", "CREATED", "READY", "RUNNING", "BLOCKED",
                 "TERMINATED", "ZOMBIE"}
@@ -300,6 +336,129 @@ def _exercise_injection(vm):
     print(f"OK: qsh line budget enforced (write {budget} ok, {budget + 1} refused)")
 
 
+def _exercise_bridge(vm, tmp):
+    """Kannaka HRM bridge (epic #127) against a stub kannaka. The kernel field
+    runs in the REAL guest, so every claim is end to end: stub-recall ->
+    memory_import -> a NOISY field recall of the imprinted phrase proves it
+    truly landed; a NOISY export recall -> the stub records the EXACT winner."""
+    binpath = os.path.join(tmp, "kannaka_stub.py")
+    with open(binpath, "w", encoding="utf-8") as f:
+        f.write(_STUB_KANNAKA)
+    data_dir = os.path.join(tmp, "kdata")
+    os.makedirs(data_dir, exist_ok=True)
+    recall_file = os.path.join(tmp, "recall.json")
+    remembered = os.path.join(data_dir, "remembered.tsv")
+    os.environ["QOS_KANNAKA_BIN"] = binpath
+    os.environ["KANNAKA_DATA_DIR"] = data_dir
+    os.environ["QOS_STUB_RECALL"] = recall_file
+
+    def set_recall(objs):
+        with open(recall_file, "w", encoding="utf-8") as f:
+            json.dump(objs, f)
+
+    def remembered_lines():
+        return (open(remembered, encoding="utf-8").read().splitlines()
+                if os.path.exists(remembered) else [])
+
+    try:
+        # 1. import: one batch exercises landed(noisy-recall) + 64B truncation +
+        #    non-ASCII skip. Long text is VARIED (an all-equal pattern is a
+        #    degenerate wavefront the field rejects — field.h:91).
+        short = "the bridge remembers everything"
+        longtext = "the quantum lattice hums with resonant ghosts drifting across every node"
+        set_recall([
+            {"id": "id-short", "content": short, "similarity": 0.9},
+            {"id": "id-long", "content": longtext, "similarity": 0.7},
+            {"id": "id-utf", "content": "café quantum resonance", "similarity": 0.6},
+        ])
+        imp = vm.memory_import("seed", top_k=3)
+        if imp["imported"] != 2:
+            _fail(f"bridge import expected 2 imprinted, got {imp}")
+        rs = imp["results"]
+        if rs[0]["slot"] is None or rs[0]["truncated"]:
+            _fail(f"bridge import short result wrong: {rs[0]}")
+        if rs[1]["slot"] is None or not rs[1]["truncated"] or len(rs[1]["content"]) != 64:
+            _fail(f"bridge import did not truncate to 64B: {rs[1]}")
+        if rs[2].get("slot") is not None or "skipped" not in rs[2]:
+            _fail(f"bridge import did not skip non-ASCII: {rs[2]}")
+        w = vm.recall("the bridge remembxrs everythxng")["winner"]
+        if w != short:
+            _fail(f"imported phrase not associatively recallable: {w!r}")
+        print("OK: bridge import — noisy-recall landed + 64B truncation + non-ASCII skipped")
+
+        # 2. export: a NOISY probe recalls the field completion, the stub records
+        #    the EXACT winner + importance (un-echoable field->HRM proof).
+        exphrase = "quantum ghosts drift through the lattice"
+        vm.imprint(exphrase)
+        before = len(remembered_lines())
+        exp = vm.memory_export("quantum ghxsts drift throxgh the lattice",
+                               importance=0.83, allow_write=True)
+        if not exp.get("exported") or exp["content"] != exphrase:
+            _fail(f"bridge export did not carry the field winner: {exp}")
+        lines = remembered_lines()
+        if len(lines) != before + 1 or lines[-1] != f"0.83\t{exphrase}":
+            _fail(f"stub did not record the exact winner+importance: {lines[-1:]!r}")
+        print("OK: bridge export — noisy field recall -> HRM recorded exact winner+importance")
+
+        # 3. export guards: allow_write required; empty resonance writes nothing.
+        try:
+            vm.memory_export("quantum ghxsts", importance=0.5)
+            _fail("export without allow_write was not refused")
+        except QosError:
+            pass
+        before = len(remembered_lines())
+        empt = vm.memory_export("aaaaaaaa", importance=0.5, allow_write=True)
+        if empt.get("exported") is not False:
+            _fail(f"export on a degenerate probe should no-op: {empt}")
+        if len(remembered_lines()) != before:
+            _fail("export on empty resonance still wrote to the HRM")
+        print("OK: bridge export guards — allow_write required; empty resonance writes nothing")
+
+        # 4. kannaka option-injection ('-') + quote-forge ('\"') guards.
+        for bad in ("--category", "-x", 'a"b'):
+            try:
+                qos_bridge._kannaka.remember(bad, 0.5)
+                _fail(f"kannaka remember accepted unsafe text {bad!r}")
+            except QosError:
+                pass
+        print("OK: kannaka remember refused option-injection and quote-forge text")
+
+        # 5. inherited KANNAKA_READONLY must not silently no-op a real write.
+        os.environ["KANNAKA_READONLY"] = "1"
+        try:
+            vm.imprint("readonly guard probe phrase")
+            before = len(remembered_lines())
+            r = vm.memory_export("readonly guard probe phrxse", importance=0.4,
+                                 allow_write=True)
+            if not r.get("exported") or len(remembered_lines()) != before + 1:
+                _fail(f"export under inherited READONLY silently no-op'd: {r}")
+        finally:
+            os.environ.pop("KANNAKA_READONLY", None)
+        print("OK: bridge export stripped inherited KANNAKA_READONLY (write happened)")
+
+        # 6. bridged_recall returns both memory systems.
+        set_recall([{"id": "kd", "content": "kannaka-side memory", "similarity": 0.55}])
+        br = vm.bridged_recall("the bridge remembxrs everythxng", top_k=2)
+        if not br["field"]["winner"] or not br["kannaka"]:
+            _fail(f"bridged_recall missing a side: {br}")
+        print(f"OK: bridged_recall — field {br['field']['winner']!r} + "
+              f"{len(br['kannaka'])} HRM hit(s)")
+
+        # 7. missing binary -> clean QosError, not a crash.
+        os.environ["QOS_KANNAKA_BIN"] = os.path.join(tmp, "nonexistent_kannaka")
+        try:
+            vm.memory_import("x", top_k=1)
+            _fail("missing kannaka binary did not raise")
+        except QosError:
+            pass
+        os.environ["QOS_KANNAKA_BIN"] = binpath
+        print("OK: missing kannaka binary -> clean QosError")
+    finally:
+        for k in ("QOS_KANNAKA_BIN", "KANNAKA_DATA_DIR", "QOS_STUB_RECALL",
+                  "KANNAKA_READONLY"):
+            os.environ.pop(k, None)
+
+
 def main():
     # QOS_KERNEL lets CI point at the downloaded artifact (its build/ path is
     # unpredictable); locally QosVM finds the standard build output itself.
@@ -360,6 +519,11 @@ def main():
         _exercise_fs(vm)
         _exercise_fetch(vm)
         _exercise_injection(vm)
+
+        # 5i. Kannaka HRM bridge (epic #127) against a stub kannaka (the real
+        # binary is absent on the runner) — memories flow OS field <-> host HRM.
+        with tempfile.TemporaryDirectory() as bridge_tmp:
+            _exercise_bridge(vm, bridge_tmp)
 
         # 6. tamper -> refusal, on the SAME code path the tools use.
         raw = vm.attestation.raw
