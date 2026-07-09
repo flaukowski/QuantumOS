@@ -1263,6 +1263,14 @@ class QosSociety:
 
     _NET_A, _NET_B = "10.0.0.1", "10.0.0.2"
     _MAC_A, _MAC_B = "52:54:00:00:c1:01", "52:54:00:00:c1:02"
+    # N-way society (epic #139): N members share ONE broadcast L2 via a QEMU
+    # mcast-socket netdev (the only single-NIC shared-L2 primitive — listen/
+    # connect does NOT repeat frames across connections), each with a distinct
+    # static IP + MAC, and each ghostd folds the MEAN field over its N-1 peers.
+    _NET = ["10.0.0.1", "10.0.0.2", "10.0.0.3", "10.0.0.4"]
+    _MAC = ["52:54:00:00:c1:01", "52:54:00:00:c1:02",
+            "52:54:00:00:c1:03", "52:54:00:00:c1:04"]
+    _MCAST_GROUP = "230.0.0.9"
     # ghostd/fieldsyncd emit these as ring-3 writes, so the kernel prefixes each
     # with "[user pid=N] " — they are NOT line-anchored (the proven Makefile gate
     # greps them unanchored too). Safe here: society VMs run no scripted qsh, so
@@ -1277,9 +1285,12 @@ class QosSociety:
         self.kernel = kernel
         self.a = None
         self.b = None
+        self.members = []  # N-way society (epic #139); empty for the 2-VM path
         self._lock = threading.RLock()
 
     def is_running(self):
+        if self.members:
+            return all(m.is_running() for m in self.members)
         return (self.a is not None and self.a.is_running()
                 and self.b is not None and self.b.is_running())
 
@@ -1379,16 +1390,124 @@ class QosSociety:
                 time.sleep(0.3)
             raise QosTimeout(f"society did not synchronize (>= {threshold}) in {timeout}s")
 
+    # ---- N-way society (epic #139): N>=3 members on one mcast L2 -------------
+    def boot_n(self, qseeds, expects=None, timeout=45):
+        """Boot N (>=3) attested members into ONE mean-field society on a shared
+        mcast L2. Every qseed must be distinct (divergent starts → a non-vacuous
+        R_x climb). `expects` (optional, per-member) verifies against a DIFFERENT
+        qseed for negative admission. Each ghostd folds the MEAN field over its
+        N-1 peers, so all N reaching min-pairwise R_x >= threshold is convergence
+        two VMs structurally cannot fake."""
+        with self._lock:
+            n = len(qseeds)
+            if n < 3 or n > len(self._NET):
+                raise QosError(f"boot_n needs 3..{len(self._NET)} members, got {n}")
+            if len(set(qseeds)) != n:
+                raise QosError("all qseeds must differ (distinct divergent identities)")
+            if self.a is not None or self.b is not None or self.members:
+                raise QosError("society already booted — shut it down first")
+            if expects is None:
+                expects = [_UNSET] * n
+            # One free UDP port for the whole mcast group (distinct groups/ports
+            # across concurrent runs avoid cross-talk).
+            s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            try:
+                s.bind(("127.0.0.1", 0))
+                mport = s.getsockname()[1]
+            finally:
+                s.close()
+            netdev = f"socket,id=n0,mcast={self._MCAST_GROUP}:{mport}"
+            # Create + register ALL members BEFORE booting any, so a boot failure
+            # on member k still reaps every already-forked QEMU (no orphan leak).
+            self.members = [QosVM(kernel=self.kernel) for _ in range(n)]
+            _society_register(self)
+            try:
+                for i in range(n):
+                    peers = ",".join(self._NET[j] for j in range(n) if j != i)
+                    self.members[i].boot(
+                        qseed=qseeds[i], expect_qseed=expects[i], timeout=timeout,
+                        quiet=False, arm_signals=False, mac=self._MAC[i],
+                        append_extra=f"ip={self._NET[i]} peer={peers}", netdev=netdev)
+                # mcast reachability precheck (FAIL LOUD — never a silent green):
+                # every node must receive a frame from EACH of its N-1 peers (the
+                # full mesh), or the shared L2 is not delivering.
+                self._await_all_frames(time.time() + 20)
+            except QosTimeout as exc:
+                self.shutdown()
+                raise QosTimeout(f"N-way coupling mesh not established — is host "
+                                 f"multicast available on this runner? ({exc})")
+            except BaseException:
+                self.shutdown()
+                raise
+            return self.status_n()
+
+    def _member_peers(self, i):
+        n = len(self.members)
+        return [self._NET[j] for j in range(n) if j != i]
+
+    def _await_all_frames(self, deadline):
+        """Each member must log 'FIELDSYNC: frame from <ip>' for ALL of its peer
+        IPs (the full N-cycle, per-IP — not a generic match that a 2-of-N
+        masquerade could satisfy)."""
+        while time.time() < deadline:
+            for i, m in enumerate(self.members):
+                if not m.is_running():
+                    raise QosDead(f"society member {i} exited before coupling")
+            ok = True
+            for i, m in enumerate(self.members):
+                text = m._log_text()
+                for ip in self._member_peers(i):
+                    if f"FIELDSYNC: frame from {ip}" not in text:
+                        ok = False
+                        break
+                if not ok:
+                    break
+            if ok:
+                return
+            time.sleep(0.2)
+        raise QosTimeout("not every member received a frame from each of its peers")
+
+    def status_n(self):
+        with self._lock:
+            if not self.members:
+                raise QosError("no N-way society booted")
+            return {"members": [self._node_status(m) for m in self.members],
+                    "trust_note": (
+                        "coupling and attestation are cryptographically UNLINKED: a "
+                        "verified 'synchronized' proves N fields coupled on the shared "
+                        "loopback L2, NOT that the N attested identities coupled. A "
+                        "forged source on the L2 can skew (not starve — ghostd never "
+                        "evicts a live peer) the mean. Trust == control of the host.")}
+
+    def await_sync_n(self, threshold=0.80, timeout=120):
+        """Poll until EVERY member's field synchronizes (min-pairwise R_x >=
+        threshold), a member dies, or the deadline passes."""
+        with self._lock:
+            if not self.members:
+                raise QosError("no N-way society booted")
+            deadline = time.time() + timeout
+            while time.time() < deadline:
+                for i, m in enumerate(self.members):
+                    if not m.is_running():
+                        raise QosDead(f"society member {i} exited during sync")
+                st = self.status_n()
+                if all(nd["synchronized"] and (nd["r_x"] or 0) >= threshold
+                       for nd in st["members"]):
+                    return st
+                time.sleep(0.3)
+            raise QosTimeout(f"N-way society did not synchronize (>= {threshold}) in {timeout}s")
+
     def shutdown(self):
         with self._lock:
             _society_unregister(self)
-            for vm in (self.b, self.a):
+            for vm in list(reversed(self.members)) + [self.b, self.a]:
                 if vm is not None:
                     try:
                         vm.shutdown()
                     except OSError:
                         pass
             self.a = self.b = None
+            self.members = []
             return {"stopped": True}
 
 

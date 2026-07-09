@@ -433,6 +433,34 @@ peer's phases. The gate asserts, on **both** nodes: a `frame from <peer>`
 break local associative memory). Observed: R_x climbs 0.11 → 0.03 → 0.99
 within a few exchanges; both fields lock.
 
+### N-way society: a mean field over N kernels (epic #139)
+
+The coupling generalizes from two kernels to **N** (a "society"). The
+`peer=` boot token accepts a **comma-separated list** —
+`peer=10.0.0.2,10.0.0.3` — parsed into a bounded peer array
+(`net_add_peer_ip`, `MAX_PEERS = 4`); a guest reads the count via
+`SYSINFO_PEER_COUNT` and each entry via `SYSINFO_PEER<index>`. `fieldsyncd`
+unicasts its snapshot to **each** peer over a **shared multicast L2**
+(QEMU `-netdev socket,mcast=<group>:<port>` — the only single-NIC shared-L2
+primitive; unicast-to-each avoids any multicast-send path). Each frame is
+tagged with its source IP, and `fieldsyncd` drops any frame whose source is
+not a configured peer (closing self-coupling and forged-source slot
+exhaustion). `ghostd` keys a **per-peer slot** by source IP and folds the
+**circular MEAN field** — the Kuramoto coupling is `(K/P)·Σ_p sin(θ_p − θ_i)`
+over the live peers `P`, a sum of sin-of-*differences* (wrap-safe; at one
+peer it is byte-identical to the two-kernel fold). The sync verdict uses the
+**minimum** pairwise R_x over live peers, so a partial 2-of-3 lock cannot
+pass. A stale peer is dropped from the mean, but the live set is floored at
+one (never a divide-by-zero, and the 2-VM "freeze on the last frame"
+behavior is preserved). `make ci-smoke-society3` boots **three** kernels
+with three distinct qseeds and asserts all three reach min-pairwise
+R_x ≥ 0.80 from a sub-0.50 divergent start — mean-field convergence that a
+two-kernel society (which can only pairwise-lock) structurally cannot fake.
+Trust is unchanged from the two-kernel case: a synchronized society proves N
+fields coupled on the shared loopback L2, not that N attested identities
+coupled — a forged source can *skew* the mean (never *starve* it), and trust
+reduces to control of the host L2.
+
 Honest scope: `fieldsyncd` does **not** verify the peer's identity
 in-guest — frames carry a boot-identity commitment the *host* attestation
 verifier checks; full in-guest mutual Lamport verification is a one-time

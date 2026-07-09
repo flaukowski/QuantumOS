@@ -511,6 +511,62 @@ static int cmdline_get_ipv4(const char *cmd, const char *key, uint8_t out[4]) {
     return 0;
 }
 
+/* Parse a comma-separated peer= list (epic #139 N-way society):
+ * "peer=10.0.0.2,10.0.0.3" -> net_add_peer_ip per dotted quad. cmdline_get_ipv4
+ * cannot be reused (it is key-anchored and hard-rejects ','), so this walks the
+ * quads itself. A single peer=10.0.0.2 yields one peer (the 2-VM path); a
+ * trailing comma or a malformed quad simply ends the list. net_add_peer_ip is
+ * internally bounded, so an over-long list cannot overrun. */
+static void cmdline_get_peers(const char *cmd) {
+    const char *key = "peer=";
+    for (const char *p = cmd; *p; p++) {
+        if (p != cmd && p[-1] != ' ' && p[-1] != '\t') {
+            continue;
+        }
+        int k = 0;
+        while (key[k] && p[k] == key[k]) {
+            k++;
+        }
+        if (key[k] != '\0') {
+            continue;
+        }
+        const char *h = p + k;
+        uint8_t octets[4];
+        int oi = 0, val = -1;
+        for (;;) {
+            char c = *h;
+            if (c >= '0' && c <= '9') {
+                val = (val < 0 ? 0 : val) * 10 + (c - '0');
+                if (val > 255) {
+                    return; /* malformed — stop the list */
+                }
+                h++;
+            } else if (c == '.') {
+                if (val < 0 || oi >= 3) {
+                    return;
+                }
+                octets[oi++] = (uint8_t)val;
+                val = -1;
+                h++;
+            } else if (c == ',' || c == '\0' || c == ' ' || c == '\t') {
+                /* finalize one quad: the last octet comes from val */
+                if (oi == 3 && val >= 0) {
+                    octets[3] = (uint8_t)val;
+                    net_add_peer_ip(octets);
+                }
+                if (c != ',') {
+                    return; /* end of the peer= token */
+                }
+                oi = 0;
+                val = -1;
+                h++;
+            } else {
+                return; /* junk — stop */
+            }
+        }
+    }
+}
+
 // Match "qseed=" at p; on hit, decode up to 16 hex digits into a u64. Also
 // scans for the bare `quiet` token (clean interactive console).
 static void parse_boot_cmdline(uint32_t info_addr) {
@@ -538,9 +594,11 @@ static void parse_boot_cmdline(uint32_t info_addr) {
         net_set_static_ip(octets);
         boot_log("NET: static ip configured from cmdline (ip=)");
     }
-    if (cmdline_get_ipv4(cmd, "peer=", octets)) {
-        net_set_peer_ip(octets);
-        boot_log("NET: coupling peer configured from cmdline (peer=)");
+    /* Parse the (possibly comma-separated) peer= list directly — do NOT gate on
+     * cmdline_get_ipv4, which hard-rejects the ',' in a multi-peer list. */
+    cmdline_get_peers(cmd);
+    if (net_get_peer_count() > 0) {
+        boot_log("NET: coupling peer(s) configured from cmdline (peer=)");
     }
 
     static const char key[] = "qseed=";

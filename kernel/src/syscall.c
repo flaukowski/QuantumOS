@@ -506,11 +506,17 @@ static uint64_t sys_sysinfo(uint32_t pid, uint64_t op, uint64_t user_ptr, uint64
     if (op == SYSINFO_QUIET) {
         return (uint64_t)boot_is_quiet();
     }
-    /* SYSINFO_PEER (epic #97): the packed `peer=` IP (0 = none). Bare
-     * query, no buffer — grants no authority, just config a coupling
-     * service reads to learn who to talk to. */
+    /* SYSINFO_PEER (epic #97; N-way #139): the packed `peer=` IP at index
+     * `user_ptr` (0 = out of range). Bare query, no buffer — grants no
+     * authority, just config a coupling service reads to learn who to talk to.
+     * A legacy caller passing index 0 gets peer[0], unchanged. */
     if (op == SYSINFO_PEER) {
-        return (uint64_t)net_get_peer_ip();
+        return (uint64_t)net_get_peer_at((int)user_ptr);
+    }
+    /* SYSINFO_PEER_COUNT (epic #139): how many peers were configured. Bare
+     * query — answered here BEFORE the len==0 guard below. */
+    if (op == SYSINFO_PEER_COUNT) {
+        return (uint64_t)(int64_t)net_get_peer_count();
     }
     if (len == 0) {
         return 0;

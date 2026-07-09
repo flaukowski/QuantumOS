@@ -94,14 +94,33 @@ static inline int ghost_sinq(uint32_t th) {
 /* ---- field + slot state (zeroed .bss) ---- */
 static uint32_t theta[GHOST_N];
 
-/* ---- cross-node coupling state (epic #97) ---- */
-static uint8_t remote_phase[GHOST_N]; /* peer's last-seen phases (top byte of turns) */
-static int remote_fresh;              /* a GHOST_COUPLE frame is waiting to fold in */
-static int coupling_mode;             /* peer is active — run the coupling regime */
-static uint32_t couple_frames;        /* frames folded in (gate: >= MIN before a verdict) */
+/* ---- cross-node coupling state (epic #97; N-way mean field, #139) ----
+ * remote_phase is now a PER-PEER table keyed by source IP: ghostd folds the
+ * MEAN field over up to GHOST_MAX_PEERS live peers (Kuramoto generalizes
+ * directly). At one peer (a 2-VM society) it reduces exactly to the original
+ * single-peer coupling. */
+static uint8_t remote_phase[GHOST_MAX_PEERS][GHOST_N]; /* each peer's last-seen phases */
+static uint32_t peer_src[GHOST_MAX_PEERS];             /* packed source IP per slot (0 = empty) */
+static uint64_t peer_last[GHOST_MAX_PEERS];            /* tick of the last frame per slot */
+static int remote_fresh;       /* a GHOST_COUPLE frame is waiting to fold in */
+static int coupling_mode;      /* peer is active — run the coupling regime */
+static uint32_t couple_frames; /* folds applied (gate: >= MIN before a verdict) */
+static uint64_t last_fold;     /* tick of the last couple_apply (cadence cap) */
 
 #define COUPLE_K 16384 /* Q15-sin -> turn scale: max ~1/8 turn nudge per frame */
 #define COUPLE_MIN_FRAMES 4
+/* A slot older than this is stale. Kept generous (~15 s = ~15 missed 1 Hz
+ * sends) so a live-but-jittery peer is never evicted mid-convergence. The
+ * live set is ALSO floored at 1 (never drop the last peer), so the P=1 path
+ * keeps the original "freeze on the last frame" behaviour and no code path
+ * can divide by a zero peer count. */
+#define PEER_STALE_TICKS 1500
+/* Fold cadence cap (ticks). With N peers, N frames arrive per cycle; folding
+ * once per frame would scale the coupling gain ~N. Folding at most once per
+ * this interval (>= one ~100-tick send period) keeps the mean-field gain
+ * independent of the peer count. At P=1 frames are ~1/s (>= this) so it folds
+ * on each frame exactly as before. */
+#define MIN_FOLD_TICKS 80
 
 /* Integer sqrt of a u64, bit-by-bit (ghostd had none). */
 static uint32_t ghost_isqrt(uint64_t x) {
@@ -128,10 +147,38 @@ static uint32_t ghost_isqrt(uint64_t x) {
  * together — and it starts LOW only because each node seeds its field
  * from its own qseed (divergent init), so a green R_x cannot be faked by
  * two identical frozen fields. */
-static int cross_order_param(void) {
+/* The set of peer slots to fold this cycle: those seen within PEER_STALE_TICKS,
+ * OR — if all are stale — the single most-recently-seen slot (never drop the
+ * last peer). Fills live_slots[] and returns the count (0 ONLY if no frame has
+ * ever arrived). This floor at >= 1 preserves the 2-VM "freeze on the last
+ * frame" behaviour and guarantees no divide-by-zero downstream. */
+static int live_peers(uint64_t now, int *live_slots) {
+    int n = 0, newest = -1;
+    uint64_t newest_tick = 0;
+    for (int p = 0; p < GHOST_MAX_PEERS; p++) {
+        if (peer_src[p] == 0) {
+            continue;
+        }
+        if (newest < 0 || peer_last[p] >= newest_tick) {
+            newest = p;
+            newest_tick = peer_last[p];
+        }
+        if (now - peer_last[p] <= PEER_STALE_TICKS) {
+            live_slots[n++] = p;
+        }
+    }
+    if (n == 0 && newest >= 0) {
+        live_slots[n++] = newest; /* keep the last peer — never P=0 */
+    }
+    return n;
+}
+
+/* Pairwise R_x (hundredths) of the local field vs ONE peer slot's phases — the
+ * original single-peer Kuramoto measure |mean e^{j(remote-local)}|. */
+static int pair_order_param(int slot) {
     int64_t sc = 0, ss = 0;
     for (int i = 0; i < GHOST_N; i++) {
-        uint32_t rt = (uint32_t)remote_phase[i] << 24;
+        uint32_t rt = (uint32_t)remote_phase[slot][i] << 24;
         uint32_t d = rt - theta[i];
         sc += ghost_cos_q15(d);
         ss += ghost_sinq(d);
@@ -140,6 +187,52 @@ static int cross_order_param(void) {
     uint32_t mag = ghost_isqrt(mag2);    /* 0 .. N*32767 */
     uint32_t rx = mag / (GHOST_N * 328); /* /N then Q15->hundredths (32767/100~=328) */
     return rx > 100 ? 100 : (int)rx;
+}
+
+/* The society sync verdict = the MINIMUM pairwise R_x over live peers, so a
+ * partial 2-of-3 lock cannot pass (a high MEAN could hide one unsynced pair).
+ * At P=1 min-of-one == the original single-peer R_x (byte-identical 2-VM
+ * measure). Returns 0 when no peer is live. */
+static int cross_order_param(uint64_t now) {
+    int live_slots[GHOST_MAX_PEERS];
+    int P = live_peers(now, live_slots);
+    if (P == 0) {
+        return 0;
+    }
+    int mn = 100;
+    for (int k = 0; k < P; k++) {
+        int rx = pair_order_param(live_slots[k]);
+        if (rx < mn) {
+            mn = rx;
+        }
+    }
+    return mn;
+}
+
+/* Map a source IP to its per-peer slot: an existing match, else an EMPTY or
+ * STALE slot, else -1 (drop — NEVER evict a live slot, so a forged-source
+ * flood can at most skew the mean, never starve real peers). */
+static int couple_slot_for(uint32_t src, uint64_t now) {
+    if (src == 0) {
+        return -1;
+    }
+    int empty = -1, stale = -1;
+    for (int p = 0; p < GHOST_MAX_PEERS; p++) {
+        if (peer_src[p] == src) {
+            return p;
+        }
+        if (peer_src[p] == 0) {
+            if (empty < 0) {
+                empty = p;
+            }
+        } else if ((now - peer_last[p]) > PEER_STALE_TICKS && stale < 0) {
+            stale = p;
+        }
+    }
+    if (empty >= 0) {
+        return empty;
+    }
+    return stale; /* -1 if no empty/stale slot */
 }
 static uint32_t slot_bits[GHOST_M][GHOST_PW];
 static uint8_t slot_live[GHOST_M];
@@ -174,6 +267,30 @@ static void logline(const char *s) {
         return;
     }
     write_str(s);
+}
+
+/* Emit the "FIELDSYNC: R_x=0.NN frames=<n>" line (and SYNCHRONIZED once locked
+ * and settled). The exact strings are grepped literally by the host society/
+ * fieldsync gates — do not change them. */
+static void log_rx(int rx, uint32_t frames) {
+    char b[80];
+    int o;
+    if (rx >= 100) {
+        o = ghost_put(b, 0, "FIELDSYNC: R_x=1.00"); /* "1.00" reads cleaner than "0.100" */
+    } else {
+        o = ghost_put(b, 0, "FIELDSYNC: R_x=0.");
+        if (rx < 10) {
+            b[o++] = '0';
+        }
+        o = ghost_put_u(b, o, (unsigned)rx);
+    }
+    o = ghost_put(b, o, " frames=");
+    o = ghost_put_u(b, o, frames);
+    b[o] = 0;
+    logline(b);
+    if (rx >= 80 && frames >= COUPLE_MIN_FRAMES) {
+        logline("FIELDSYNC: SYNCHRONIZED (R_x>=0.80)");
+    }
 }
 
 /* Internal xorshift32 — the fallback noise when the quantum pool is not the
@@ -449,40 +566,38 @@ static void couple_seed_divergent(void) {
  * remote phase at each oscillator. Applied ONCE per received frame (not
  * per tick), so it chases a fresh target rather than overshooting a stale
  * one. Mutual on both nodes -> consensus. */
-static void couple_apply(void) {
+static void couple_apply(uint64_t now) {
+    int live_slots[GHOST_MAX_PEERS];
+    int P = live_peers(now, live_slots);
+    if (P == 0) {
+        return; /* no peer ever seen — nothing to fold */
+    }
     for (int i = 0; i < GHOST_N; i++) {
-        uint32_t rt = (uint32_t)remote_phase[i] << 24;
-        int s = ghost_sinq(rt - theta[i]); /* sin(remote - local), Q15 */
-        theta[i] += (uint32_t)((int64_t)s * COUPLE_K);
+        int64_t ssum = 0;
+        for (int k = 0; k < P; k++) {
+            uint32_t rt = (uint32_t)remote_phase[live_slots[k]][i] << 24;
+            ssum += ghost_sinq(rt - theta[i]); /* sin(remote - local), Q15 */
+        }
+        /* Mean field: multiply BEFORE divide (int64) to avoid a /P truncation
+         * dead-zone near lock. At P=1 this is exactly s*COUPLE_K — byte-
+         * identical to the original single-peer fold (the 2-VM regression). */
+        theta[i] += (uint32_t)(((int64_t)ssum * COUPLE_K) / P);
     }
 }
 
 static void couple_tick(uint64_t now) {
-    if (remote_fresh) {
-        couple_apply();
+    /* Fold at a CAPPED cadence (>= MIN_FOLD_TICKS apart), not once per frame,
+     * so the mean-field gain is independent of the peer count (see
+     * MIN_FOLD_TICKS). At P=1 (frames ~1/s) this folds on each frame as before. */
+    if (remote_fresh && (now - last_fold) >= MIN_FOLD_TICKS) {
+        couple_apply(now);
         couple_frames++;
         remote_fresh = 0;
+        last_fold = now;
     }
     field_publish();
     if ((now - last_lambda_log) >= GHOST_LOG_INTERVAL && couple_frames > 0) {
-        int rx = cross_order_param();
-        char b[80];
-        int o = ghost_put(b, 0, "FIELDSYNC: R_x=0.");
-        if (rx < 10) {
-            b[o++] = '0';
-        }
-        o = ghost_put_u(b, o, (unsigned)rx);
-        if (rx >= 100) {
-            /* "1.00" reads cleaner than "0.100" */
-            o = ghost_put(b, 0, "FIELDSYNC: R_x=1.00");
-        }
-        o = ghost_put(b, o, " frames=");
-        o = ghost_put_u(b, o, couple_frames);
-        b[o] = 0;
-        logline(b);
-        if (rx >= 80 && couple_frames >= COUPLE_MIN_FRAMES) {
-            logline("FIELDSYNC: SYNCHRONIZED (R_x>=0.80)");
-        }
+        log_rx(cross_order_param(now), couple_frames);
         last_lambda_log = now;
     }
 }
@@ -591,7 +706,7 @@ static void handle_wide(const ghost_wide_t *w, long sender) {
             ((uint8_t *)&rep)[i] = 0;
         }
         rep.op = GHOST_SNAPSHOT;
-        rep.rx_x = coupling_mode ? (uint8_t)cross_order_param() : 0;
+        rep.rx_x = coupling_mode ? (uint8_t)cross_order_param(ticks()) : 0;
         for (int i = 0; i < GHOST_N; i++) {
             rep.phase[i] = (uint8_t)(theta[i] >> 24);
         }
@@ -599,15 +714,31 @@ static void handle_wide(const ghost_wide_t *w, long sender) {
         return;
     }
     if (w->op == GHOST_COUPLE) {
-        if (!coupling_mode) {
+        int first = !coupling_mode;
+        if (first) {
             coupling_mode = 1;
             couple_seed_divergent();
             logline("FIELDSYNC: coupling engaged — field seeded divergent");
         }
-        for (int i = 0; i < GHOST_N; i++) {
-            remote_phase[i] = w->phase[i];
+        /* Store this peer's phases in its own slot, keyed by source IP, so the
+         * fold is a MEAN over N peers. A frame whose slot cannot be claimed
+         * (table full of live peers) is dropped. */
+        uint64_t now = ticks();
+        int slot = couple_slot_for(w->src, now);
+        if (slot >= 0) {
+            for (int i = 0; i < GHOST_N; i++) {
+                remote_phase[slot][i] = w->phase[i];
+            }
+            peer_src[slot] = w->src;
+            peer_last[slot] = now;
+            remote_fresh = 1;
+            /* On the FIRST frame log a baseline R_x BEFORE any fold, so the
+             * divergent-start (< 0.50) non-vacuity sample is always captured
+             * regardless of how fast the field then locks. */
+            if (first) {
+                log_rx(cross_order_param(now), 0);
+            }
         }
-        remote_fresh = 1;
         /* No reply. */
     }
 }

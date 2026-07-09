@@ -44,11 +44,23 @@
  * ghostd for a GHOST_SNAPSHOT (reply = this node's phases), sends them to
  * the peer over UDP, and forwards the peer's phases back as a
  * GHOST_COUPLE request. 260 bytes — well under IPC_MAX_MESSAGE_SIZE. */
+/* Max distinct coupling peers a node folds into its mean field (epic #139
+ * N-way society). MUST equal the kernel's MAX_PEERS (kernel/include/kernel/
+ * net.h) and be >= the society's N. */
+#define GHOST_MAX_PEERS 4
+
 typedef struct {
     uint8_t op;   /* GHOST_SNAPSHOT (reply) or GHOST_COUPLE (request) */
     uint8_t rx_x; /* cross-node order parameter R_x, hundredths [0,100] (reply only) */
     uint8_t pad[2];
     uint8_t phase[GHOST_N]; /* top byte of each theta */
+    /* Source node's packed IP (epic #139): on a GHOST_COUPLE fieldsyncd sets
+     * this to the peer that sent the frame, so ghostd keys a per-peer slot and
+     * folds the MEAN field over N peers. 0 on a SNAPSHOT reply (unused there).
+     * Placed AFTER phase[] so phase stays 4-aligned and the 260-byte UDP wire
+     * frame (fsyn_frame_t) is untouched — src rides only the guest-internal
+     * IPC (msg grows 260->264B, still << IPC_MAX_MESSAGE_SIZE). */
+    uint32_t src;
 } ghost_wide_t;
 
 /* Reply .match sentinels (>= 0 is the matched slot index) */

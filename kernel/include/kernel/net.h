@@ -31,11 +31,20 @@ void net_init(void);
  * no DHCP server. Idempotent; a later call overrides. */
 void net_set_static_ip(const uint8_t ip[4]);
 
-/* Field-coupling peer address (epic #97), from the `peer=` boot token.
- * Set before net_init; read (packed, little-endian, 0 = unset) by
- * fieldsyncd via SYSINFO_PEER. */
-void net_set_peer_ip(const uint8_t ip[4]);
-uint32_t net_get_peer_ip(void);
+/* Max field-coupling peers (epic #139 N-way society). MUST equal ghost.h
+ * GHOST_MAX_PEERS (the ring-3 ghostd receive-slot count) and be >= the
+ * society's N; the two are separate compilation units (kernel vs ring-3) so
+ * they cannot share a symbol — keep them in lockstep. */
+#define MAX_PEERS 4
+
+/* Field-coupling peer address(es) (epic #97; N-way #139), from the `peer=`
+ * boot token (one IP, or a comma list for N). Set before net_init; read by
+ * fieldsyncd via SYSINFO_PEER<index> (packed, little-endian, 0 = out of range)
+ * and SYSINFO_PEER_COUNT. */
+void net_add_peer_ip(const uint8_t ip[4]);
+uint32_t net_get_peer_ip(void); /* legacy: peer[0] (0 = none) */
+int net_get_peer_count(void);
+uint32_t net_get_peer_at(int i);
 
 /* Boot self-test: ARP-resolve the gateway, obtain a DHCP lease, ping the
  * gateway, and resolve a hostname — proving the stack end to end. Runs in
