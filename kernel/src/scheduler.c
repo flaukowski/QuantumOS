@@ -16,6 +16,9 @@
 #include <kernel/vmspace.h>
 #include <kernel/boot.h>
 #include <kernel/manifest.h>
+#include <kernel/audit.h>
+#include <kernel/capability.h>
+#include <kernel/console.h> /* early_console_write for the CPUKILL boot line */
 #ifdef SCHED_LOTTERY
 #include <kernel/quantum.h>
 #endif
@@ -99,6 +102,32 @@ void scheduler_tick(cpu_state_t *state) {
     process_t *cur = process_get_current();
     if (cur) {
         manifest_tick(cur->pid);
+        /* CPU-quota enforcement (epic #144): a ring-3 process that has exceeded
+         * its DECLARED cpu budget is terminated — the manifest's cpu_ticks
+         * becomes a real bound, not just accounting. The (state->cs & 3) guard
+         * NEVER kills a process caught mid-syscall in ring 0: cli'd syscalls run
+         * with a live kernel stack, and discarding it would corrupt state (a
+         * held cli window, a half-built cap/manifest). cpu_ticks >= cpu_limit is
+         * a LATCH, so a process skipped in ring 0 this tick is caught the next
+         * tick it is interrupted back in ring 3. The pick_next pre-check keeps
+         * this POLICY action from ever panicking (scheduler_kill_current
+         * boot_panics if nothing is runnable) — if there is no target, skip and
+         * let the latch retry. The frame-swap + EOI-after-callback is the exact
+         * mechanism scheduler_reschedule already ships on every context switch. */
+        if ((state->cs & 3) != 0 && manifest_over_budget(cur->pid) && pick_next(cur->pid)) {
+            audit_record(AUDIT_CPUKILL, cur->pid, AUDIT_V_EPERM, CAP_RESOURCE_PROCESS, cur->pid, 0);
+            early_console_write("CPUKILL: pid=");
+            early_console_write_hex(cur->pid);
+            early_console_write(" over CPU budget\r\n");
+            /* Clear the manifest AT the kill (irqsave-safe, idempotent with the
+             * reaper's later process_destroy clear) so the killed pid vanishes
+             * from SYS_MANIFEST synchronously — not in a race with the idle
+             * reaper. */
+            manifest_clear(cur->pid);
+            process_set_state(cur->pid, PROCESS_STATE_TERMINATED);
+            scheduler_kill_current(state);
+            return;
+        }
     }
     if (++quantum_counter < SCHED_QUANTUM_TICKS) {
         return;
@@ -170,6 +199,11 @@ void scheduler_kill_current(cpu_state_t *state) {
         boot_panic("scheduler: nothing runnable after kill");
         return;
     }
+
+    /* A fresh process starts a fresh quantum (symmetric with
+     * scheduler_reschedule) — otherwise `next` inherits the dead process's
+     * partial quantum_counter and gets a truncated first slice. */
+    quantum_counter = 0;
 
     /* Do not save the dead process's context */
     process_switch_to(next);

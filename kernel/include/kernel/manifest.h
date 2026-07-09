@@ -68,7 +68,8 @@ typedef struct {
     uint16_t reserved;
     uint32_t spawn_max;  /* successful-spawn quota; 0 = bound but unlimited */
     uint32_t spawn_used; /* successful spawns this incarnation (rebirth resets) */
-    uint64_t cpu_ticks;  /* timer ticks scheduled-in (accounting, v1 read-only) */
+    uint32_t cpu_limit;  /* max cumulative scheduled-in ticks; 0 = unlimited (epic #144) */
+    uint64_t cpu_ticks;  /* timer ticks scheduled-in; ENFORCED against cpu_limit (#144) */
     manifest_entry_t entries[MANIFEST_MAX_ENTRIES];
 } manifest_t;
 
@@ -100,6 +101,15 @@ bool manifest_grant(uint32_t pid, uint32_t resource_type, uint32_t resource_id,
  * pre-checks this BEFORE minting the child cap, so manifest_grant cannot fail
  * after a capability already exists (no undo path). */
 bool manifest_has_room(uint32_t pid);
+
+/* True if pid has a BOUND manifest with a nonzero cpu_limit it has EXCEEDED
+ * (cpu_ticks >= cpu_limit) — the CPU-quota enforcement predicate (epic #144).
+ * Plain read, no lock: safe because every writer (manifest_bind/clear) runs
+ * cli'd and manifest_tick is a single aligned-u64 increment on one CPU; the
+ * intended caller is scheduler_tick (timer IRQ, IF=0). cpu_limit==0 (every
+ * shipped citizen) is unlimited, so this is constant-false for all but a
+ * citizen that DECLARES a finite budget. */
+bool manifest_over_budget(uint32_t pid);
 
 /* Intent check for a capability-gated syscall site. Call AFTER cap_find
  * succeeds. Returns 1 (allowed: unbound pid, or a bound manifest with a

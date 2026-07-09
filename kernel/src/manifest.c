@@ -109,6 +109,17 @@ bool manifest_has_room(uint32_t pid) {
     return room;
 }
 
+bool manifest_over_budget(uint32_t pid) {
+    if (pid >= MAX_PROCESSES) {
+        return false;
+    }
+    /* No irqsave: called from the timer IRQ (IF already 0); the only writers
+     * are the cli'd manifest_bind/clear, and manifest_tick's aligned-u64
+     * increment cannot tear on one CPU. */
+    const manifest_t *m = &manifest_table[pid];
+    return m->bound && m->cpu_limit != 0 && m->cpu_ticks >= m->cpu_limit;
+}
+
 int manifest_check(uint32_t pid, uint32_t resource_type, uint32_t resource_id,
                    uint32_t permissions) {
     if (pid >= MAX_PROCESSES) {

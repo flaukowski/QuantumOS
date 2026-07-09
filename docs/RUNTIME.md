@@ -115,7 +115,18 @@ capability-gated syscall (`manifest_check` → `AUDIT_MDENY` on a held cap
 that exceeds declared intent). The manifest also carries the **first
 enforced quota**: `spawn_max` limits successful `SYS_SPAWN`s per
 incarnation (checked before any spawn side effect, charged only on
-success → `AUDIT_QUOTA` on refusal) and `cpu_ticks` accounting. On the
+success → `AUDIT_QUOTA` on refusal). A per-pid **`cpu_limit`** (epic
+#144) is the second enforced quota: `cpu_ticks` counts timer ticks the
+process is scheduled in, and once it exceeds a declared `cpu_limit` the
+kernel **terminates** the process from the timer tick — a busy-spin
+runaway that ignores cooperative scheduling cannot hog the machine. The
+kill is guarded by `(cs & 3)` so a process caught mid-syscall in ring 0 is
+skipped and caught the next tick it is back in ring 3 (the cumulative-tick
+condition is a latch); it records an `AUDIT_CPUKILL` ledger entry and the
+pid vanishes from the process/manifest tables. Enforcement is **opt-in**
+(`cpu_limit == 0` = unlimited), so every shipped long-runner (qsh, ghostd,
+…) is untouched — only a citizen that declares a finite budget is
+eligible (proven every boot by the `cpu-hog` citizen). On the
 shipped system caps and manifests are minted from the same grants, so the
 intent check refuses nothing today — its value is inspectability
 (`SYS_MANIFEST`) and the outer bound capability delegation will be checked

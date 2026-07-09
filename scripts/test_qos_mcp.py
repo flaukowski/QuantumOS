@@ -49,6 +49,7 @@ import sys
 import os
 import tempfile
 import threading
+import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
@@ -337,6 +338,58 @@ def _exercise_injection(vm):
 
 
 _KNOWN_RES = {"MEM", "IPC", "DEV", "QRNG", "PROC", "SVC", "FIELD"}
+
+
+def _exercise_cpuquota(vm):
+    """CPU-quota enforcement (epic #144). The cpu-hog citizen has a finite
+    manifest cpu_limit and busy-spins forever; once its scheduled-in cpu_ticks
+    cross the limit, the KERNEL terminates it from the timer tick. The hog is
+    dead and cannot self-report — the proof is external and un-forgeable:
+      (a) a kernel-written CPUKILL entry in the authority ledger for its pid
+          (a citizen cannot forge an AUDIT: line; only the kernel kill site
+          emits CPUKILL), and
+      (b) that pid vanishes from the bound-only manifest dump (manifest_clear'd
+          at the kill).
+    Runs FIRST (before the spawn-heavy manifest gate) so the boot CPUKILL entry
+    is still inside the 128-entry ring; polls the ledger (the kill lands at a
+    boot tick, not instantly)."""
+    deadline = time.time() + 20
+    kill = None
+    while time.time() < deadline:
+        for e in vm.audit()["entries"]:
+            if (e["kind"] == "CPUKILL" and e["verdict"] == "EPERM"
+                    and e["resource_type"] == "PROC"):
+                kill = e
+                break
+        if kill:
+            break
+        time.sleep(0.4)
+    if not kill:
+        _fail("no CPUKILL ledger entry — the cpu-hog was never terminated for its budget")
+    hog_pid = kill["pid"]
+    print(f"OK: CPU quota enforced — kernel terminated cpu-hog (pid {hog_pid}) for exceeding "
+          f"its budget (un-echoable CPUKILL ledger entry)")
+
+    # The killed hog is manifest_clear'd, so its pid leaves the bound-only dump.
+    # Poll (the reaper/clear may lag the ledger write by a moment).
+    gone = False
+    dl2 = time.time() + 10
+    while time.time() < dl2:
+        if hog_pid not in vm.manifest()["manifests"]:
+            gone = True
+            break
+        time.sleep(0.4)
+    if not gone:
+        _fail(f"killed cpu-hog pid {hog_pid} still present in the manifest dump (not reaped/cleared)")
+    print(f"OK: killed cpu-hog pid {hog_pid} vanished from the manifest table (reaped + cleared)")
+
+    # Opt-in: qsh (cpu_limit 0) runs forever and is NEVER killed — a nonzero
+    # budget is required to be eligible, so the OS's own surfaces are safe.
+    qsh_pid = next((p["pid"] for p in vm.sysinfo()["processes"]
+                    if p["name"] == "qsh" and p["state"] == "RUNNING"), None)
+    if qsh_pid is None or qsh_pid not in vm.manifest()["manifests"]:
+        _fail("qsh (cpu_limit 0) should be alive and bound — opt-in enforcement broken")
+    print("OK: cpu quota is opt-in — qsh (unlimited) runs untouched")
 
 
 def _exercise_audit(vm):
@@ -787,6 +840,11 @@ def main():
         if wa == wb:
             _fail("both recalls returned the same winner (no discrimination)")
         print(f"OK: recall discriminated noisy-A->{wa!r} noisy-B->{wb!r}")
+
+        # 4a-cpu. CPU-quota enforcement (epic #144). Runs FIRST — the boot
+        # CPUKILL entry must still be inside the 128-entry ring before the
+        # spawn-heavy manifest/run steps grow it.
+        _exercise_cpuquota(vm)
 
         # 4b. Capability authority ledger (epic #133 Phase D). Runs EARLY, before
         # the run/bridge steps spawn citizens and grow the ring, so the boot

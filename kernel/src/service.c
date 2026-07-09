@@ -87,8 +87,15 @@ static service_slot_t *slot_by_name(const char *name) {
 
 static service_slot_t *slot_by_pid(uint32_t pid) {
     for (uint32_t i = 0; i < MAX_SERVICES; i++) {
+        /* Generation guard (epic #144): a service whose process was TERMINATED
+         * by the CPU-quota kill (or any external death) leaves its slot RUNNING
+         * with a now-recyclable pid. Without the generation check, a later
+         * process handed that same pid would mis-match this stale slot. Require
+         * the live process's generation to equal the one recorded at spawn
+         * (service_stop already relies on this pairing). */
         if (services[i].registered && services[i].info.pid == pid &&
-            services[i].info.state == SERVICE_STATE_RUNNING) {
+            services[i].info.state == SERVICE_STATE_RUNNING &&
+            process_get_generation(pid) == services[i].info.pid_generation) {
             return &services[i];
         }
     }
@@ -332,6 +339,7 @@ static svc_result_t start_slot(service_slot_t *slot) {
         memset(&man, 0, sizeof(man));
         man.bound = 1;
         man.spawn_max = slot->def.spawn_max;
+        man.cpu_limit = slot->def.cpu_limit; /* CPU quota (epic #144); 0 = unlimited */
         if (slot->def.grant_quantum_pool) {
             man.entries[man.entry_count].resource_type = CAP_RESOURCE_QUANTUM;
             man.entries[man.entry_count].resource_id = QUANTUM_POOL_RESOURCE_ID;
@@ -480,6 +488,15 @@ svc_result_t service_monitor(uint32_t service_id, bool enable) {
     service_slot_t *slot = slot_by_id(service_id);
     if (!slot) {
         return SVC_ERROR_NOT_FOUND;
+    }
+    /* A cpu_limit service must NOT be monitored (epic #144): the CPU-quota kill
+     * terminates it, then the watchdog would respawn it, reset cpu_ticks, and
+     * re-kill it every ~cpu_limit ticks — a restart-bounded churn. Refuse the
+     * combination loudly (mirrors SYS_CAP_DERIVE refusing a monitored target). */
+    if (enable && slot->def.cpu_limit != 0) {
+        boot_log("service: refusing to monitor a cpu_limit service (would respawn-kill churn)");
+        boot_log(slot->info.name);
+        return SVC_ERROR_INVALID_ARG;
     }
     slot->monitored = enable ? 1 : 0;
     return SVC_SUCCESS;

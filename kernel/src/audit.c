@@ -138,6 +138,8 @@ static const char *kind_name(uint16_t k) {
         return "MDENY";
     case AUDIT_QUOTA:
         return "QUOTA";
+    case AUDIT_CPUKILL:
+        return "CPUKILL";
     default:
         return "EMPTY";
     }
