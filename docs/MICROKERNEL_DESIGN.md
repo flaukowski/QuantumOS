@@ -304,6 +304,44 @@ uint64_t sys_process_create(const char *name);
 uint64_t sys_quantum_allocate(quantum_resource_t **qubit);
 ```
 
+### User-Memory Safety (copy in/out)
+
+Syscalls run on an interrupt gate with `IF=0`, in ring 0, in the **caller's**
+address space (its PML4 is the live CR3). Any user pointer a syscall
+dereferences to copy arguments in or results out must therefore be validated
+against the caller's page tables *before* the kernel touches it — a fault in
+this context is a ring-0 fault, and `contain_user_fault` treats `(cs&3)==0` as
+fatal and `boot_panic`s. A pointer that is merely inside the user address
+*range* is not enough: a process maps only its code window plus a sparse stack
+within the 1 GB user half, so an in-range-but-unmapped pointer would fault and
+halt the whole machine (issue #158, a ring-3 → whole-OS DoS).
+
+Every copy is gated by `vmspace_user_ok(pml4, uvaddr, len, need_write)`
+(`kernel/src/vmspace.c`), reached through the `user_ok()` /
+`copy_user_string()` helpers in `kernel/src/syscall.c`:
+
+- It walks PML4 → PDPT → PD → PT for each 4 KB page the span touches,
+  requiring `PG_PRESENT` at every level and `PG_PRESENT|PG_USER` (plus `PG_RW`
+  when `need_write`) at the leaf. Any miss returns `false` → the syscall
+  returns `SYSCALL_EFAULT` instead of faulting.
+- The span is first confined to `[USER_VBASE, 0x80000000)` (PDPT[1], all 4 KB
+  pages). This deliberately excludes the shared kernel identity map below
+  `USER_VBASE` — walking those supervisor 2 MB `PS` pages as if they were page
+  tables could falsely pass and hand ring 3 arbitrary kernel R/W, an escalation
+  strictly worse than the DoS it guards.
+- Copy-**in** validates with `need_write=0`; copy-**out** with `need_write=1`,
+  so a write into a mapped-but-read-only page (e.g. the R-X code segment) is
+  refused rather than faulting. Variable-length string copies
+  (`copy_user_string`) validate each page just before crossing into it, so they
+  never over-read past a mapped-region boundary.
+
+The `ghost_test` boot citizen proves both failure modes by attack every boot
+(`COPYGUARD: unmapped pointer denied` and `COPYGUARD: RO copy-out denied`): a
+copy-out to an unmapped in-range pointer and to its own read-only code page must
+each return `EFAULT`. Without the guard these calls fault in ring 0 and
+`boot_panic` halts the boot, so the CI smoke gate — which greps for both lines
+*and* every later boot gate — can never pass vacuously.
+
 ## Implementation Structure
 
 ### Kernel Source Organization
