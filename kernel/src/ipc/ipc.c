@@ -136,12 +136,30 @@ static void str_copy(char *dest, const char *src, size_t max) {
  */
 static ipc_queue_entry_t *entry_free_list = NULL;
 
-static ipc_queue_entry_t *queue_alloc_entry(void) {
-    ipc_queue_entry_t *entry = entry_free_list;
+/* Self-contained IRQ save/restore (the qpu.c rule). ipc_send/recv reach the
+ * free list from cli'd syscall context (atomic w.r.t. IRQs), but
+ * ipc_process_cleanup runs at IF=1 from the service health-monitor thread's
+ * process_destroy. The free-list push/pop are non-atomic two-store sequences;
+ * a timer preemption mid-push racing a cli'd allocator pop would corrupt the
+ * list (a lost or double-allocated entry). Bracket both. */
+static inline uint64_t ipc_irq_save(void) {
+    uint64_t flags;
+    __asm__ volatile("pushfq; pop %0; cli" : "=r"(flags) : : "memory");
+    return flags;
+}
+static inline void ipc_irq_restore(uint64_t flags) {
+    __asm__ volatile("push %0; popfq" : : "r"(flags) : "memory");
+}
 
+static ipc_queue_entry_t *queue_alloc_entry(void) {
+    uint64_t flags = ipc_irq_save();
+    ipc_queue_entry_t *entry = entry_free_list;
     if (entry) {
         entry_free_list = entry->next;
-    } else {
+    }
+    ipc_irq_restore(flags);
+
+    if (!entry) {
         entry = kmalloc(sizeof(ipc_queue_entry_t));
         if (!entry) {
             return NULL;
@@ -157,9 +175,11 @@ static void queue_free_entry(ipc_queue_entry_t *entry) {
     if (!entry)
         return;
 
+    uint64_t flags = ipc_irq_save();
     entry->prev = NULL;
     entry->next = entry_free_list;
     entry_free_list = entry;
+    ipc_irq_restore(flags);
 }
 
 /* ============================================================================
@@ -744,14 +764,18 @@ ipc_result_t ipc_share_grant(uint32_t region_id, uint32_t grantee_id, uint32_t p
     /* Find slot */
     uint32_t slot = (uint32_t)(reg - shared_regions);
 
-    /* Find free grant slot */
+    /* Scan ALL slots: remember the first free one, but a free slot must NOT
+     * stop the duplicate check — a re-grant to a grantee whose active slot sits
+     * AFTER a hole (from an earlier revoke) would otherwise be created twice,
+     * double-counting ref_count and leaving one grant behind on revoke. */
     ipc_region_grant_t *g = NULL;
     for (uint32_t i = 0; i < MAX_GRANTS_PER_REGION; i++) {
         if (!region_grants[slot][i].is_active) {
-            g = &region_grants[slot][i];
-            break;
+            if (!g) {
+                g = &region_grants[slot][i];
+            }
+            continue;
         }
-        /* Check for existing grant to same process */
         if (region_grants[slot][i].grantee_id == grantee_id) {
             return IPC_ERROR_ALREADY_EXISTS;
         }

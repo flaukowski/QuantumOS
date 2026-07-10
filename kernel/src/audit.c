@@ -206,22 +206,52 @@ static size_t format_entry(char *b, size_t o, size_t max, const audit_entry_t *e
     return o;
 }
 
+/* Commit a whole line or nothing (line-atomicity, the manifest_format idiom): a
+ * clipped "perms=0x1f" -> "perms=0x1" would parse host-side as a WRONG value, so
+ * a straddling entry is dropped entirely and a "truncated=1" tail says so. */
+static size_t audit_put_line(char *buf, size_t o, size_t budget, const char *line, size_t linelen) {
+    if (o + linelen >= budget) {
+        return (size_t)-1;
+    }
+    for (size_t i = 0; i < linelen; i++) {
+        buf[o + i] = line[i];
+    }
+    return o + linelen;
+}
+
 size_t audit_format(char *buf, size_t max) {
-    if (!buf || max == 0) {
+    static const char tail[] = "AUDIT: truncated=1\r\n";
+    const size_t tail_len = sizeof(tail) - 1;
+    if (!buf || max < tail_len + 1) {
         return 0;
     }
+    /* Reserve the tail up front so "truncated=1" itself always fits. */
+    size_t budget = max - tail_len - 1;
     uint64_t flags = audit_irq_save();
     uint64_t live = total < AUDIT_LOG_ENTRIES ? total : AUDIT_LOG_ENTRIES;
     /* Oldest first: when wrapped, the oldest lives at total % CAP. Never touch
      * an unpopulated slot (live bounds the walk). */
     uint64_t start = total <= AUDIT_LOG_ENTRIES ? 0 : (total % AUDIT_LOG_ENTRIES);
     size_t o = 0;
+    int truncated = 0;
     for (uint64_t i = 0; i < live; i++) {
         const audit_entry_t *e = &ring[(uint32_t)((start + i) % AUDIT_LOG_ENTRIES)];
-        o = format_entry(buf, o, max, e);
+        /* Format into a scratch line (generously sized so a large seq/tick can
+         * never clip mid-field here), then commit whole-or-nothing. */
+        char line[200];
+        size_t l = format_entry(line, 0, sizeof(line), e);
+        size_t r = audit_put_line(buf, o, budget, line, l);
+        if (r == (size_t)-1) {
+            truncated = 1;
+            break;
+        }
+        o = r;
+    }
+    audit_irq_restore(flags);
+    if (truncated) {
+        o = put_str(buf, o, max, tail);
     }
     buf[o < max ? o : max - 1] = '\0';
-    audit_irq_restore(flags);
     return o;
 }
 
@@ -299,6 +329,13 @@ int audit_load(const uint8_t *buf, uint32_t len) {
     }
     uint64_t restored_total =
         (uint64_t)blob_get_u32(buf + 16) | ((uint64_t)blob_get_u32(buf + 20) << 32);
+    /* total is a monotonic event count; an implausibly large value (a scribbled
+     * blob that survived the checksum by collision, or a future bug) would wrap
+     * to 0 on the next append and corrupt the seq/dropped math. 2^48 is
+     * astronomically above any real boot — reject and cold-start above it. */
+    if (restored_total > ((uint64_t)1 << 48)) {
+        return -1;
+    }
 
     uint64_t flags = audit_irq_save();
     uint8_t *dst = (uint8_t *)ring;

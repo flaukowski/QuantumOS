@@ -25,6 +25,22 @@ typedef struct {
 } cap_slot_t;
 
 static cap_slot_t cap_table[MAX_CAPABILITIES];
+
+/* Self-contained IRQ save/restore (the qpu.c/audit.c/manifest.c rule). Syscalls
+ * run cli'd (int 0x80 is an interrupt gate), so cap_create/derive/revoke from
+ * ring 3 are atomic w.r.t. IRQs — but cap_revoke_all_for_process runs at IF=1
+ * from the service health-monitor thread's process_destroy. A timer preemption
+ * between free_slot's stores (in_use / generation / stats.active) could let a
+ * concurrent cli'd allocator claim a half-freed slot, leaking it and skewing
+ * stats. Bracket the two structural mutators so the table is atomic. */
+static inline uint64_t cap_irq_save(void) {
+    uint64_t flags;
+    __asm__ volatile("pushfq; pop %0; cli" : "=r"(flags) : : "memory");
+    return flags;
+}
+static inline void cap_irq_restore(uint64_t flags) {
+    __asm__ volatile("push %0; popfq" : : "r"(flags) : "memory");
+}
 static cap_stats_t stats;
 static uint8_t cap_initialized = 0;
 
@@ -58,21 +74,29 @@ static cap_slot_t *resolve(uint32_t cap_id) {
 }
 
 static cap_slot_t *alloc_slot(uint32_t *cap_id_out) {
+    uint64_t flags = cap_irq_save();
+    cap_slot_t *found = NULL;
     for (uint32_t i = 0; i < MAX_CAPABILITIES; i++) {
         if (!cap_table[i].in_use) {
             cap_table[i].in_use = 1;
             *cap_id_out = make_cap_id(i, cap_table[i].generation);
             cap_table[i].cap.cap_id = *cap_id_out;
-            return &cap_table[i];
+            found = &cap_table[i];
+            break;
         }
     }
-    return NULL;
+    cap_irq_restore(flags);
+    return found;
 }
 
 static void free_slot(cap_slot_t *slot) {
+    /* Atomic multi-store: a torn free racing a preempting allocator (IF=1
+     * reaper vs cli'd syscall) would leak the slot and skew stats.active. */
+    uint64_t flags = cap_irq_save();
     slot->in_use = 0;
     slot->generation++; /* invalidate outstanding handles */
     stats.active--;
+    cap_irq_restore(flags);
 }
 
 static int is_expired(const capability_t *cap) {

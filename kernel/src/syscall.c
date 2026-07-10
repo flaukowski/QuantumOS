@@ -300,7 +300,13 @@ static uint64_t sys_send_to(uint32_t pid, uint64_t dest, uint64_t user_ptr, uint
  * your own mailbox). Returns the sender pid, or 0 if empty. */
 static uint64_t sys_recv(uint32_t pid, uint64_t user_ptr, uint64_t len) {
     (void)pid;
-    if (!in_user_range(user_ptr)) {
+    /* Validate the destination span BEFORE ipc_receive dequeues: the message is
+     * CONSUMED on receive, so a range failure discovered mid-copy would
+     * silently lose it (the QPU/field validate-before-mutate discipline). The
+     * copy writes at most min(len, IPC_MAX_MESSAGE_SIZE) bytes plus a NUL, so
+     * both ends of that span must be in the user range. */
+    uint64_t span = len < (uint64_t)IPC_MAX_MESSAGE_SIZE ? len : (uint64_t)IPC_MAX_MESSAGE_SIZE;
+    if (!in_user_range(user_ptr) || !in_user_range(user_ptr + span)) {
         return SYSCALL_EFAULT;
     }
 
@@ -312,12 +318,12 @@ static uint64_t sys_recv(uint32_t pid, uint64_t user_ptr, uint64_t len) {
 
     uint8_t *dst = (uint8_t *)user_ptr;
     uint32_t n = 0;
-    while (n < len && n < msg.length && in_user_range(user_ptr + n)) {
+    while (n < len && n < msg.length) {
         dst[n] = msg.data[n];
         n++;
     }
-    /* NUL-terminate if room (messages in the demo are strings) */
-    if (n < len && in_user_range(user_ptr + n)) {
+    /* NUL-terminate if room (n <= span, pre-validated in range). */
+    if (n < len) {
         dst[n] = 0;
     }
     return msg.sender_id;
