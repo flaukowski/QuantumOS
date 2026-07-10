@@ -336,6 +336,17 @@ static void core_services_init(void) {
     }
     boot_log("ELFGUARD: malformed spawn rejected, no frame leak");
 
+    // DNS answer-binding gate (adversarial bug-hunt of the untrusted-input
+    // surface): dns_parse must reject a spoofed-source or wrong-port DNS reply,
+    // not just an unmatched txid — otherwise an on-link node poisons every
+    // ring-3 SYS_RESOLVE. Pure in-memory parser test (no NIC), so it gates the
+    // default boot. Without the binding checks the spoofed replies are accepted
+    // and the self-test fails before "QuantumOS ready".
+    if (net_dns_guard_selftest() != 0) {
+        boot_panic("DNS answer-binding self-test failed");
+    }
+    boot_log("DNSGUARD: spoofed DNS answer rejected (src+port bound)");
+
     // Initialize IPC system
     ipc_subsystem_init();
 

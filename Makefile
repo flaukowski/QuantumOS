@@ -448,6 +448,20 @@ ci-smoke: kernel
 		exit 1; \
 	fi
 	@echo "SUCCESS: ELF-loader hardening gate passed (malformed spawns rejected, no leak)"
+	@# DNS answer-binding gate (adversarial bug-hunt of the untrusted-input
+	@# surface): dns_parse must reject a spoofed-source or wrong-dest-port DNS
+	@# reply (on-link SYS_RESOLVE poisoning), not just an unmatched txid. This
+	@# line prints only after net_dns_guard_selftest() passes; without the source
+	@# +port binding the spoofed replies are accepted and the boot panics here.
+	@if ! grep -q "DNSGUARD: spoofed DNS answer rejected (src+port bound)" /tmp/qemu-boot.log 2>/dev/null; then \
+		echo "ERROR: DNS answer-binding gate missing (DNSGUARD)"; \
+		echo "Boot log:"; \
+		cat /tmp/qemu-boot.log 2>/dev/null || true; \
+		echo ""; \
+		echo "=== Smoke Test FAILED ==="; \
+		exit 1; \
+	fi
+	@echo "SUCCESS: DNS answer-binding gate passed (spoofed source/port rejected)"
 	@# ghostOS phase-1 merge gate: the ring-3 ghostd service must recall
 	@# all three noisy probes to their stored patterns (issue #48).
 	@if ! grep -q "GHOSTD: 3/3 RECALL OK" /tmp/qemu-boot.log 2>/dev/null; then \

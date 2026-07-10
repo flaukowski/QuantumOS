@@ -155,6 +155,30 @@ the CI runner's external resolver (GitHub Actions runners reliably
 resolve `example.com`). The ICMP gate is fully hermetic and proves the
 unicast IP path on its own.
 
+### DNS answer binding (anti-spoofing)
+
+`SYS_RESOLVE`'s result is trusted by ring 3, so a DNS reply must be bound
+to the query the kernel actually issued — otherwise any node on the L2
+segment (the epic #97 peer deployments put untrusted guests on a shared
+link) could inject a forged A record and poison every hostname lookup.
+`dns_parse` therefore accepts a response only when **all four** hold: it
+is from the resolver (`ip->src == IP_DNS`), from the DNS port
+(`udp->sport == 53`), addressed back to our ephemeral query port
+(`udp->dport == sport`), and carries our transaction id. The transaction
+id **and** the ephemeral source port are drawn per-query from the
+qseed-mixed kernel PRNG (`quantum_kernel_rand`), replacing the old
+constant txid `0x2000` / port `40000` that made a blind spoof trivial —
+standard DNS source-port + txid randomization. (A *sniffing* on-link
+attacker is out of scope for plain DNS-over-UDP; that is DNSSEC's remit.)
+
+A synchronous boot self-test, `net_dns_guard_selftest`, forges three
+in-memory replies — a legitimate one (accepted), a wrong-source one
+(rejected), and a wrong-dest-port one (rejected) — and the default boot
+gates on its `DNSGUARD: spoofed DNS answer rejected (src+port bound)`
+line. It needs no NIC, so it runs in every `ci-smoke`, and without the
+binding checks the spoofed replies are accepted and the boot panics
+before printing the line.
+
 ## Full CI gate (`make ci-smoke-net`)
 
 1. `NET: rtl8139 up` — NIC found via PCI and brought up
