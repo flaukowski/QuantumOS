@@ -1073,11 +1073,12 @@ ci-smoke: kernel
 		echo ""; echo "=== Smoke Test FAILED ==="; exit 1; \
 	fi
 	@echo "SUCCESS: capability delegation proven (narrowed cap enforced + cascade-revoked; no BROKEN)"
-	@# Agent-native end-to-end demo (the mission showcase): a single ring-3 citizen
-	@# runs a QPU job through the broker, imprints+recalls holographic field memory,
-	@# spawns a sub-process, AND delegates a narrowed field cap to its sub-agent —
-	@# all four verified. The one gate line prints only if EVERY step succeeded.
-	@if ! grep -q "AGENTD: DEMO OK qpu+field+spawn+delegate" /tmp/qemu-boot.log 2>/dev/null; then \
+	@# Agent-native end-to-end demo (the mission showcase): an orchestrator ring-3
+	@# citizen runs a QPU job through the broker, imprints+recalls holographic field
+	@# memory, spawns a sub-process, AND delegates a narrowed field cap to EACH of a
+	@# society of sub-agents — all four verified. The gate line prints only if every
+	@# step succeeded (society => every sub-agent proved its delegated recall).
+	@if ! grep -q "AGENTD: DEMO OK qpu+field+spawn+society" /tmp/qemu-boot.log 2>/dev/null; then \
 		echo "ERROR: agent-native end-to-end demo did not complete (AGENTD: DEMO OK)"; \
 		grep -E "AGENT BROKEN|AGENTD: DEMO BROKEN|AGENTSUB BROKEN" /tmp/qemu-boot.log 2>/dev/null || true; \
 		echo "Boot log:"; cat /tmp/qemu-boot.log 2>/dev/null || true; \
@@ -1088,7 +1089,7 @@ ci-smoke: kernel
 		grep -E "AGENT BROKEN|AGENTD: DEMO BROKEN|AGENTSUB BROKEN" /tmp/qemu-boot.log 2>/dev/null || true; \
 		echo ""; echo "=== Smoke Test FAILED ==="; exit 1; \
 	fi
-	@echo "SUCCESS: agent-native demo proven end to end (QPU + field + spawn + delegate)"
+	@echo "SUCCESS: agent-native society demo proven end to end (QPU + field + spawn + delegate to a society)"
 	@# Supervision gate: after the piped 'exit', the watchdog must restart the
 	@# shell, which reintroduces itself as reborn.
 	@if ! grep -q "QSH: reborn" /tmp/qemu-boot.log 2>/dev/null; then \

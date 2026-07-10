@@ -2790,15 +2790,20 @@ void user_qpu_test_init(void) {
     }
 }
 
-/* The agent-native end-to-end demo (the mission showcase). agentd holds the four
- * grants its story needs — QPU submit (qsub quota), field region 3, the CAP_GRANT
- * to DELEGATE that region, and spawn — and its sub-agent agentsub is capless. As
- * with the delegation demo, both are registered + started here and a bidirectional
- * capability-checked IPC pair is minted so agentd can SYS_CAP_DERIVE to agentsub
- * (the IPC-peer requirement) and each can send/recv. Neither is monitored: they
- * run their one-shot proof and idle, so the derived cap's cascade-revoke provenance
- * (and the AGENTD gate line) stay stable. Both spawn READY but do not run until the
- * timer starts after user_init, so the IPC caps exist before either sends. */
+/* Count of sub-agents in the agent society. MUST match AGENT_SUBS in
+ * user/agentd.c — agentd delegates to exactly this many. */
+#define AGENT_SOCIETY_SUBS 3
+
+/* The agent-native end-to-end demo (the mission showcase). agentd is the
+ * orchestrator: it holds the grants its story needs — QPU submit (qsub quota),
+ * field region 3, the CAP_GRANT to DELEGATE that region, and spawn — and drives
+ * a SOCIETY of AGENT_SOCIETY_SUBS capless sub-agents. All are registered + started
+ * here and a bidirectional capability-checked IPC pair is minted between agentd
+ * and EACH sub-agent, so agentd can SYS_CAP_DERIVE to each (the IPC-peer
+ * requirement) and address it. None is monitored: they run their one-shot proof
+ * and EXIT, so the derived caps' cascade-revoke provenance (and the AGENTD gate
+ * line) stay clean. All spawn READY but do not run until the timer starts after
+ * user_init, so every IPC cap exists before any of them sends. */
 void user_agent_demo_init(void) {
     /* The demo is a heavyweight SHOWCASE (an extra QPU job, a spawn, a field
      * imprint/recall, and a delegation handshake), so it is OPT-IN via the
@@ -2811,14 +2816,6 @@ void user_agent_demo_init(void) {
     if (!boot_run_agent_demo()) {
         return;
     }
-    service_definition_t agentsub_def = {
-        .name = "agentsub",
-        .entry = NULL, /* user-process service; NO grants — capless by design */
-        .user_elf_start = _binary_agentsub_elf_start,
-        .user_elf_end = _binary_agentsub_elf_end,
-        .dependencies = {NULL},
-        .max_restarts = 1,
-    };
     service_definition_t agentd_def = {
         .name = "agentd",
         .entry = NULL,
@@ -2831,34 +2828,54 @@ void user_agent_demo_init(void) {
         .grant_spawn = 1,
         .spawn_max = 2,
         /* Sole CAP_GRANT holder for region 3: READ|WRITE|GRANT, so it can imprint,
-         * recall, and delegate a narrowed READ slice. */
+         * recall, and delegate a narrowed READ slice to each sub-agent. */
         .grant_field = 1,
         .field_region = 3,
         .grant_field_delegable = 1,
     };
 
-    uint32_t sub_sid = 0, ag_sid = 0, sub_pid = 0, ag_pid = 0;
+    uint32_t ag_sid = 0, ag_pid = 0;
     service_info_t info;
-    if (service_register(&agentsub_def, &sub_sid) == SVC_SUCCESS &&
-        service_start("agentsub", NULL) == SVC_SUCCESS &&
-        service_status(sub_sid, &info) == SVC_SUCCESS) {
-        sub_pid = info.pid;
-    }
     if (service_register(&agentd_def, &ag_sid) == SVC_SUCCESS &&
         service_start("agentd", NULL) == SVC_SUCCESS &&
         service_status(ag_sid, &info) == SVC_SUCCESS) {
         ag_pid = info.pid;
     }
-    if (sub_pid == 0 || ag_pid == 0) {
-        boot_log("Warning: agent demo failed to start");
+    if (ag_pid == 0) {
+        boot_log("Warning: agentd (society orchestrator) failed to start");
         return;
     }
 
-    /* Bidirectional capability-checked IPC (the delegation-demo pattern): agentd
-     * can reach agentsub (the SYS_CAP_DERIVE IPC-peer requirement) and back. */
-    uint32_t cap = CAP_ID_INVALID;
-    cap_create(ag_pid, CAP_RESOURCE_IPC, sub_pid, CAP_READ | CAP_WRITE, 0, &cap);
-    cap_create(sub_pid, CAP_RESOURCE_IPC, ag_pid, CAP_READ | CAP_WRITE, 0, &cap);
+    /* The society: AGENT_SOCIETY_SUBS capless sub-agents, all the same ELF under
+     * distinct names, each IPC-wired to agentd both ways (the SYS_CAP_DERIVE
+     * peer requirement + the send/recv handshake). */
+    static const char *const sub_names[AGENT_SOCIETY_SUBS] = {"agentsub-0", "agentsub-1",
+                                                              "agentsub-2"};
+    int started = 0;
+    for (int i = 0; i < AGENT_SOCIETY_SUBS; i++) {
+        service_definition_t sub_def = {
+            .name = sub_names[i],
+            .entry = NULL, /* capless by design */
+            .user_elf_start = _binary_agentsub_elf_start,
+            .user_elf_end = _binary_agentsub_elf_end,
+            .dependencies = {NULL},
+            .max_restarts = 1,
+        };
+        uint32_t sid = 0;
+        if (service_register(&sub_def, &sid) == SVC_SUCCESS &&
+            service_start(sub_names[i], NULL) == SVC_SUCCESS &&
+            service_status(sid, &info) == SVC_SUCCESS && info.pid != 0) {
+            uint32_t sub_pid = info.pid;
+            uint32_t cap = CAP_ID_INVALID;
+            cap_create(ag_pid, CAP_RESOURCE_IPC, sub_pid, CAP_READ | CAP_WRITE, 0, &cap);
+            cap_create(sub_pid, CAP_RESOURCE_IPC, ag_pid, CAP_READ | CAP_WRITE, 0, &cap);
+            started++;
+        }
+    }
+    if (started < AGENT_SOCIETY_SUBS) {
+        boot_log("Warning: agent society incomplete (some sub-agents failed to start)");
+        return;
+    }
 
-    boot_log("agentd: agent-native end-to-end demo (QPU + field + spawn + delegate)");
+    boot_log("agentd: agent-native society demo (QPU + field + spawn + delegate to a society)");
 }

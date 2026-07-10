@@ -13,14 +13,17 @@
  *   3. SPAWN    — starts /bin/hello as a sub-process and waits for it to exit
  *                 (real spawn authority — only a citizen holding the cap can).
  *   4. DELEGATE — hands a strictly-NARROWED READ-only slice of its region-3 field
- *                 cap to a sub-agent (agentsub) via SYS_CAP_DERIVE over a
- *                 capability-checked IPC pair; the sub-agent recalls with it and
- *                 acks. This is "an agent hands a narrowed intent to a sub-agent."
+ *                 cap to a SOCIETY of AGENT_SUBS sub-agents (agentsub) via
+ *                 SYS_CAP_DERIVE, each over its own capability-checked IPC pair;
+ *                 every sub-agent recalls with its cap and acks. This is "an
+ *                 orchestrator hands a narrowed intent to each of several
+ *                 sub-agents" — a one-hop fan-out tree (CAP_GRANT never handed
+ *                 over, so no sub can re-delegate).
  *
  * On all four it prints the single CI merge-gate line
- *   AGENTD: DEMO OK qpu+field+spawn+delegate
+ *   AGENTD: DEMO OK qpu+field+spawn+society
  * Grants: qpu_submit(quota) + field(region 3) + field_delegable + spawn. NOT
- * monitored (a watchdog respawn would re-run the one-shot proof); idles after.
+ * monitored (a watchdog respawn would re-run the one-shot proof); exits after.
  *
  * SPDX-License-Identifier: GPL-2.0-only
  */
@@ -30,6 +33,7 @@
 #include "qpu_circuit.h"
 
 #define AGENT_REGION 3
+#define AGENT_SUBS 3 /* the society: agentd delegates to this many sub-agents */
 static const unsigned char AGENT_PHRASE[] = "agentd end to end field phrase";
 #define AGENT_PHRASE_LEN (sizeof(AGENT_PHRASE) - 1)
 
@@ -157,51 +161,72 @@ static int do_spawn(void) {
 }
 
 /* Step 4 — delegate a narrowed READ cap over region 3 to agentsub. */
+/* Step 4 — the SOCIETY: delegate a narrowed READ slice of region 3 to EACH of a
+ * society of AGENT_SUBS sub-agents (a one-hop fan-out tree — CAP_GRANT is never
+ * handed over, so no sub can re-delegate), then collect every one's "proven" ack.
+ * Each sub-agent announced itself with a "ready" whose kernel-vouched sender pid
+ * is how we address it; cap_derive requires that IPC-peer relationship (the
+ * kernel wired one per sub). */
 static int do_delegate(void) {
     char buf[16];
-    long sub = 0;
-    for (long spins = 0; spins < 8000000L && !sub; spins++) {
+    long subs[AGENT_SUBS];
+    int n = 0;
+
+    /* Collect the sub-agents' pids from their authentic "ready" messages. */
+    for (long spins = 0; spins < 20000000L && n < AGENT_SUBS; spins++) {
         long s = recv_msg(buf, sizeof(buf));
-        if (s != 0) {
-            sub = s; /* the kernel vouches the sender pid */
+        if (s != 0 && buf[0] == 'r') {
+            int dup = 0;
+            for (int i = 0; i < n; i++) {
+                if (subs[i] == s) {
+                    dup = 1;
+                }
+            }
+            if (!dup) {
+                subs[n++] = s;
+            }
         } else {
             yield();
         }
     }
-    if (!sub) {
-        write_str("AGENT BROKEN delegate no sub ready");
+    if (n < AGENT_SUBS) {
+        printf("AGENT BROKEN society only %d/%d ready\n", n, AGENT_SUBS);
         return 0;
     }
 
-    cap_derive_req_t req;
-    for (unsigned i = 0; i < sizeof(req); i++) {
-        ((unsigned char *)&req)[i] = 0;
+    /* Delegate to each sub-agent, then release it with an ADDRESSED "go". */
+    for (int i = 0; i < AGENT_SUBS; i++) {
+        cap_derive_req_t req;
+        for (unsigned b = 0; b < sizeof(req); b++) {
+            ((unsigned char *)&req)[b] = 0;
+        }
+        req.resource_type = CAP_RESOURCE_FIELD;
+        req.resource_id = AGENT_REGION;
+        req.permissions = CAP_READ; /* narrowed: no WRITE, no GRANT */
+        req.target_pid = (unsigned)subs[i];
+        req.expiration = 0;
+        long d = cap_derive_(&req);
+        if (d != 0) {
+            printf("AGENT BROKEN cap_derive[%d]=%ld\n", i, d);
+            return 0;
+        }
+        send_to(subs[i], "go", 2);
     }
-    req.resource_type = CAP_RESOURCE_FIELD;
-    req.resource_id = AGENT_REGION;
-    req.permissions = CAP_READ; /* narrowed: no WRITE, no GRANT */
-    req.target_pid = (unsigned)sub;
-    req.expiration = 0;
-    long d = cap_derive_(&req);
-    if (d != 0) {
-        printf("AGENT BROKEN cap_derive=%ld\n", d);
-        return 0;
-    }
-    send_msg("go", 2); /* the cap is ready — the sub-agent may recall now */
 
+    /* Collect every sub-agent's "proven" ack (it recalled with the delegated cap). */
     int proven = 0;
-    for (long spins = 0; spins < 40000000L && !proven; spins++) {
+    for (long spins = 0; spins < 60000000L && proven < AGENT_SUBS; spins++) {
         if (recv_msg(buf, sizeof(buf)) != 0 && buf[0] == 'p') {
-            proven = 1;
+            proven++;
         } else {
             yield();
         }
     }
-    if (!proven) {
-        write_str("AGENT BROKEN delegate no proven ack");
+    if (proven < AGENT_SUBS) {
+        printf("AGENT BROKEN society only %d/%d proven\n", proven, AGENT_SUBS);
         return 0;
     }
-    printf("AGENT: delegated region 3 (READ) to sub=%ld\n", sub);
+    printf("AGENT: delegated region 3 (READ) to a society of %d sub-agents\n", AGENT_SUBS);
     return 1;
 }
 
@@ -215,9 +240,9 @@ void _start(void) {
     int d = do_delegate();
 
     if (q && f && s && d) {
-        write_str("AGENTD: DEMO OK qpu+field+spawn+delegate");
+        write_str("AGENTD: DEMO OK qpu+field+spawn+society");
     } else {
-        printf("AGENTD: DEMO BROKEN qpu=%d field=%d spawn=%d deleg=%d\n", q, f, s, d);
+        printf("AGENTD: DEMO BROKEN qpu=%d field=%d spawn=%d society=%d\n", q, f, s, d);
     }
     /* One-shot proof: EXIT rather than idle-spin. A TERMINATED process leaves the
      * scheduler's ready queue, so the demo does not keep the idle-loop reaper (and
