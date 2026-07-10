@@ -475,6 +475,20 @@ ci-smoke: kernel
 		exit 1; \
 	fi
 	@echo "SUCCESS: argv-residue disclosure gate passed (no stale argv leak)"
+	@# Watchdog give-up gate (cross-cutting bug-hunt, state-machine class): when a
+	@# service's restart budget is exhausted, the confirmed-bad process must be
+	@# reclaimed, not left RUNNING (a hung service was leaked). Printed only after
+	@# the service self-test proves the process is destroyed on the give-up edge;
+	@# without the fix the assert trips and the boot panics.
+	@if ! grep -q "SVCGIVEUP: restart budget exhausted reclaims the process" /tmp/qemu-boot.log 2>/dev/null; then \
+		echo "ERROR: watchdog give-up reclaim gate missing (SVCGIVEUP)"; \
+		echo "Boot log:"; \
+		cat /tmp/qemu-boot.log 2>/dev/null || true; \
+		echo ""; \
+		echo "=== Smoke Test FAILED ==="; \
+		exit 1; \
+	fi
+	@echo "SUCCESS: watchdog give-up reclaim gate passed (hung service reclaimed)"
 	@# DNS answer-binding gate (adversarial bug-hunt of the untrusted-input
 	@# surface): dns_parse must reject a spoofed-source or wrong-dest-port DNS
 	@# reply (on-link SYS_RESOLVE poisoning), not just an unmatched txid. This

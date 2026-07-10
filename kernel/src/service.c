@@ -504,6 +504,15 @@ svc_result_t service_restart(uint32_t service_id) {
         return SVC_ERROR_NOT_FOUND;
     }
     if (slot->info.restart_count >= slot->info.max_restarts) {
+        /* Budget exhausted: reclaim the confirmed-bad process instead of leaving
+         * it behind. A CRASHED-but-DEAD service is already TERMINATED and gets
+         * reaped, but a HUNG one (alive yet not heart-beating — exactly what the
+         * watchdog exists to catch) would otherwise stay RUNNING forever: never
+         * re-scanned (state != RUNNING), never reaped (not TERMINATED), never
+         * stopped, holding its PCB slot and a scheduler slice. service_stop is
+         * generation-guarded and idempotent, so it destroys a still-live process
+         * or is a no-op if the pid already died and was reaped. */
+        service_stop(service_id);
         return SVC_ERROR_RESTART_LIMIT;
     }
 
@@ -740,6 +749,33 @@ svc_result_t service_selftest(void) {
     SV_ASSERT(kernel_thread_create("svc-monitor", health_monitor_thread, PRIORITY_HIGH, NULL) ==
                   STATUS_SUCCESS,
               "monitor thread");
+
+    /* Watchdog give-up must RECLAIM the process, not leak a hung one (bug-hunt:
+     * a restart-budget-exhausted service was left RUNNING forever — never
+     * re-scanned, never reaped, never stopped). max_restarts=1 (service_register
+     * replaces a 0 with the default, so 1 is the smallest usable budget): the
+     * first restart consumes it, the SECOND hits the limit and must stop the
+     * process. No watchdog-timing dependence. Runs pre-scheduler, so the started
+     * thread never executes — this exercises only the FSM give-up edge. */
+    {
+        service_definition_t giveup = {.name = "giveup-test",
+                                       .entry = device_manager_service,
+                                       .dependencies = {NULL},
+                                       .max_restarts = 1};
+        uint32_t gid = 0;
+        SV_ASSERT(service_register(&giveup, &gid) == SVC_SUCCESS, "register giveup");
+        SV_ASSERT(service_start("giveup-test", NULL) == SVC_SUCCESS, "start giveup");
+        /* First restart consumes the budget (count 0 -> 1) and respawns. */
+        SV_ASSERT(service_restart(gid) == SVC_SUCCESS, "giveup first restart");
+        service_info_t gi;
+        SV_ASSERT(service_status(gid, &gi) == SVC_SUCCESS, "giveup status");
+        uint32_t gpid = gi.pid;
+        SV_ASSERT(gpid != 0 && process_is_valid(gpid), "giveup process live before give-up");
+        /* Second restart: count 1 >= max 1 -> give up, and MUST stop the process. */
+        SV_ASSERT(service_restart(gid) == SVC_ERROR_RESTART_LIMIT, "giveup hits restart limit");
+        SV_ASSERT(!process_is_valid(gpid), "giveup process reclaimed on give-up");
+        boot_log("SVCGIVEUP: restart budget exhausted reclaims the process");
+    }
 
     boot_log("service self-test: PASS");
     return SVC_SUCCESS;
