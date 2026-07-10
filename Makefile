@@ -87,7 +87,7 @@ ASSEMBLY_SOURCES = $(wildcard $(KERNEL_DIR)/src/*.S)
 # objects (symbols _binary_<name>_elf_start/_end)
 USER_DIR = user
 USER_BUILD = $(BUILD_DIR)/user
-USER_PROGS = init echo client hbsvc ghostd ghost_test paradoxd paradox_test swarm_svc qsh quantumd kannakad fieldsyncd httpd quota_test delegation_test subagentd cpu_hog qsv
+USER_PROGS = init echo client hbsvc ghostd ghost_test paradoxd paradox_test swarm_svc qsh quantumd kannakad fieldsyncd httpd quota_test delegation_test subagentd cpu_hog qsv qpud qpu_test
 USER_ELF_OBJS = $(USER_PROGS:%=$(USER_BUILD)/%_elf.o)
 
 # libq: the freestanding ring-3 runtime, built as a static archive and linked
@@ -155,7 +155,7 @@ $(LIBQ_A): $(LIBQ_OBJS)
 
 # The archive is appended AFTER $< on the link line: ld resolves left-to-right,
 # so the program's undefined symbols must precede the archive that satisfies them.
-$(USER_BUILD)/%.elf: $(USER_DIR)/%.c $(USER_DIR)/user.ld $(USER_DIR)/usys.h $(USER_DIR)/ghost.h $(USER_DIR)/paradox.h $(USER_DIR)/sha256.h $(USER_DIR)/swarm.h $(USER_DIR)/qsv_engine.h $(LIBQ_HDRS) $(LIBQ_A)
+$(USER_BUILD)/%.elf: $(USER_DIR)/%.c $(USER_DIR)/user.ld $(USER_DIR)/usys.h $(USER_DIR)/ghost.h $(USER_DIR)/paradox.h $(USER_DIR)/sha256.h $(USER_DIR)/swarm.h $(USER_DIR)/qsv_engine.h $(USER_DIR)/qpu_circuit.h $(LIBQ_HDRS) $(LIBQ_A)
 	@mkdir -p $(USER_BUILD)
 	@echo "Building user program: $<..."
 	$(CC) $(USER_CFLAGS) -T $(USER_DIR)/user.ld -o $@ $< $(LIBQ_A)
@@ -876,6 +876,42 @@ ci-smoke: kernel
 		echo ""; echo "=== Smoke Test FAILED ==="; exit 1; \
 	fi
 	@echo "SUCCESS: qsv EXACT integer quantum computation (Grover 121/128 + 63001/65536; digest matches independent mirror, corrupt differs)"
+	@# epic #148 (A2+A3): the QPU job BROKER. Submitters (qpu_test) queue OPAQUE
+	@# circuits; the kernel enforces the QPU cap + qsub quota + slot lifecycle and
+	@# never parses a circuit; the executor (qpud) runs the exact integer engine
+	@# and returns the result. STRUCTURAL cross-reference (not a bare print): the
+	@# submitter's "job=<id>" is the kernel-assigned id, and qpud's independent
+	@# "executed job=<id> owner=" line for the SAME id proves the result was
+	@# actually brokered — forging it requires collusion on a monotonic kernel id.
+	@if grep -q "QPU BROKEN" /tmp/qemu-boot.log 2>/dev/null || grep -q "QPU: WARNING" /tmp/qemu-boot.log 2>/dev/null; then \
+		echo "ERROR: QPU broker self-check failed (QPU BROKEN / WARNING)"; \
+		grep "QPU" /tmp/qemu-boot.log 2>/dev/null || true; \
+		echo ""; echo "=== Smoke Test FAILED ==="; exit 1; \
+	fi
+	@JB=$$(grep -o "QPU: bell via broker job=[0-9]*" /tmp/qemu-boot.log | head -1 | grep -o "[0-9]*$$"); \
+	if [ -z "$$JB" ] || ! grep -qF "p=1/2 (exact)" /tmp/qemu-boot.log || ! grep -q "QPUD: executed job=$$JB owner=" /tmp/qemu-boot.log; then \
+		echo "ERROR: Bell was not brokered (no matching QPUD executed job=$$JB)"; \
+		grep "QPU" /tmp/qemu-boot.log 2>/dev/null || true; \
+		echo ""; echo "=== Smoke Test FAILED ==="; exit 1; \
+	fi
+	@JG=$$(grep -o "QPU: grover3 via broker job=[0-9]*" /tmp/qemu-boot.log | head -1 | grep -o "[0-9]*$$"); \
+	if [ -z "$$JG" ] || ! grep -qF "p=121/128" /tmp/qemu-boot.log || ! grep -q "QPUD: executed job=$$JG owner=" /tmp/qemu-boot.log; then \
+		echo "ERROR: Grover-3q was not brokered (no matching QPUD executed job=$$JG)"; \
+		grep "QPU" /tmp/qemu-boot.log 2>/dev/null || true; \
+		echo ""; echo "=== Smoke Test FAILED ==="; exit 1; \
+	fi
+	@for gate in \
+		"QPU: quota ENFORCED (third submit refused)" \
+		"QPU: capless submit denied (EPERM)" \
+		"QPU: executor submit denied (EPERM)" \
+		"QPU: submitter complete denied (EPERM)"; do \
+		if ! grep -qF "$$gate" /tmp/qemu-boot.log 2>/dev/null; then \
+			echo "ERROR: missing QPU gate: $$gate"; \
+			grep "QPU" /tmp/qemu-boot.log 2>/dev/null || true; \
+			echo ""; echo "=== Smoke Test FAILED ==="; exit 1; \
+		fi; \
+	done
+	@echo "SUCCESS: QPU broker (submit->execute->poll cross-referenced; qsub quota + WRITE/EXECUTE partition + capless deny)"
 	@# epic #137: cross-ring capability delegation. The delegator hands a
 	@# NARROWED READ-only field cap to the sub-agent; the sub-agent proves the
 	@# narrowing ({recall ok, imprint EPERM}) -> DELEG ENFORCED, then proves

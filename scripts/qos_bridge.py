@@ -934,8 +934,10 @@ class QosVM:
         text = self._collect(["audit"], deadline_s, "audit")
         st = re.search(r"^AUDIT: total=(\d+) dropped=(\d+) capacity=(\d+)", text, re.M)
         entries = []
+        # kind group is [\w?] not \w: a half-added kind formats as "?" and MUST
+        # be visible so the EMPTY/? tripwire fires (epic #148 gate-vacuity fix).
         for m in re.finditer(
-                r"^AUDIT: seq=(\d+) tick=(\d+) pid=(\d+) kind=(\w+) res=(\w+):(\*|\d+) "
+                r"^AUDIT: seq=(\d+) tick=(\d+) pid=(\d+) kind=([\w?]+) res=(\w+):(\*|\d+) "
                 r"perms=0x([0-9a-fA-F]+) verdict=(\w+) count=(\d+)", text, re.M):
             entries.append({"seq": int(m.group(1)), "tick": int(m.group(2)),
                             "pid": int(m.group(3)), "kind": m.group(4),
@@ -960,8 +962,12 @@ class QosVM:
         self._ensure_verified()
         text = self._collect(["manifest"], deadline_s, "manifest")
         manifests = {}
+        # qsub= is an OPTIONAL trailing suffix (epic #148): the anchor stays on
+        # the stable prefix so pre-qsub kernels still parse, and qsub is None
+        # when absent.
         for m in re.finditer(
-                r"^MANIFEST: pid=(\d+) bound=(\d+) spawn=(\d+)/(\*|\d+) cpu_ticks=(\d+)",
+                r"^MANIFEST: pid=(\d+) bound=(\d+) spawn=(\d+)/(\*|\d+) cpu_ticks=(\d+)"
+                r"(?: qsub=(\d+)/(\*|\d+))?",
                 text, re.M):
             pid = int(m.group(1))
             manifests[pid] = {
@@ -969,6 +975,8 @@ class QosVM:
                 "spawn_used": int(m.group(3)),
                 "spawn_max": None if m.group(4) == "*" else int(m.group(4)),
                 "cpu_ticks": int(m.group(5)),
+                "qsub_used": None if m.group(6) is None else int(m.group(6)),
+                "qsub_max": (None if m.group(7) in (None, "*") else int(m.group(7))),
                 "allow": [],
             }
         for m in re.finditer(

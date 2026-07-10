@@ -240,6 +240,17 @@
                          * Names the parent by (resource_type,resource_id), never
                          * a handle. Returns 0 or a negative errno. */
 
+#define SYS_QPU                                                                                    \
+    35 /* rdi = QPU_OP_*; the QPU job BROKER (epic #148). SUBMIT
+                         * (rsi=req) queues an OPAQUE circuit for holders of the
+                         * QPU WRITE cap, quota-gated (manifest qsub) and
+                         * in-flight-capped, returning a job id; FETCH/COMPLETE
+                         * (rsi=out/req) are the EXECUTOR's ops (QPU EXECUTE cap,
+                         * qpud only — the completer must be the fetcher, same
+                         * incarnation); POLL (rsi=job id, rdx=out) returns the
+                         * owner's job state and, when DONE, the bounded result
+                         * (slot freed). The kernel never parses a circuit. */
+
 /* SYS_RESOLVE / SYS_UDP: still pending (poll again) / queue-ring full. */
 #define RESOLVE_WOULDBLOCK ((uint64_t) - 11)
 

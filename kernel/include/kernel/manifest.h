@@ -54,7 +54,7 @@
  * with a WRONG value); when clipped, the reserved "MANIFEST: truncated=1"
  * tail line says so instead of lying by omission. */
 #define MANIFEST_TEXT_MAX 16384
-#define MANIFEST_LINE_MAX 96
+#define MANIFEST_LINE_MAX 128 /* worst-case header line with qsub= is ~113 bytes */
 
 typedef struct {
     uint32_t resource_type; /* cap_resource_type_t */
@@ -70,8 +70,15 @@ typedef struct {
     uint32_t spawn_used; /* successful spawns this incarnation (rebirth resets) */
     uint32_t cpu_limit;  /* max cumulative scheduled-in ticks; 0 = unlimited (epic #144) */
     uint64_t cpu_ticks;  /* timer ticks scheduled-in; ENFORCED against cpu_limit (#144) */
+    uint32_t qsub_max;   /* accepted-QPU-submission quota; 0 = unlimited (epic #148) */
+    uint32_t qsub_used;  /* accepted circuit submissions this incarnation (rebirth
+                          * resets; the process_destroy sweep frees the dying
+                          * incarnation's queued/finished jobs). Charged at
+                          * submit-accept — execution failure does not refund. */
     manifest_entry_t entries[MANIFEST_MAX_ENTRIES];
 } manifest_t;
+
+_Static_assert(sizeof(manifest_t) == 128, "manifest_t layout drift");
 
 /* Bind pid's manifest — an UNCONDITIONAL last-write-wins copy. Rebinding a
  * bound slot is the normal service path: finalize_user_process binds the
@@ -127,6 +134,15 @@ int manifest_spawn_precheck(uint32_t pid);
 /* Charge one successful spawn. Call ONLY after spawn_elf_args succeeds —
  * failed attempts (ENOENT/EINVAL/EIO) never consume quota. */
 void manifest_spawn_charge(uint32_t pid);
+
+/* QPU submission quota (epic #148, the spawn pair's mirror). Precheck MUST
+ * run before any submit side effect (slot search, circuit copy); a 0 has
+ * already recorded AUDIT_QUOTA {DEVICE, DEVICE_ID_QPU, CAP_WRITE}. Charge
+ * ONLY on an ACCEPTED submission — EAGAIN (full pool / in-flight cap) and
+ * EINVAL never consume quota; a submission whose EXECUTION later fails DID
+ * consume it (the authority was exercised). */
+int manifest_qsub_precheck(uint32_t pid);
+void manifest_qsub_charge(uint32_t pid);
 
 /* CPU accounting: one timer tick consumed by pid. Called from scheduler_tick
  * (IF already 0) BEFORE the quantum early-return, so it counts ticks, not

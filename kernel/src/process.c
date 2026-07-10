@@ -15,6 +15,7 @@
 #include <kernel/types.h>
 #include <kernel/capability.h>
 #include <kernel/manifest.h>
+#include <kernel/qpu.h>
 #include <kernel/quantum.h>
 #include <kernel/gdt.h>
 #include <kernel/vmspace.h>
@@ -458,6 +459,12 @@ status_t process_destroy(uint32_t pid) {
      * keeps a recycled pid from inheriting its predecessor's intent. Do not
      * hoist this below the UNUSED store. */
     manifest_clear(pid);
+
+    /* Sweep the QPU job broker (epic #148): free the dead owner's queued/
+     * finished jobs and fail-close any job this pid was EXECUTING — job
+     * slots are a per-process kernel resource like fds/sockets/caps, and a
+     * dead process can never release its own. */
+    qpu_on_process_destroy(pid);
 
     /* Free the private address space (page tables + user frames). Safe
      * here because process_destroy never runs on the current process,

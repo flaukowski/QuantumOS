@@ -425,6 +425,69 @@ static inline long cap_derive_(cap_derive_req_t *req) {
     return usys1(SYS_CAP_DERIVE, (long)req);
 }
 
+/* SYS_QPU — the QPU job broker (epic #148). Circuits are OPAQUE bytes; the
+ * kernel enforces authority + quota and never parses them. Structs must match
+ * the kernel twins (kernel/include/kernel/qpu.h + syscall.c) byte-for-byte. */
+#define SYS_QPU 35
+#define QPU_OP_SUBMIT 0
+#define QPU_OP_FETCH 1
+#define QPU_OP_COMPLETE 2
+#define QPU_OP_POLL 3
+#define QPU_CIRCUIT_MAX 256
+#define QPU_RESULT_MAX 128
+#define QPU_POLL_PENDING 1
+#define QPU_POLL_RUNNING 2
+#define QPU_POLL_DONE 3
+#define QPU_STATUS_OK 0
+#define QPU_STATUS_EXECFAIL 1
+
+typedef struct {
+    unsigned int circuit_len;
+    unsigned char circuit[QPU_CIRCUIT_MAX];
+} qpu_submit_req_t;
+_Static_assert(sizeof(qpu_submit_req_t) == 260, "qpu_submit_req twin ABI drift");
+
+typedef struct {
+    unsigned int job_id;
+    unsigned int owner_pid;
+    unsigned int circuit_len;
+    unsigned char circuit[QPU_CIRCUIT_MAX];
+} qpu_fetch_out_t;
+_Static_assert(sizeof(qpu_fetch_out_t) == 268, "qpu_fetch_out twin ABI drift");
+
+typedef struct {
+    unsigned int job_id;
+    unsigned int status;
+    unsigned int result_len;
+    unsigned char result[QPU_RESULT_MAX];
+} qpu_complete_req_t;
+_Static_assert(sizeof(qpu_complete_req_t) == 140, "qpu_complete_req twin ABI drift");
+
+typedef struct {
+    unsigned int state;
+    unsigned int status;
+    unsigned int result_len;
+    unsigned char result[QPU_RESULT_MAX];
+} qpu_poll_out_t;
+_Static_assert(sizeof(qpu_poll_out_t) == 140, "qpu_poll_out twin ABI drift");
+
+/* Submit an opaque circuit -> job id (>=1) or a negative errno. */
+static inline long qpu_submit_(qpu_submit_req_t *req) {
+    return usys2(SYS_QPU, QPU_OP_SUBMIT, (long)req);
+}
+/* Executor: fetch the oldest pending job -> job id (0 = none). */
+static inline long qpu_fetch_(qpu_fetch_out_t *out) {
+    return usys2(SYS_QPU, QPU_OP_FETCH, (long)out);
+}
+/* Executor: complete a fetched job. */
+static inline long qpu_complete_(qpu_complete_req_t *req) {
+    return usys2(SYS_QPU, QPU_OP_COMPLETE, (long)req);
+}
+/* Owner: poll a job -> QPU_POLL_* (DONE copies the result out) or a negative errno. */
+static inline long qpu_poll_(long job_id, qpu_poll_out_t *out) {
+    return usys3(SYS_QPU, QPU_OP_POLL, job_id, (long)out);
+}
+
 /* Start an initrd ELF as a new ring-3 process. `cmd` is a command line:
  * the first whitespace-separated token names the initrd file to load, and
  * the whole token list becomes the new process's argv (argv[0] = the path).

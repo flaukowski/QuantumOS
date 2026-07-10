@@ -11,6 +11,7 @@
 #include <kernel/capability.h>
 #include <kernel/process.h> /* MAX_PROCESSES */
 #include <kernel/syscall.h> /* SPAWN_RESOURCE_ID */
+#include <kernel/qpu.h>     /* DEVICE_ID_QPU (qsub quota, epic #148) */
 #include <kernel/boot.h>
 
 /* Keyed by pid (pids are process-table slot indices < MAX_PROCESSES). Lives
@@ -170,6 +171,32 @@ void manifest_spawn_charge(uint32_t pid) {
     man_irq_restore(flags);
 }
 
+int manifest_qsub_precheck(uint32_t pid) {
+    if (pid >= MAX_PROCESSES) {
+        return 1;
+    }
+    uint64_t flags = man_irq_save();
+    const manifest_t *m = &manifest_table[pid];
+    int ok = !m->bound || m->qsub_max == 0 || m->qsub_used < m->qsub_max;
+    man_irq_restore(flags);
+    if (!ok) {
+        audit_record(AUDIT_QUOTA, pid, AUDIT_V_EPERM, CAP_RESOURCE_DEVICE, DEVICE_ID_QPU,
+                     CAP_WRITE);
+    }
+    return ok;
+}
+
+void manifest_qsub_charge(uint32_t pid) {
+    if (pid >= MAX_PROCESSES) {
+        return;
+    }
+    uint64_t flags = man_irq_save();
+    if (manifest_table[pid].bound) {
+        manifest_table[pid].qsub_used++;
+    }
+    man_irq_restore(flags);
+}
+
 void manifest_tick(uint32_t pid) {
     /* Timer-interrupt context: IF is already 0, a plain aligned-u64
      * increment cannot tear against readers (every reader runs cli'd or
@@ -277,7 +304,26 @@ size_t manifest_format(char *buf, size_t max) {
         }
         l = put_str(line, l, sizeof(line), " cpu_ticks=");
         l = put_u64(line, l, sizeof(line), m->cpu_ticks);
+        /* qsub is appended LAST (epic #148): the host parsers are prefix-
+         * anchored, so a new field must be an end-of-line suffix — inserting
+         * it beside spawn= would zero every deployed manifest parse. */
+        l = put_str(line, l, sizeof(line), " qsub=");
+        l = put_u64(line, l, sizeof(line), m->qsub_used);
+        l = put_str(line, l, sizeof(line), "/");
+        if (m->qsub_max == 0) {
+            l = put_str(line, l, sizeof(line), "*");
+        } else {
+            l = put_u64(line, l, sizeof(line), m->qsub_max);
+        }
         l = put_str(line, l, sizeof(line), "\r\n");
+        /* Overflow guard: put_str clamps silently, and a clipped header that
+         * lost its \n would GLUE to the next line — the exact corruption the
+         * line-atomic contract exists to prevent. A composed line that shows
+         * any sign of clamping is dropped whole, visibly (truncated=1). */
+        if (l >= sizeof(line) - 1 || line[l - 1] != '\n') {
+            truncated = 1;
+            break;
+        }
         size_t r = put_line(buf, o, budget, line, l);
         if (r == (size_t)-1) {
             truncated = 1;
@@ -352,11 +398,22 @@ int manifest_selftest(void) {
     manifest_spawn_charge(1);
     MST_ASSERT(manifest_spawn_precheck(1) == 0, "quota allowed over limit");
 
+    /* QPU submission quota (epic #148): the same drill through the REAL qsub
+     * helpers — the deny records a synthetic AUDIT_QUOTA {DEV, QPU, WRITE} at
+     * tick=0 (the MCP gate discriminates the LIVE one by tick>0 + pid). */
+    m.qsub_max = 1;
+    manifest_bind(1, &m);
+    MST_ASSERT(manifest_qsub_precheck(1) == 1, "qsub quota refused under limit");
+    manifest_qsub_charge(1);
+    MST_ASSERT(manifest_qsub_precheck(1) == 0, "qsub quota allowed over limit");
+
     /* Rebind overwrites (last-write-wins — the start_slot-over-finalize
      * ordering depends on it), clear restores unbound-allow. */
     m.spawn_max = 0;
+    m.qsub_max = 0;
     manifest_bind(1, &m);
     MST_ASSERT(manifest_spawn_precheck(1) == 1, "rebind did not overwrite");
+    MST_ASSERT(manifest_qsub_precheck(1) == 1, "qsub rebind did not overwrite");
     manifest_clear(1);
     MST_ASSERT(manifest_check(1, CAP_RESOURCE_DEVICE, 7, CAP_WRITE) == 1, "clear did not unbind");
 
