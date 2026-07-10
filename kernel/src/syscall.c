@@ -1116,7 +1116,13 @@ static uint64_t sys_readdir(uint32_t pid, uint64_t path_ptr, uint64_t user_ptr, 
  * `ka`. Returns the token count (>= 0). argv[0] is the first token — the
  * initrd path to load; it is also copied to `path0` (bounded by pmax). */
 static int parse_cmdline(const char *cmd, kuser_args_t *ka, char *path0, size_t pmax) {
-    ka->argc = 0;
+    /* Zero the WHOLE struct before the partial, field-by-field fill below. `ka`
+     * is a reused static in sys_spawn, and finalize_user_process bulk-copies the
+     * entire struct (sizeof) into the child's user-readable args page — so any
+     * unwritten hole (the tail of strings[] past soff, argv_off[] past argc)
+     * would otherwise copy the PRIOR spawn's argv residue into a later, unrelated
+     * child, a cross-process disclosure of kernel .bss. */
+    memset(ka, 0, sizeof(*ka));
     size_t soff = 0;
     const char *p = cmd;
     while (*p && ka->argc < KARGS_MAX) {
@@ -1148,6 +1154,43 @@ static int parse_cmdline(const char *cmd, kuser_args_t *ka, char *path0, size_t 
         }
     }
     return ka->argc;
+}
+
+/* Boot self-test for the argv-residue disclosure fix (cross-cutting bug-hunt,
+ * uninit-copyout class). Parse a long command line carrying a distinctive secret
+ * token, then a SHORT one into the same buffer; after the short parse NONE of the
+ * secret may survive in the tail that finalize_user_process copies into the next
+ * child's user-readable args page. Returns 0 on pass. Anti-vacuous: without the
+ * whole-struct zero in parse_cmdline, the token persists in the reused buffer and
+ * this returns negative -> the boot panics before "QuantumOS ready". */
+int spawn_argv_leak_selftest(void) {
+    static const char TOK[] = "ZZLEAKTOKENQ"; /* 12 bytes, unlikely to occur by chance */
+    kuser_args_t ka;
+    char path[VFS_PATH_MAX];
+
+    parse_cmdline("/bin/a ZZLEAKTOKENQ", &ka, path, sizeof(path));
+    parse_cmdline("/bin/b", &ka, path, sizeof(path)); /* the fix zeroes ka first */
+
+    /* No trace of the secret may remain anywhere in the packed strings. */
+    for (size_t i = 0; i + 12 <= KARGS_STRBYTES; i++) {
+        int match = 1;
+        for (size_t j = 0; j < 12; j++) {
+            if (ka.strings[i + j] != TOK[j]) {
+                match = 0;
+                break;
+            }
+        }
+        if (match) {
+            return -1; /* stale argv residue would leak into the next child */
+        }
+    }
+    /* argv_off holes past the short parse's argc must also be cleared. */
+    for (int k = ka.argc; k < KARGS_MAX; k++) {
+        if (ka.argv_off[k] != 0) {
+            return -2;
+        }
+    }
+    return 0;
 }
 
 static uint64_t sys_spawn(uint32_t pid, uint64_t cmd_ptr) {
