@@ -1872,6 +1872,7 @@ static uint8_t *map_fresh_page(address_space_t *as, uint64_t uvaddr, bool writab
     }
     memset(frame, 0, PAGE_SIZE);
     if (!vmspace_map_page(as, uvaddr, (uint64_t)frame, writable)) {
+        pmm_free_frame(frame); /* never mapped -> vmspace_destroy can't reclaim it (cf. elf.c) */
         return NULL;
     }
     return (uint8_t *)frame;
@@ -1897,6 +1898,7 @@ status_t user_process_spawn(const char *name, const void *blob_start, const void
         uint64_t uvaddr = USER_VBASE + (uint64_t)p * PAGE_SIZE;
         uint8_t *page = map_fresh_page(&as, uvaddr, true);
         if (!page) {
+            vmspace_destroy(as.pml4); /* reclaim the private half + tables, else leak-per-attempt */
             return STATUS_NO_MEMORY;
         }
         size_t off = (size_t)p * PAGE_SIZE;
@@ -1907,6 +1909,7 @@ status_t user_process_spawn(const char *name, const void *blob_start, const void
 
     /* Zeroed writable data page (isolation canary target) */
     if (!map_fresh_page(&as, USER_DATA_VADDR, true)) {
+        vmspace_destroy(as.pml4);
         return STATUS_NO_MEMORY;
     }
 
@@ -1920,10 +1923,17 @@ status_t user_process_spawn(const char *name, const void *blob_start, const void
  * USER_ARGS_VADDR; NULL leaves the process with argc == 0. */
 static status_t finalize_user_process(address_space_t *as, const char *name, uint64_t entry,
                                       const kuser_args_t *kargs, uint32_t *pid_out) {
-    /* User stack, mapped just below USER_STACK_TOP */
+    /* User stack, mapped just below USER_STACK_TOP. Every failure return below
+     * MUST vmspace_destroy(as->pml4) before the address space is bound to a PCB
+     * (below) — until then nothing else can reclaim it, so an abandoned `as`
+     * leaks its whole private half + page tables (+ ELF segment frames on the
+     * ELF path). Unbounded, this is a ring-3-reachable pmm-exhaustion DoS: fill
+     * the process table and every further spawn leaks an address space. Mirrors
+     * spawn_elf_args's elf_load-failure cleanup (#161). */
     for (uint32_t p = 1; p <= USER_STACK_PAGES; p++) {
         uint64_t uvaddr = USER_STACK_TOP - (uint64_t)p * PAGE_SIZE;
         if (!map_fresh_page(as, uvaddr, true)) {
+            vmspace_destroy(as->pml4);
             return STATUS_NO_MEMORY;
         }
     }
@@ -1933,6 +1943,7 @@ static status_t finalize_user_process(address_space_t *as, const char *name, uin
      * get_args() reads a valid page; a spawn without args leaves argc == 0. */
     uint8_t *argpage = map_fresh_page(as, USER_ARGS_VADDR, false);
     if (!argpage) {
+        vmspace_destroy(as->pml4);
         return STATUS_NO_MEMORY;
     }
     if (kargs) {
@@ -1955,10 +1966,15 @@ static status_t finalize_user_process(address_space_t *as, const char *name, uin
     process_t *proc = NULL;
     status_t result = process_create(&params, &proc);
     if (result != STATUS_SUCCESS) {
+        /* Table full (ring-3 reachable) or any create failure: the address
+         * space is not yet bound to a PCB, so reclaim it here or it leaks. */
+        vmspace_destroy(as->pml4);
         return result;
     }
 
-    /* Bind the process to its private address space */
+    /* Bind the process to its private address space. From here ownership of `as`
+     * transfers to the PCB and process_destroy is responsible for reclaiming it
+     * — do NOT vmspace_destroy on any later path. */
     proc->cr3 = as->cr3;
     proc->virtual_address_space = as->pml4;
 

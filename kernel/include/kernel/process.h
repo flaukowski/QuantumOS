@@ -225,6 +225,11 @@ size_t process_format_ps(char *buf, size_t max);
  * to an unrelated one (epic #62 phase 3 watchdog hardening). */
 uint32_t process_get_generation(uint32_t pid);
 
+/* Test-only: arm a one-shot failure of the next process_create (as if the
+ * process table were full). Used by the spawn-leak boot self-test to drive the
+ * create-failure cleanup path deterministically. */
+void process_test_fail_next_create(void);
+
 /* Does any live process hold an open fd whose data pointer equals `data`?
  * Backs SYS_UNLINK's refuse-while-open check (epic #71): an overlay file's
  * storage may not be freed while a reader still snapshots it. */

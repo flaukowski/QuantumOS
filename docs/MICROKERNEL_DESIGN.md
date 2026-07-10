@@ -198,10 +198,21 @@ can neither leak kernel memory nor corrupt the address space:
   `p_filesz ≤ p_memsz`. A `p_vaddr` below `USER_VBASE` would otherwise map
   through the *shared* boot page directory's 2 MB `PS` pages — `vmspace_map_page`
   would misread a 2 MB frame as a page table and corrupt physical memory.
-- **No frame leak on error.** `load_segment` frees a frame it allocated but
-  could not map, and `spawn_elf_args` calls `vmspace_destroy` on any `elf_load`
-  error — otherwise spawning a non-ELF initrd file from qsh leaked the two
-  address-space frames per attempt (a ring-3-reachable exhaustion DoS).
+- **No frame leak on error.** *Every* spawn error path that has already built
+  (part of) a private address space reclaims it with `vmspace_destroy` before
+  returning — `load_segment` frees a frame it allocated but could not map,
+  `map_fresh_page` frees its unmapped frame, and `spawn_elf_args`,
+  `user_process_spawn`, and `finalize_user_process` each `vmspace_destroy` on
+  their OOM / `process_create`-failure paths (up until the address space is
+  *bound* to a PCB, after which `process_destroy` owns it). Otherwise a spawn
+  leaks its whole private half + page tables per failed attempt: spawning a
+  non-ELF initrd file from qsh leaked on the `elf_load` path, and — once the
+  256-slot process table is full — *every* further `run` leaks an address space
+  on the `process_create`-failure path, a ring-3-reachable pmm-exhaustion DoS.
+  A boot self-test (`spawn_leak_selftest`, using a one-shot `process_create`
+  fault-injection seam) drives the create-failure path and asserts the pmm
+  free-frame count is unchanged, gating on `SPAWNLEAK: failed spawn reclaimed
+  address space (no leak)`.
 
 A kernel boot self-test (`elf_spawn_selftest`) drives all three rejection paths
 every boot and asserts the pmm free-frame count is unchanged, emitting
