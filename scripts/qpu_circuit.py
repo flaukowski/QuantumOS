@@ -22,9 +22,14 @@ QC_OP_ORACLE = 7
 QC_OP_DIFFUSION = 8
 
 
-def build(n_qubits, ops, probe=0):
-    """ops: list of (opcode, a, b). Returns the opaque circuit bytes."""
-    assert 1 <= n_qubits <= 12
+def build(n_qubits, ops, probe=0, max_qubits=12):
+    """ops: list of (opcode, a, b). Returns the opaque circuit bytes.
+
+    max_qubits defaults to 12 — the in-OS broker's limit (QSV_MAX_QUBITS), so a
+    circuit built for SYS_QPU is validated at build time. Host-only scale tests
+    (a GPU/QPU backend past qsv's exact range) pass a larger cap; n_qubits is a
+    u8 in the wire format, so up to 255 is representable."""
+    assert 1 <= n_qubits <= max_qubits <= 255
     assert 0 <= probe < (1 << n_qubits)
     assert len(ops) <= 255
     b = bytearray(QC_HDR)
@@ -58,9 +63,9 @@ def bell(probe=0):
     return build(2, [(QC_OP_H, 0, 0), (QC_OP_CNOT, 0, 1)], probe)
 
 
-def ghz(n, probe=0):
+def ghz(n, probe=0, max_qubits=12):
     ops = [(QC_OP_H, 0, 0)] + [(QC_OP_CNOT, i, i + 1) for i in range(n - 1)]
-    return build(n, ops, probe)
+    return build(n, ops, probe, max_qubits)
 
 
 def grover(n, target, iters):
