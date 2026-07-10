@@ -462,6 +462,19 @@ ci-smoke: kernel
 		exit 1; \
 	fi
 	@echo "SUCCESS: spawn address-space-leak gate passed (failed spawn reclaimed)"
+	@# Argv-residue disclosure gate (cross-cutting bug-hunt, uninit-copyout class):
+	@# the reused command-line parse buffer must not copy a prior spawn's argv into
+	@# a later child's readable args page. Printed only after the self-test
+	@# confirms no residue; without the parse_cmdline zero the boot panics here.
+	@if ! grep -q "ARGVLEAK: reused spawn buffer carries no stale argv residue" /tmp/qemu-boot.log 2>/dev/null; then \
+		echo "ERROR: argv-residue disclosure gate missing (ARGVLEAK)"; \
+		echo "Boot log:"; \
+		cat /tmp/qemu-boot.log 2>/dev/null || true; \
+		echo ""; \
+		echo "=== Smoke Test FAILED ==="; \
+		exit 1; \
+	fi
+	@echo "SUCCESS: argv-residue disclosure gate passed (no stale argv leak)"
 	@# DNS answer-binding gate (adversarial bug-hunt of the untrusted-input
 	@# surface): dns_parse must reject a spoofed-source or wrong-dest-port DNS
 	@# reply (on-link SYS_RESOLVE poisoning), not just an unmatched txid. This

@@ -46,6 +46,17 @@ loader does **no** overlap check, so the total image (including the heap
 arena) must fit below the args page. `user/user.ld` enforces this with a
 mandatory `ASSERT(_end <= 0x40080000)`, leaving ≥64 KiB of margin.
 
+The args page is populated by copying the whole kernel-side `kuser_args_t`
+into it, and that struct is a **reused static** in `sys_spawn`. Because
+`SYS_SPAWN` copies the entire `sizeof(struct)` — argv-offset table plus the
+480-byte string pool — a child could otherwise read, past its own `argc`, the
+high-water-mark residue of a *prior* spawn's command line (a cross-process
+disclosure of kernel `.bss`). `parse_cmdline` therefore zeroes the whole struct
+before its partial field-by-field fill, so only the current spawn's argv is
+ever visible. The boot self-test `spawn_argv_leak_selftest` parses a
+secret-bearing long line then a short one and asserts no residue survives,
+gating on `ARGVLEAK: reused spawn buffer carries no stale argv residue`.
+
 ## The syscall ABI
 
 Syscalls use `int 0x80`: the number in `rax`, up to three arguments in

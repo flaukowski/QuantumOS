@@ -350,6 +350,16 @@ static void core_services_init(void) {
     }
     boot_log("SPAWNLEAK: failed spawn reclaimed address space (no leak)");
 
+    // Argv-residue disclosure gate (cross-cutting bug-hunt, uninit-copyout
+    // class): the reused command-line parse buffer must not carry a prior
+    // spawn's argv into a later child's readable args page. Without the
+    // parse_cmdline whole-struct zero the self-test finds the residue and the
+    // boot panics here.
+    if (spawn_argv_leak_selftest() != 0) {
+        boot_panic("argv-residue disclosure self-test failed");
+    }
+    boot_log("ARGVLEAK: reused spawn buffer carries no stale argv residue");
+
     // DNS answer-binding gate (adversarial bug-hunt of the untrusted-input
     // surface): dns_parse must reject a spoofed-source or wrong-port DNS reply,
     // not just an unmatched txid — otherwise an on-link node poisons every

@@ -342,4 +342,9 @@ status_t user_process_spawn(const char *name, const void *blob_start, const void
 status_t user_process_spawn_elf(const char *name, const void *elf_start, const void *elf_end,
                                 uint32_t *pid_out);
 
+/* Boot self-test: proves the reused command-line parse buffer carries no stale
+ * argv residue into a later child's args page (cross-process disclosure).
+ * Returns 0 on pass, negative on the first failure. */
+int spawn_argv_leak_selftest(void);
+
 #endif /* SYSCALL_H */
