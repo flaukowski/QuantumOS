@@ -275,9 +275,23 @@ status_t process_init(void) {
 /**
  * Create a new process
  */
+/* One-shot fault-injection seam (test-only): when armed, the next
+ * process_create fails as if the process table were full, WITHOUT creating a
+ * process. Lets the spawn-leak boot self-test deterministically drive
+ * finalize_user_process's create-failure path (which must reclaim the
+ * address space) instead of having to fill all MAX_PROCESSES slots. */
+static int g_test_fail_next_create = 0;
+void process_test_fail_next_create(void) {
+    g_test_fail_next_create = 1;
+}
+
 status_t process_create(const process_create_params_t *params, process_t **process) {
     if (!process_table_initialized) {
         return STATUS_ERROR;
+    }
+    if (g_test_fail_next_create) {
+        g_test_fail_next_create = 0;
+        return PROCESS_ERROR_TOO_MANY_PROCESSES;
     }
 
     status_t result = validate_process_params(params);

@@ -53,6 +53,10 @@ extern uint8_t __end;
 // malformed-spawn rejection paths and asserts no frame leak. Returns 0 on pass.
 extern int elf_spawn_selftest(void);
 
+// Spawn address-space-leak self-test (kernel/src/process_test.c): drives the
+// process_create-failure path and asserts the built address space is reclaimed.
+extern int spawn_leak_selftest(void);
+
 // Boot state tracking
 static boot_state_t current_boot_state = BOOT_STATE_FIRMWARE;
 static boot_config_t boot_config;
@@ -335,6 +339,16 @@ static void core_services_init(void) {
         boot_panic("ELF-loader hardening self-test failed");
     }
     boot_log("ELFGUARD: malformed spawn rejected, no frame leak");
+
+    // Spawn address-space-leak gate (cross-cutting bug-hunt, resource-leak
+    // class): a spawn that builds a full private address space then fails at
+    // process_create (ring-3 reachable by filling the process table) must
+    // reclaim it. Without finalize_user_process's vmspace_destroy on that path,
+    // the self-test sees a frame leak and the boot panics here.
+    if (spawn_leak_selftest() != 0) {
+        boot_panic("spawn address-space-leak self-test failed");
+    }
+    boot_log("SPAWNLEAK: failed spawn reclaimed address space (no leak)");
 
     // DNS answer-binding gate (adversarial bug-hunt of the untrusted-input
     // surface): dns_parse must reject a spoofed-source or wrong-port DNS reply,

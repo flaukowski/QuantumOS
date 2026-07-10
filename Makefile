@@ -448,6 +448,20 @@ ci-smoke: kernel
 		exit 1; \
 	fi
 	@echo "SUCCESS: ELF-loader hardening gate passed (malformed spawns rejected, no leak)"
+	@# Spawn address-space-leak gate (cross-cutting bug-hunt, resource-leak class):
+	@# a spawn that builds a full address space then fails at process_create
+	@# (ring-3 reachable by filling the process table) must reclaim it. Printed
+	@# only after the self-test confirms no frame leak; without the finalize_user
+	@# _process vmspace_destroy fix the boot panics before this line.
+	@if ! grep -q "SPAWNLEAK: failed spawn reclaimed address space (no leak)" /tmp/qemu-boot.log 2>/dev/null; then \
+		echo "ERROR: spawn address-space-leak gate missing (SPAWNLEAK)"; \
+		echo "Boot log:"; \
+		cat /tmp/qemu-boot.log 2>/dev/null || true; \
+		echo ""; \
+		echo "=== Smoke Test FAILED ==="; \
+		exit 1; \
+	fi
+	@echo "SUCCESS: spawn address-space-leak gate passed (failed spawn reclaimed)"
 	@# DNS answer-binding gate (adversarial bug-hunt of the untrusted-input
 	@# surface): dns_parse must reject a spoofed-source or wrong-dest-port DNS
 	@# reply (on-link SYS_RESOLVE poisoning), not just an unmatched txid. This

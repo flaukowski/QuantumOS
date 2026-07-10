@@ -123,3 +123,36 @@ int elf_spawn_selftest(void) {
     }
     return 0;
 }
+
+/* Spawn address-space-leak self-test (cross-cutting bug-hunt, resource-leak
+ * class). A spawn that gets a full private address space BUILT (code/stack/arg
+ * pages mapped) but then fails at process_create — reachable from ring-3 by
+ * filling the 256-slot process table, then every further `run` — must reclaim
+ * that address space, or each failed attempt leaks its PML4+PDPT+all mapped
+ * frames permanently (a pmm-exhaustion DoS). The fault-injection seam forces the
+ * create failure deterministically without filling the table. Returns 0 on pass.
+ *
+ * Anti-vacuous: WITHOUT finalize_user_process's vmspace_destroy on the
+ * create-failure path, the failed spawn below leaks the whole address space, so
+ * the free-frame count drops and this returns -2 -> the boot panics before
+ * "QuantumOS ready". */
+int spawn_leak_selftest(void) {
+    static uint8_t blob[16];
+    for (int i = 0; i < 16; i++) {
+        blob[i] = 0x90; /* NOP-ish; contents irrelevant, spawn fails at create */
+    }
+    uint32_t before = pmm_get_free_frames();
+    uint32_t pid = 0;
+
+    process_test_fail_next_create();
+    status_t r = user_process_spawn("spawnleak-test", blob, blob + sizeof(blob), &pid);
+    if (r == STATUS_SUCCESS) {
+        return -1; /* the injected failure should have prevented creation */
+    }
+
+    uint32_t after = pmm_get_free_frames();
+    if (after != before) {
+        return -2; /* the failed spawn leaked its address space */
+    }
+    return 0;
+}
