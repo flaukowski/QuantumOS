@@ -12,15 +12,18 @@
  *                 associative memory), verifying the exact stored bytes return.
  *   3. SPAWN    — starts /bin/hello as a sub-process and waits for it to exit
  *                 (real spawn authority — only a citizen holding the cap can).
- *   4. DELEGATE — hands a strictly-NARROWED READ-only slice of its region-3 field
- *                 cap to a SOCIETY of AGENT_SUBS sub-agents (agentsub) via
- *                 SYS_CAP_DERIVE, each over its own capability-checked IPC pair;
- *                 every sub-agent recalls the phrase from its OWN pid-salted
- *                 noisy probe and acks the DIGEST of what it recalled; the
+ *   4. DELEGATE — SPAWNS its own society of AGENT_SUBS /bin/agentsub citizens
+ *                 (each spawn mints a parent<->child IPC channel — the
+ *                 spawn-channel grant, epic #175 — so the roster is the spawn
+ *                 returns, with no kernel hand-wiring), then hands each a
+ *                 strictly-NARROWED READ-only slice of its region-3 field cap
+ *                 via SYS_CAP_DERIVE over that spawn-minted pair; every
+ *                 sub-agent recalls the phrase from its OWN pid-salted noisy
+ *                 probe and acks the DIGEST of what it recalled; the
  *                 orchestrator requires a matching digest from each distinct
  *                 delegate (content consensus, deduped by vouched sender pid).
- *                 This is "an orchestrator hands a narrowed intent to each of
- *                 several sub-agents" — a one-hop fan-out tree (CAP_GRANT never
+ *                 This is "an orchestrator assembles sub-agents and hands each
+ *                 a narrowed intent" — a one-hop fan-out tree (CAP_GRANT never
  *                 handed over, so no sub can re-delegate).
  *
  * On all four it prints the single CI merge-gate line
@@ -193,30 +196,41 @@ static int do_spawn(void) {
     return 0;
 }
 
-/* Step 4 — the SOCIETY: delegate a narrowed READ slice of region 3 to EACH of a
- * society of AGENT_SUBS sub-agents (a one-hop fan-out tree — CAP_GRANT is never
- * handed over, so no sub can re-delegate), then collect a digest-bearing ack
- * from every one and check it for content CONSENSUS. Each sub-agent announced
- * itself with a "ready" whose kernel-vouched sender pid is how we address it;
- * cap_derive requires that IPC-peer relationship (the kernel wired one per
- * sub). */
+/* Step 4 — the SOCIETY, self-assembled: SPAWN AGENT_SUBS /bin/agentsub
+ * citizens (each spawn mints the parent<->child IPC channel — agentd holds the
+ * spawn-channel grant, so the roster IS the spawn returns; no kernel
+ * hand-wiring), collect a liveness "ready" from EACH child, then delegate a
+ * narrowed READ slice of region 3 to each (a one-hop fan-out tree — CAP_GRANT
+ * is never handed over, so no sub can re-delegate) and collect a
+ * digest-bearing ack from every one for content CONSENSUS. cap_derive's
+ * IPC-peer requirement is satisfied by the spawn-minted pair. */
 static int do_delegate(void) {
     char buf[16];
     long subs[AGENT_SUBS];
-    int n = 0;
 
-    /* Collect the sub-agents' pids from their authentic "ready" messages. */
+    /* Assemble our own society. */
+    for (int i = 0; i < AGENT_SUBS; i++) {
+        long p = spawn_("/bin/agentsub");
+        if (p <= 0) {
+            printf("AGENT BROKEN society spawn[%d]=%ld\n", i, p);
+            return 0;
+        }
+        subs[i] = p;
+    }
+
+    /* Collect a liveness "ready" from EACH spawned child — the kernel-vouched
+     * sender pid must be one of OUR spawns (an unknown or duplicate sender
+     * never counts toward the roster). */
+    int ready_from[AGENT_SUBS] = {0};
+    int n = 0;
     for (long spins = 0; spins < 20000000L && n < AGENT_SUBS; spins++) {
         long s = recv_msg(buf, sizeof(buf));
         if (s != 0 && buf[0] == 'r') {
-            int dup = 0;
-            for (int i = 0; i < n; i++) {
-                if (subs[i] == s) {
-                    dup = 1;
+            for (int i = 0; i < AGENT_SUBS; i++) {
+                if (subs[i] == s && !ready_from[i]) {
+                    ready_from[i] = 1;
+                    n++;
                 }
-            }
-            if (!dup) {
-                subs[n++] = s;
             }
         } else {
             yield();

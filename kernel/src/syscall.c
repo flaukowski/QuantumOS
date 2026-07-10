@@ -63,7 +63,8 @@ extern const uint8_t _binary_qsv_elf_start[], _binary_qsv_elf_end[];
 extern const uint8_t _binary_qpud_elf_start[], _binary_qpud_elf_end[];
 extern const uint8_t _binary_qpu_test_elf_start[], _binary_qpu_test_elf_end[];
 extern const uint8_t _binary_agentd_elf_start[], _binary_agentd_elf_end[];
-extern const uint8_t _binary_agentsub_elf_start[], _binary_agentsub_elf_end[];
+/* agentsub is NOT kernel-embedded: it ships on the initrd as /bin/agentsub and
+ * agentd spawns its own society from there (epic #175). */
 
 /* Argument vector ABI (epic #62). MUST stay byte-identical to user_args_t
  * in user/usys.h — there is no shared header across the ring boundary. The
@@ -1227,6 +1228,23 @@ static uint64_t sys_spawn(uint32_t pid, uint64_t cmd_ptr) {
     if (!manifest_spawn_precheck(pid)) {
         return SYSCALL_EPERM;
     }
+    /* Spawn-time parent<->child IPC channel opt-in (epic #175). Capacity is
+     * verified BEFORE any side effect so the postcondition is all-or-nothing:
+     * a returned pid ALWAYS carries a fully wired bidirectional channel —
+     * never a half-minted one whose mute child times the demo out minutes
+     * from the fault. Race-free: syscalls run cli'd on one CPU and the IF=1
+     * reaper only FREES slots, so free capacity cannot shrink between this
+     * check and the mints after spawn_elf_args. A refusal is audited so the
+     * ledger explains the failure. */
+    int spawn_channel = manifest_spawn_channel(pid);
+    if (spawn_channel) {
+        cap_stats_t cs;
+        cap_get_stats(&cs);
+        if (cs.active + 2 > MAX_CAPABILITIES) {
+            audit_deny(pid, CAP_RESOURCE_IPC, AUDIT_RESOURCE_ANY, CAP_READ | CAP_WRITE);
+            return SYSCALL_EIO;
+        }
+    }
 
     /* Copy the whole command line (path + args) out of user memory.
      * copy_user_string validates each page (present|user) before touching it,
@@ -1261,6 +1279,26 @@ static uint64_t sys_spawn(uint32_t pid, uint64_t cmd_ptr) {
     uint32_t new_pid = 0;
     if (spawn_elf_args(name, data, data + size, &ka, &new_pid) != STATUS_SUCCESS) {
         return SYSCALL_EIO;
+    }
+    /* Mint the opted-in parent<->child channel (epic #175): a bidirectional
+     * capability-checked IPC pair, tagged spawn-channel so the surviving half
+     * UNLINKs when either end dies (process_destroy) — pids recycle first-fit,
+     * so an untagged leftover would hand this parent a live channel into an
+     * unrelated future process. Provably CAP_SUCCESS after the capacity
+     * precheck above (cli'd syscall; the reaper only frees); guarded anyway —
+     * an unwired child must never look wired. NO manifest_grant on either
+     * side: IPC caps are pair-wise runtime wiring, deliberately OUTSIDE the
+     * manifest (the epic #135 rule), and the derive peer check is cap-only. */
+    if (spawn_channel) {
+        uint32_t ch = CAP_ID_INVALID;
+        if (cap_create(pid, CAP_RESOURCE_IPC, new_pid, CAP_READ | CAP_WRITE, 0, &ch) ==
+            CAP_SUCCESS) {
+            cap_mark_spawn_channel(ch);
+        }
+        if (cap_create(new_pid, CAP_RESOURCE_IPC, pid, CAP_READ | CAP_WRITE, 0, &ch) ==
+            CAP_SUCCESS) {
+            cap_mark_spawn_channel(ch);
+        }
     }
     /* Charge the quota only on a real spawn (epic #135) — failed lookups /
      * loads above never reach here, so a typo'd `run /bin/nope` costs no
@@ -2790,23 +2828,19 @@ void user_qpu_test_init(void) {
     }
 }
 
-/* Count of sub-agents in the agent society. MUST match AGENT_SUBS in
- * user/agentd.c — agentd delegates to exactly this many. */
-#define AGENT_SOCIETY_SUBS 3
-
 /* The agent-native end-to-end demo (the mission showcase). agentd is the
  * orchestrator: it holds the grants its story needs — QPU submit (qsub quota),
- * field region 3, the CAP_GRANT to DELEGATE that region, and spawn — and drives
- * a SOCIETY of AGENT_SOCIETY_SUBS capless sub-agents. All are registered + started
- * here and a bidirectional capability-checked IPC pair is minted between agentd
- * and EACH sub-agent, so agentd can SYS_CAP_DERIVE to each (the IPC-peer
- * requirement) and address it. None is monitored: they run their one-shot proof
- * and EXIT, so the derived caps' cascade-revoke provenance (and the AGENTD gate
- * line) stay clean. All spawn READY but do not run until the timer starts after
- * user_init, so every IPC cap exists before any of them sends. */
+ * field region 3, the CAP_GRANT to DELEGATE that region, spawn, and the
+ * spawn-CHANNEL opt-in (epic #175) — and ASSEMBLES ITS OWN SOCIETY: it spawns
+ * AGENT_SUBS /bin/agentsub citizens itself, and each spawn mints the
+ * bidirectional capability-checked IPC pair (the SYS_CAP_DERIVE peer
+ * requirement + the handshake) with no kernel hand-wiring. The kernel's whole
+ * job here is registering the one orchestrator. Not monitored: the demo is a
+ * one-shot proof; everything it spawns exits, its channel caps UNLINK, and its
+ * own caps cascade-revoke. */
 void user_agent_demo_init(void) {
-    /* The demo is a heavyweight SHOWCASE (an extra QPU job, a spawn, a field
-     * imprint/recall, and a delegation handshake), so it is OPT-IN via the
+    /* The demo is a heavyweight SHOWCASE (an extra QPU job, spawns, a field
+     * imprint/recall, and a delegation fan-out), so it is OPT-IN via the
      * `agentdemo` cmdline token — off by default so its added boot work never
      * delays the timing-sensitive proofs other CI gates poll for (e.g. the MCP
      * gate's delegation-reap) without those gates ever checking the demo. The
@@ -2826,7 +2860,11 @@ void user_agent_demo_init(void) {
         .grant_qpu_submit = 1,
         .qsub_max = 4,
         .grant_spawn = 1,
-        .spawn_max = 2,
+        /* /bin/hello (step 3) + the 3-sub society (step 4) — exactly 4. */
+        .spawn_max = 4,
+        /* Every agentd spawn mints a parent<->child IPC pair (epic #175):
+         * the roster of its society IS its spawn returns. */
+        .grant_spawn_channel = 1,
         /* Sole CAP_GRANT holder for region 3: READ|WRITE|GRANT, so it can imprint,
          * recall, and delegate a narrowed READ slice to each sub-agent. */
         .grant_field = 1,
@@ -2846,36 +2884,6 @@ void user_agent_demo_init(void) {
         return;
     }
 
-    /* The society: AGENT_SOCIETY_SUBS capless sub-agents, all the same ELF under
-     * distinct names, each IPC-wired to agentd both ways (the SYS_CAP_DERIVE
-     * peer requirement + the send/recv handshake). */
-    static const char *const sub_names[AGENT_SOCIETY_SUBS] = {"agentsub-0", "agentsub-1",
-                                                              "agentsub-2"};
-    int started = 0;
-    for (int i = 0; i < AGENT_SOCIETY_SUBS; i++) {
-        service_definition_t sub_def = {
-            .name = sub_names[i],
-            .entry = NULL, /* capless by design */
-            .user_elf_start = _binary_agentsub_elf_start,
-            .user_elf_end = _binary_agentsub_elf_end,
-            .dependencies = {NULL},
-            .max_restarts = 1,
-        };
-        uint32_t sid = 0;
-        if (service_register(&sub_def, &sid) == SVC_SUCCESS &&
-            service_start(sub_names[i], NULL) == SVC_SUCCESS &&
-            service_status(sid, &info) == SVC_SUCCESS && info.pid != 0) {
-            uint32_t sub_pid = info.pid;
-            uint32_t cap = CAP_ID_INVALID;
-            cap_create(ag_pid, CAP_RESOURCE_IPC, sub_pid, CAP_READ | CAP_WRITE, 0, &cap);
-            cap_create(sub_pid, CAP_RESOURCE_IPC, ag_pid, CAP_READ | CAP_WRITE, 0, &cap);
-            started++;
-        }
-    }
-    if (started < AGENT_SOCIETY_SUBS) {
-        boot_log("Warning: agent society incomplete (some sub-agents failed to start)");
-        return;
-    }
-
-    boot_log("agentd: agent-native society demo (QPU + field + spawn + delegate to a society)");
+    boot_log(
+        "agentd: agent-native society demo (orchestrator spawns + delegates to its own society)");
 }

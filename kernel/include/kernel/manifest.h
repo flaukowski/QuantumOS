@@ -69,7 +69,8 @@ typedef struct {
 typedef struct {
     uint8_t bound; /* 0 = no manifest (ring 0 / cleared slot) */
     uint8_t entry_count;
-    uint16_t reserved;
+    uint8_t spawn_channel; /* opt-in: SYS_SPAWN mints parent<->child IPC caps (epic #175) */
+    uint8_t reserved;
     uint32_t spawn_max;  /* successful-spawn quota; 0 = bound but unlimited */
     uint32_t spawn_used; /* successful spawns this incarnation (rebirth resets) */
     uint32_t cpu_limit;  /* max cumulative scheduled-in ticks; 0 = unlimited (epic #144) */
@@ -134,6 +135,12 @@ int manifest_check(uint32_t pid, uint32_t resource_type, uint32_t resource_id,
  * parse, initrd lookup). Returns 1 (under quota / unbound / unlimited) or 0
  * (spawn_used >= spawn_max) — a 0 has already recorded AUDIT_QUOTA. */
 int manifest_spawn_precheck(uint32_t pid);
+
+/* True if pid opted in to spawn-time parent<->child IPC channels (epic #175).
+ * Plain read, no lock: same discipline as manifest_over_budget — every writer
+ * runs under irqsave and the flag is a single byte on one CPU. Unbound pids
+ * (ring 0) read false: the channel is a declared grant, never ambient. */
+int manifest_spawn_channel(uint32_t pid);
 
 /* Charge one successful spawn. Call ONLY after spawn_elf_args succeeds —
  * failed attempts (ENOENT/EINVAL/EIO) never consume quota. */

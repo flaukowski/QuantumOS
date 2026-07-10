@@ -171,6 +171,16 @@ void manifest_spawn_charge(uint32_t pid) {
     man_irq_restore(flags);
 }
 
+/* Plain single-byte read (the manifest_over_budget discipline); unbound = 0,
+ * so the spawn channel is never ambient authority. */
+int manifest_spawn_channel(uint32_t pid) {
+    if (pid >= MAX_PROCESSES) {
+        return 0;
+    }
+    const manifest_t *m = &manifest_table[pid];
+    return m->bound && m->spawn_channel;
+}
+
 int manifest_qsub_precheck(uint32_t pid) {
     if (pid >= MAX_PROCESSES) {
         return 1;

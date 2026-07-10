@@ -296,6 +296,27 @@ for doc in $DOC_FILES; do
     done
 done
 
+# Pattern 3: Ring-3 text-dump buffers must cover their kernel rings WHOLE.
+# There is no shared header across the ring boundary, so these constants can
+# silently drift: AUDIT_TEXT_MAX was left at 12288 (the 128-entry era) when the
+# audit ring doubled to 256, and every dump past 12KB truncated MID-LINE — the
+# MCP gate's late REAP probes read a ledger that simply ended before the rows
+# they poll for. Recompute the kernel's sizes here and fail on any mismatch.
+AUDIT_ENTRIES=$(grep -oP '#define AUDIT_LOG_ENTRIES \K[0-9]+' "$KERNEL_DIR/include/kernel/audit.h" || echo 0)
+AUDIT_LINE=$(grep -oP '#define AUDIT_LINE_MAX \K[0-9]+' "$KERNEL_DIR/include/kernel/audit.h" || echo 0)
+USER_AUDIT_MAX=$(grep -oP '#define AUDIT_TEXT_MAX \K[0-9]+' "$PROJECT_ROOT/user/usys.h" || echo 0)
+KERNEL_AUDIT_MAX=$((AUDIT_ENTRIES * AUDIT_LINE))
+if [ "$KERNEL_AUDIT_MAX" -eq 0 ] || [ "$USER_AUDIT_MAX" -lt "$KERNEL_AUDIT_MAX" ]; then
+    echo -e "${RED}ERROR: user AUDIT_TEXT_MAX ($USER_AUDIT_MAX) < kernel AUDIT_MAX_BYTES ($KERNEL_AUDIT_MAX = ${AUDIT_ENTRIES}*${AUDIT_LINE}) — audit dumps will truncate mid-line${NC}"
+    ERRORS_FOUND=$((ERRORS_FOUND+1))
+fi
+KERNEL_MANIFEST_MAX=$(grep -oP '#define MANIFEST_TEXT_MAX \K[0-9]+' "$KERNEL_DIR/include/kernel/manifest.h" || echo 0)
+USER_MANIFEST_MAX=$(grep -oP '#define MANIFEST_TEXT_MAX \K[0-9]+' "$PROJECT_ROOT/user/usys.h" || echo 0)
+if [ "$KERNEL_MANIFEST_MAX" -eq 0 ] || [ "$USER_MANIFEST_MAX" -lt "$KERNEL_MANIFEST_MAX" ]; then
+    echo -e "${RED}ERROR: user MANIFEST_TEXT_MAX ($USER_MANIFEST_MAX) < kernel MANIFEST_TEXT_MAX ($KERNEL_MANIFEST_MAX) — manifest dumps will truncate${NC}"
+    ERRORS_FOUND=$((ERRORS_FOUND+1))
+fi
+
 echo ""
 echo -e "${BLUE}=== Summary ===${NC}"
 if [ $ERRORS_FOUND -eq 0 ] && [ $WARNINGS_FOUND -eq 0 ]; then

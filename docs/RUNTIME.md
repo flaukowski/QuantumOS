@@ -147,12 +147,36 @@ live so it cannot ship as dead code. IPC caps stay OUTSIDE the manifest
 (pair-wise runtime wiring, not declarative intent). The ledger records
 the full **revocation lifecycle** with honest kinds: `AUDIT_REVOKE` for
 an explicit `cap_revoke` (+ its cascade), `AUDIT_REAP` for slots freed
-because their owner died (the reaper's cleanup + cascade) — a verifier
-never mistakes garbage collection for exercised revocation authority.
-Each cascade-freed delegated cap records the *recipient's* pid (the
-holdings that changed), proven every boot by the delegation demo: the
-exited delegator's own FIELD cap REAPs under its pid, and subagentd's
-derived READ cap REAPs under subagentd's.
+because their owner died (the reaper's cleanup + cascade), and
+`AUDIT_UNLINK` for a **spawn-channel** cap freed under its *surviving*
+owner because the channel's TARGET died (epic #175 — never conflated
+with REAP, which must keep meaning "owner died"; the dead pid rides in
+`resource_id`) — a verifier never mistakes garbage collection for
+exercised revocation authority. Each cascade-freed delegated cap records
+the *recipient's* pid (the holdings that changed), proven every boot by
+the delegation demo: the exited delegator's own FIELD cap REAPs under
+its pid, and subagentd's derived READ cap REAPs under subagentd's.
+
+**Spawn-time parent↔child IPC channels (epic #175).** A citizen holding
+the **`grant_spawn_channel`** opt-in (alongside `grant_spawn`) gets a
+bidirectional capability-checked IPC pair minted at every `SYS_SPAWN` —
+the pipe-at-fork analogue, satisfying `SYS_CAP_DERIVE`'s IPC-peer
+requirement for processes it creates. The mint is all-or-nothing (cap
+capacity is prechecked before the child exists, so a returned pid always
+carries a fully wired channel) and adds **no manifest rows** (IPC stays
+outside the manifest). The pair is tagged at mint; when either end dies,
+`process_destroy` frees the survivor's half **before the pid slot is
+reusable** (pids recycle first-fit — an untagged leftover would hand the
+parent a live channel into an unrelated future process), recording
+`AUDIT_UNLINK`. The teardown is scoped by tag AND resource type, so
+kernel hand-minted pairs survive a monitored peer's watchdog restart; a
+boot self-test (`CAPUNLINK`, ci-smoke-gated) asserts the dead-target cap
+is freed while a live-target tagged cap, a colliding-`resource_id`
+non-IPC cap, and an untagged pair all survive. The opt-in is deliberately
+NOT set for qsh: untargeted `send_msg` routes first-match over the
+sender's IPC caps, so blanket minting would break any spawner relying on
+a singleton IPC cap (qsh's `ghost` builtin) and would un-capless every
+`run` child. Only `agentd` holds it.
 
 **qsv — exact integer quantum computation (epic #148, quantum-stack
 Phase 1).** A ring-3 citizen holding a 12-qubit state vector whose
@@ -365,13 +389,14 @@ default) so its extra boot work never perturbs the timing-sensitive proofs the
 other CI gates poll for. The default ci-smoke boot passes `agentdemo` (and gates
 it), and the GRUB ISO's **"QuantumOS (agent-native demo)"** entry boots
 `quiet agentdemo` — the token is deliberately decoupled from `quiet`, so the
-showcase runs on a clean console. The kernel wires the society in
-`user_agent_demo_init()`: it registers the orchestrator, then registers +
-starts `AGENT_SOCIETY_SUBS` capless sub-agents under distinct names
-(`agentsub-0`…`agentsub-2`, all the same ELF) and mints a bidirectional
-capability-checked IPC pair between agentd and each (the `SYS_CAP_DERIVE`
-peer requirement + the handshake). `AGENT_SOCIETY_SUBS` must match `AGENT_SUBS`
-in `user/agentd.c`.
+showcase runs on a clean console. The society is **self-assembled** (epic
+#175): `user_agent_demo_init()` registers ONE citizen — the orchestrator —
+and agentd spawns its own `AGENT_SUBS` sub-agents from `/bin/agentsub` on the
+initrd. Each spawn mints the bidirectional parent↔child IPC pair (agentd
+holds `grant_spawn_channel`), so the roster is the spawn returns, "ready"
+acks are matched against it, and `SYS_CAP_DERIVE`'s peer requirement is
+satisfied by a channel the orchestrator itself created — no kernel
+hand-wiring anywhere in the story.
 
 `user/quantumd.c` is the essence of `kannaka-quantum`, and — unlike the two
 above — a **kernel-embedded service**, not a `/bin` program. `SYS_QRAND` and

@@ -1,22 +1,25 @@
 /**
  * QuantumOS agentsub — the sub-agent in the agentd end-to-end demo.
  *
- * Capless by design (no grant flags, empty manifest): it holds NO field
- * capability of its own. At boot the agent (agentd) hands it, via SYS_CAP_DERIVE
- * over a capability-checked IPC pair, a strictly-NARROWED READ-only slice of
- * field region 3. That derive also EXTENDS agentsub's manifest with a FIELD:3
- * allow row it could never obtain on its own — so its very existence proves a
- * RUNTIME cross-ring delegation happened.
+ * Capless by design: SPAWNED off the initrd (/bin/agentsub) by agentd itself
+ * (epic #175), it holds NO field capability of its own — its ONLY capability
+ * at birth is the spawn-minted IPC channel back to its parent (agentd's
+ * spawn-channel grant), which is also exactly what makes its bare first-match
+ * send_msg deterministic. agentd then hands it, via SYS_CAP_DERIVE over that
+ * spawn-minted pair, a strictly-NARROWED READ-only slice of field region 3.
+ * That derive also EXTENDS agentsub's manifest with a FIELD:3 allow row it
+ * could never obtain on its own — so its very existence proves a RUNTIME
+ * cross-ring delegation happened, over a channel the ORCHESTRATOR created.
  *
- * Protocol: announce "ready" (a first-match send reaches agentd, which learns
- * this pid from the vouched sender field); await agentd's "go" (sent only after
- * the derive); recall region 3 with the delegated READ cap from a probe
+ * Protocol: announce "ready" (a first-match send reaches agentd — the
+ * spawn-minted channel is this citizen's only IPC cap — and agentd matches the
+ * vouched sender pid against its spawn roster); await agentd's "go" (sent only
+ * after the derive); recall region 3 with the delegated READ cap from a probe
  * corrupted at PID-SALTED positions (every society member reconstructs the
  * phrase from a DIFFERENT noisy probe) and verify the exact bytes came back;
  * prove WRITE was narrowed away (imprint must be EPERM); then ack
  * "p<8-hex-FNV1a-of-the-recalled-winner>" so the orchestrator can check the
- * CONTENT each sub actually recalled, not merely that a recall succeeded. Not
- * monitored (a restart would rebind the manifest and drop the delegated row).
+ * CONTENT each sub actually recalled, not merely that a recall succeeded.
  *
  * SPDX-License-Identifier: GPL-2.0-only
  */

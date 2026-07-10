@@ -44,7 +44,14 @@
 #define SYS_CAP_DERIVE 34
 #define AUDIT_OP_READ 0
 #define AUDIT_OP_STATS 1
-#define AUDIT_TEXT_MAX 12288    /* >= kernel AUDIT_MAX_BYTES (128*96) so a read is whole */
+/* MUST track kernel AUDIT_MAX_BYTES (AUDIT_LOG_ENTRIES * AUDIT_LINE_MAX =
+ * 256*96) so a read is WHOLE. This was left at 12288 (the 128-entry era) when
+ * the ring doubled: any boot whose formatted ledger exceeded 12KB silently
+ * truncated MID-LINE — the MCP gate's late REAP probes read a dump that
+ * simply ended before the rows it polls for (and a cut line like
+ * "res=PROC:2<end>" can even misparse host-side). check-api-consistency.sh
+ * now guards this constant against the kernel's. */
+#define AUDIT_TEXT_MAX 24576
 #define MANIFEST_TEXT_MAX 16384 /* >= kernel MANIFEST_TEXT_MAX so a read is whole */
 
 /* SYS_RESOLVE / SYS_UDP: still pending (poll again) / ring full. */

@@ -80,6 +80,11 @@ typedef struct {
     uint64_t expiration;               /* Expiration (timer ticks, 0 = never) */
     uint8_t is_revocable;              /* Can this be revoked? */
     uint8_t is_inherited;              /* Derived from a parent? */
+    uint8_t is_spawn_channel;          /* Origin tag: minted by SYS_SPAWN as one half of a
+                                        * parent<->child IPC channel (epic #175). Scopes
+                                        * cap_revoke_spawn_channels to spawn wiring ONLY —
+                                        * kernel hand-minted pairs are never tagged, so a
+                                        * monitored service's restart cannot sever them. */
     uint32_t parent_cap;               /* Parent capability ID (0 = root) */
 } capability_t;
 
@@ -151,6 +156,22 @@ cap_result_t cap_find_id(uint32_t pid, cap_resource_type_t resource_type, uint32
 
 /* Revoke everything owned by a process (called on process destroy) */
 void cap_revoke_all_for_process(uint32_t pid);
+
+/* Tag a just-minted capability as a SYS_SPAWN parent<->child channel half
+ * (epic #175). Kernel-internal: called by sys_spawn inside the same cli'd
+ * syscall that cap_create'd it, so the tag is never observable half-set. */
+cap_result_t cap_mark_spawn_channel(uint32_t cap_id);
+
+/* Free every spawn-channel IPC cap TARGETING dead_pid (epic #175): the
+ * surviving peer's half of a spawn-minted channel whose other end died.
+ * Scoped by the is_spawn_channel origin tag + CAP_RESOURCE_IPC + resource_id,
+ * so hand-minted pairs and non-IPC caps with a colliding resource_id survive.
+ * MUST be called from process_destroy BEFORE the state=UNUSED store — pids
+ * are first-fit slot indices, so a later call would let a recycled pid
+ * inherit a live inbound channel (or worse, kill the recycled pid's fresh
+ * channel). Ledger: each freed cap records AUDIT_UNLINK under its SURVIVING
+ * owner (never REAP — the owner did not die). */
+void cap_revoke_spawn_channels(uint32_t dead_pid);
 
 /* Audit statistics */
 void cap_get_stats(cap_stats_t *stats);
