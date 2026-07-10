@@ -356,3 +356,26 @@ kernel/
 - **Interrupt Latency**: < 10 microseconds
 
 This microkernel design provides the minimal foundation needed for QuantumOS while maintaining strict security boundaries and enabling the quantum-aware features defined in the PRD.
+
+## Trust-core hardening (adversarial bug-hunt)
+
+An adversarial sweep of the trust core (capability / IPC / manifest / audit)
+fixed six defects; a seventh (a ring-3 kernel-panic via an unmapped-but-in-range
+pointer) is tracked as a dedicated follow-up (`copy_from_user` page-table
+validation).
+
+- **Shared-table IF=1 races.** The capability table (`free_slot`/`alloc_slot`)
+  and the IPC message-entry free list mutated shared state without masking
+  interrupts, while `process_destroy` reaches them at IF=1 from the service
+  health-monitor thread. A timer preemption mid-mutation racing a cli'd syscall
+  could corrupt the table (leaked/double-allocated slot, skewed accounting).
+  Both now bracket their mutators cli'd, matching every sibling subsystem.
+- **IPC share-grant duplicate bypass.** A re-grant to a grantee whose active
+  slot sat after a freed hole was created twice (double `ref_count`, a grant
+  left behind on revoke); the scan now checks all slots before reusing a hole.
+- **Audit ledger dump.** `audit_format` now emits whole lines only (never a
+  clipped mid-field value) with a `truncated=1` marker, mirroring the manifest
+  dump; `audit_load` rejects an implausibly large restored event count that
+  would wrap the sequence counter.
+- **IPC receive.** `SYS_RECV` validates the destination span *before* dequeuing,
+  so a bad buffer no longer silently consumes-and-loses a message.
