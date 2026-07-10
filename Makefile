@@ -1715,9 +1715,14 @@ ci-smoke-qseed: kernel
 	@echo ""
 	@echo "[1/3] Build verified: $(BUILD_DIR)/kernel.elf exists"
 	@test -f $(BUILD_DIR)/kernel.elf || (echo "ERROR: Kernel not built" && exit 1)
-	@echo "[2/3] Running QEMU boot test WITH -append qseed=DEADBEEFCAFEBABE (10s)..."
-	@timeout 10s qemu-system-x86_64 -kernel $(BUILD_DIR)/kernel.elf32 \
-		-append "qseed=DEADBEEFCAFEBABE" \
+	@# The seed is deliberately FFFFFFFFFFFFFFFC == (uint64_t)-4: the one value
+	@# that collides with the EPERM errno sentinel, exercising the qsh `qseed`
+	@# command's out-of-band capability probe (a raw `== -4` test misread it as a
+	@# denial). `qseed` is piped in so qsh prints the value for the gate below.
+	@echo "[2/3] Running QEMU boot test WITH -append qseed=FFFFFFFFFFFFFFFC (16s, qseed piped)..."
+	@( printf 'qseed\n'; sleep 20 ) | \
+		timeout 16s qemu-system-x86_64 -kernel $(BUILD_DIR)/kernel.elf32 \
+		-append "qseed=FFFFFFFFFFFFFFFC" \
 		-serial stdio -m 128M -display none -no-reboot 2>&1 | tee /tmp/qemu-boot-qseed.log || true
 	@echo ""
 	@echo "[3/3] Validating boot output..."
@@ -1755,6 +1760,18 @@ ci-smoke-qseed: kernel
 		echo ""; echo "=== Smoke Test FAILED ==="; exit 1; \
 	fi
 	@echo "SUCCESS: paradoxd resolution gate passed under qseed (PARADOXD: RESOLVED)"
+	@# errno/sentinel-collision gate (cross-cutting bug-hunt, errno-confusion): the
+	@# qsh `qseed` command must report the ACTUAL seed FFFFFFFFFFFFFFFC, not misread
+	@# it as EPERM because the value equals the -4 errno sentinel. With the raw
+	@# `s == -4` test this printed "qseed denied (EPERM)"; the out-of-band cap probe
+	@# fixes it. Anti-vacuous: this specific seed is the only one that trips it.
+	@if ! grep -q "qsh: qseed fffffffffffffffc" /tmp/qemu-boot-qseed.log 2>/dev/null; then \
+		echo "ERROR: qsh misreported the -4-collision qseed (errno/sentinel confusion)"; \
+		echo "  (expected 'qsh: qseed fffffffffffffffc'; a 'denied (EPERM)' here is the bug)"; \
+		cat /tmp/qemu-boot-qseed.log 2>/dev/null || true; \
+		echo ""; echo "=== Smoke Test FAILED ==="; exit 1; \
+	fi
+	@echo "SUCCESS: qseed errno-collision gate passed (real seed reported, not EPERM)"
 	@echo ""
 	@echo "=== Smoke Test (qseed) PASSED ==="
 

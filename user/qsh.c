@@ -1202,14 +1202,19 @@ static void cmd_qrand(void) {
 }
 
 static void cmd_qseed(void) {
-    long s = qseed_value();
-    if (s == -4) {
+    /* Probe the capability OUT-OF-BAND first: qrand_seed_present() returns only
+     * {0,1} when the quantum-pool cap is held, and a negative errno (-4 EPERM)
+     * when it is not — so it distinguishes denial unambiguously. SYS_QSEED
+     * itself returns an UNCONSTRAINED 64-bit seed, so testing that value against
+     * -4 (as this did) misreads the one valid seed equal to (uint64_t)-4, e.g.
+     * from qseed=FFFFFFFFFFFFFFFC, as a capability denial. */
+    if (qrand_seed_present() < 0) {
         out("qsh: qseed denied (EPERM)\r\n");
         return;
     }
     char b[40];
     int o = ghost_put(b, 0, "qsh: qseed ");
-    o = put_hex64(b, o, (unsigned long long)s);
+    o = put_hex64(b, o, (unsigned long long)qseed_value());
     o = ghost_put(b, o, "\r\n");
     out_bytes(b, o);
 }
