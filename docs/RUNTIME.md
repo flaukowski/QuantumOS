@@ -352,9 +352,14 @@ sub-agents** — `AGENT_SUBS` (3) instances of `agentsub`, each addressed by the
 kernel-vouched sender pid of its "ready" and each handed its own derived cap via
 `SYS_CAP_DERIVE` over a capability-checked IPC pair (a one-hop fan-out tree —
 `CAP_GRANT` is never delegated, so no sub can re-delegate). Every sub-agent
-recalls with its cap and confirms WRITE was withheld, then acks "proven"; the
-orchestrator waits for all of them. On all four it prints
-`AGENTD: DEMO OK qpu+field+spawn+society`; a ci-smoke gate asserts it. Being a
+recalls the phrase from its **own pid-salted noisy probe** (each society member
+reconstructs from different noise), verifies the exact bytes, confirms WRITE was
+withheld, and acks the **FNV-1a digest of what it actually recalled**; the
+orchestrator independently digests the phrase and requires a matching,
+digest-bearing ack from **each distinct delegate** (deduped by the
+kernel-vouched sender pid — N acks from one sub are not a society). On all four
+it prints `AGENTD: DEMO OK qpu+field+spawn+society` plus
+`AGENT: society consensus 3/3 …`; ci-smoke gates assert both. Being a
 heavyweight showcase, it is **opt-in** via the `agentdemo` cmdline token (off by
 default) so its extra boot work never perturbs the timing-sensitive proofs the
 other CI gates poll for. The default ci-smoke boot passes `agentdemo` (and gates
