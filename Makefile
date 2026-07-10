@@ -462,6 +462,21 @@ ci-smoke: kernel
 		exit 1; \
 	fi
 	@echo "SUCCESS: DNS answer-binding gate passed (spoofed source/port rejected)"
+	@# Adversarial-qseed gate (bug-hunt of the untrusted boot cmdline): the qseed=
+	@# token must not be able to zero the PRNG (xorshift64's absorbing fixed
+	@# point, which would silently kill SYS_QRAND, quantum_kernel_rand, the DNS
+	@# anti-spoof randomization, and Lamport key material). Printed only after the
+	@# quantum self-test's non-zero-guard assertions pass; without the guard the
+	@# self-test panics the boot.
+	@if ! grep -q "QSEEDGUARD: PRNG survives adversarial qseed (non-zero)" /tmp/qemu-boot.log 2>/dev/null; then \
+		echo "ERROR: adversarial-qseed PRNG guard missing (QSEEDGUARD)"; \
+		echo "Boot log:"; \
+		cat /tmp/qemu-boot.log 2>/dev/null || true; \
+		echo ""; \
+		echo "=== Smoke Test FAILED ==="; \
+		exit 1; \
+	fi
+	@echo "SUCCESS: adversarial-qseed PRNG guard passed (state stays non-zero)"
 	@# ghostOS phase-1 merge gate: the ring-3 ghostd service must recall
 	@# all three noisy probes to their stored patterns (issue #48).
 	@if ! grep -q "GHOSTD: 3/3 RECALL OK" /tmp/qemu-boot.log 2>/dev/null; then \

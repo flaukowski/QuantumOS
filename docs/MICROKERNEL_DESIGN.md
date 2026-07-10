@@ -208,6 +208,31 @@ every boot and asserts the pmm free-frame count is unchanged, emitting
 `ELFGUARD: malformed spawn rejected, no frame leak`; the CI smoke gate greps for
 it, and without the fixes the self-test panics the boot before it prints.
 
+### Boot-entropy integrity and serial liveness
+
+Two more untrusted-input / liveness hardenings from the adversarial bug-hunt:
+
+- **The `qseed=` boot token cannot zero the PRNG.** `xorshift64` has `0` as an
+  *absorbing* fixed point — a zero state returns `0` forever. Because the
+  SplitMix64 avalanche that mixes the boot qseed into the state is a bijection,
+  an attacker who controls the untrusted `qseed=` cmdline token can invert it
+  and pick the one value whose avalanche equals the golden init constant,
+  cancelling the state to exactly `0` and silently, permanently disabling *all*
+  kernel randomness — `SYS_QRAND` (returning zero bytes while still reporting
+  provenance OK), `quantum_kernel_rand` (which the DNS txid/source-port
+  anti-spoof depends on), and any service's Lamport key material. `quantum.c`
+  now mixes through `mix_seed_nonzero`, which never leaves the state at `0`. The
+  quantum boot self-test asserts this for both the specific attacker value and
+  the generic cancellation, gating on `QSEEDGUARD: PRNG survives adversarial
+  qseed (non-zero)`.
+- **The COM2 swarm-bridge write cannot hang the kernel.** `com2_write` runs
+  `cli`'d from `SYS_COM2`; an unbounded THR-drain spin on a wedged port — a
+  swarm peer that stops draining the serial link — would freeze the *entire*
+  kernel (no timer tick, no preemption), not just the writer. It now caps the
+  per-byte wait (`COM2_THR_DRAIN_SPINS`) and latches a sticky `com2_dead`,
+  exactly as `console.c` already does for the COM1 console, trading a dropped
+  byte on a genuinely stuck port for guaranteed liveness.
+
 ## Process Management
 
 ### Process Structure
