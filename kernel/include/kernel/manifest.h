@@ -45,7 +45,11 @@
 
 #include <kernel/types.h>
 
-#define MANIFEST_MAX_ENTRIES 8 /* intent rows per process (7 grant flags exist) */
+/* Intent rows per process. 9 grant flags exist, but grant_qpu_submit and
+ * grant_qpu_execute are mutually exclusive (a QPU cap is never both WRITE and
+ * EXECUTE), so any single service maps to at most 8 rows. start_slot guards
+ * each append against this bound regardless. */
+#define MANIFEST_MAX_ENTRIES 8
 
 /* One-shot text dump cap (SYS_MANIFEST). Sized for ~27 fully-loaded bound
  * manifests — >2x a realistic boot's bound population (~15). BOUND pids only

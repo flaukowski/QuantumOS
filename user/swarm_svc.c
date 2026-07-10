@@ -27,7 +27,8 @@
 
 #include "swarm.h"
 #include "sha256.h"
-#include "ghost.h" /* ghost_req_t/ghost_rep_t, GHOST_*, usys.h, string builders */
+#include "ghost.h"       /* ghost_req_t/ghost_rep_t, GHOST_*, usys.h, string builders */
+#include "qpu_circuit.h" /* QC_RESULT_LEN, QC_STATUS_* (epic #149 B1) */
 
 /* ---- state (zeroed .bss) ---- */
 static uint8_t master_seed[LAMPORT_SEED_LEN];
@@ -37,6 +38,15 @@ static long ghostd_pid = 0;
 /* COM2 receive accumulator for the inbound frame parser. */
 static uint8_t rxbuf[SWARM_HDR_LEN + SWARM_MAX_PAYLOAD + 1];
 static uint32_t rxlen = 0;
+
+/* Outstanding QPU job submitted over the wire (0 = none). The QSUBMIT handler
+ * submits and RETURNS; the main loop polls this one job a single step per pass
+ * so poll_com2()+heartbeat() keep firing — an in-handler poll-to-completion
+ * would starve the 2s watchdog and, past max_restarts, permanently kill the
+ * sole COM2 bridge (a remote ~3-frame DoS). We NEVER abandon an owned job:
+ * only a DONE poll frees the broker slot, so abandoning would ratchet the
+ * per-owner in-flight cap to a permanent EIO. Serialized to one in flight. */
+static long qsub_jid = 0;
 
 static void logline(const char *s) {
     write_str(s);
@@ -304,7 +314,67 @@ static void handle_data(const uint8_t *payload, uint32_t len) {
         out[4] = (uint8_t)(rep.r_q16 >> 16);
         out[5] = (uint8_t)(rep.r_q16 >> 24);
         emit_frame(FRAME_DATA, out, sizeof(out));
+    } else if (op == SWARM_OP_QSUBMIT) {
+        /* Submit-ONLY (non-blocking): copy the opaque circuit into the broker
+         * and stash the job id. The main loop polls it a step per pass and
+         * frames the reply on DONE — NEVER poll here (heartbeat starvation). */
+        uint32_t clen = len - 1;
+        if (clen == 0 || clen > QPU_CIRCUIT_MAX) {
+            uint8_t err[2] = {SWARM_OP_QSUBMIT, 2}; /* malformed → broker/EINVAL */
+            emit_frame(FRAME_DATA, err, sizeof(err));
+            return;
+        }
+        if (qsub_jid != 0) {
+            /* A job is already outstanding (unreachable under a synchronous
+             * host that waits for each reply; defensive). Report refused. */
+            uint8_t busy[2] = {SWARM_OP_QSUBMIT, 1};
+            emit_frame(FRAME_DATA, busy, sizeof(busy));
+            return;
+        }
+        qpu_submit_req_t sreq;
+        sreq.circuit_len = clen;
+        for (uint32_t i = 0; i < clen; i++) {
+            sreq.circuit[i] = payload[1 + i];
+        }
+        long r = qpu_submit_(&sreq);
+        if (r >= 1) {
+            qsub_jid = r; /* reply deferred to the main-loop poll */
+        } else {
+            /* -4 EPERM/quota → refused(1); other broker errors → 2. */
+            uint8_t err[2] = {SWARM_OP_QSUBMIT, (uint8_t)(r == -4 ? 1 : 2)};
+            emit_frame(FRAME_DATA, err, sizeof(err));
+        }
     }
+}
+
+/* Poll the one outstanding wire-submitted QPU job a SINGLE step. Called once
+ * per main-loop pass so heartbeat() keeps firing; on DONE it frames the reply
+ * and clears qsub_jid. Never abandons the job (only DONE frees the slot). */
+static void qsub_poll_step(void) {
+    if (qsub_jid == 0) {
+        return;
+    }
+    qpu_poll_out_t out;
+    long st = qpu_poll_(qsub_jid, &out);
+    if (st == QPU_POLL_PENDING || st == QPU_POLL_RUNNING) {
+        return; /* keep waiting — next pass */
+    }
+    uint8_t reply[1 + 1 + QC_RESULT_LEN];
+    reply[0] = SWARM_OP_QSUBMIT;
+    if (st == QPU_POLL_DONE && out.status == QPU_STATUS_OK && out.result_len == QC_RESULT_LEN) {
+        /* status keys on the EXECUTOR's circuit-level result[0], not just the
+         * broker's slot status — a malformed circuit is QC_STATUS_EINVAL. */
+        reply[1] = (out.result[0] == QC_STATUS_OK) ? 0 : 2;
+        for (uint32_t i = 0; i < QC_RESULT_LEN; i++) {
+            reply[2 + i] = out.result[i];
+        }
+        emit_frame(FRAME_DATA, reply, sizeof(reply));
+    } else {
+        /* EXECFAIL, a short/oversized result, or a poll error → broker error. */
+        reply[1] = 2;
+        emit_frame(FRAME_DATA, reply, 2);
+    }
+    qsub_jid = 0;
 }
 
 static void dispatch_frame(uint8_t type, const uint8_t *payload, uint32_t len) {
@@ -381,9 +451,13 @@ void _start(void) {
     /* Learn ghostd's pid for DATA routing (best-effort; PING still works). */
     discover_ghostd();
 
-    /* Job 2: serve the bridge protocol. */
+    /* Job 2: serve the bridge protocol. poll_com2() accepts frames (a QSUBMIT
+     * submits and returns); qsub_poll_step() advances the one outstanding QPU
+     * job a single step; heartbeat() fires EVERY pass so a slow circuit can
+     * never starve the watchdog. */
     while (1) {
         poll_com2();
+        qsub_poll_step();
         heartbeat();
         yield();
     }

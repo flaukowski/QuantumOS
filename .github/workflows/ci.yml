@@ -585,6 +585,30 @@ jobs:
     - name: Cross-oracle (exact integer engine vs lightning.qubit)
       run: python scripts/test_qsv_oracle.py
 
+  quantum-com2:
+    name: COM2 Quantum-Submit (host → broker → qpud over the wire — epic #149 B1)
+    runs-on: ubuntu-latest
+    needs: [build]
+    # Phase 2 transport: a host agent frames an opaque circuit over the attested
+    # COM2 bridge, swarm_svc forwards it to the SYS_QPU broker, qpud runs it, and
+    # the exact result returns over a wire the host never typed. PennyLane is
+    # installed so the cross-oracle leg (OS wire result vs lightning.qubit) runs.
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+    - name: Install dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y build-essential qemu-system-x86 nasm
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.12'
+    - name: Install pinned PennyLane + Lightning (for the cross-oracle leg)
+      run: pip install "pennylane==0.45.1" "pennylane-lightning==0.45.0" "numpy>=2.0"
+    - name: Prove host→broker→qpud over COM2
+      run: make ci-smoke-qsubmit
+
   networking:
     name: Networking Test (rtl8139 + user-net ARP — epic #73)
     runs-on: ubuntu-latest

@@ -2343,6 +2343,15 @@ void user_swarm_demo_init(uint32_t ghostd_pid) {
         .grant_quantum_pool = 1,
         /* Sole ring-3 holder of the COM2 device capability. */
         .grant_com2 = 1,
+        /* QPU SUBMIT right (epic #149 B1): the bridge forwards a host-framed
+         * opaque circuit to the SYS_QPU broker and returns the exact result
+         * over COM2. qsub_max bounds wire-driven submissions per incarnation.
+         * 4: the CI gate charges 4 (bell + grover3 + a large circuit + a
+         * malformed one — a submission that reaches the broker consumes quota
+         * even if the executor later rejects the circuit) then proves the 5th
+         * is refused. */
+        .grant_qpu_submit = 1,
+        .qsub_max = 4,
     };
 
     uint32_t sid = 0;
