@@ -164,6 +164,35 @@ native tier of the quantum stack (#148–#150): air-gapped, boot-verifiable
 quantum computation; simulation beyond 12 qubits and real QPUs arrive via
 the capability-gated host gateway (Phases 2–3).
 
+**The QPU job broker (epic #148, quantum-stack A2+A3).** `SYS_QPU` makes
+circuit submission a capability-gated, quota-bounded, ledger-recorded
+authority — the kernel is a **broker**, never a circuit parser. Payloads
+are OPAQUE bytes; the kernel enforces WHO (a `CAP_RESOURCE_DEVICE`
+capability over `DEVICE_ID_QPU`, checked through the two-layer
+`authorize()` gate), HOW MUCH (a manifest `qsub` quota mirroring
+`spawn_max`, plus a per-owner in-flight cap so a lifetime counter cannot
+be gamed to pin the pool), and the job-slot lifecycle; the quantum
+computation runs in ring 3 (`qpud`, the executor, on the exact integer
+engine shared with `qsv`). Authority is a **two-perm partition**:
+`CAP_WRITE` submits and polls, `CAP_READ|CAP_EXECUTE` fetches and
+completes — minted disjoint (a submitter that could complete would forge
+its own results; an executor that could submit would spend quota it does
+not hold). The four ops are `SUBMIT` (→ a job id; charges quota, records
+`AUDIT_QSUBMIT`), `FETCH` (executor; stamps its `(pid, generation)` for
+forgery defense and death-reclamation), `COMPLETE` (executor; the caller
+must BE the fetcher), and `POLL` (owner; DONE copies the bounded result
+out and frees the slot). Job slots are a per-process kernel resource like
+fds and caps, so a `process_destroy` sweep frees a dead owner's jobs and
+fails a dead executor's `RUNNING` jobs closed to `EXECFAIL` — no
+`RUNNING`-forever leak, no permanent `EAGAIN`. `qpu-test` proves the whole
+path every boot un-echoably: it submits opaque Bell and Grover-3q circuits
+and checks the EXACT integer results `qpud` returned through the broker
+(`p=1/2`, `p=121/128`) — a submitter that does not include the engine —
+then proves the quota (a third submit refused) and both cross-perm
+denials. `ghost_test` proves a capless submit is refused. Later backends
+(simulation past 12 qubits, real QPUs — Phases 2–3) are dispatched from
+`qpud` to the host gateway; the kernel surface is unchanged.
+
 **The kernel holographic field (epic #95).** `SYS_IMPRINT` stores a
 byte pattern (≤ 64 bytes, with a Q15 importance) into one of the
 kernel's fixed field REGIONS; `SYS_RECALL` scores every live slot in a

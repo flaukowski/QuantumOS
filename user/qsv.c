@@ -43,8 +43,7 @@ void _start(void) {
     qsv_gate_h(2, 0);
     qsv_gate_cnot(2, 0, 1);
     check(qsv_norm_ok(2), "bell norm != 2^h");
-    check(qsv_re[0] == 1 && qsv_im[0] == 0 && qsv_re[3] == 1 && qsv_im[3] == 0,
-          "bell amplitudes");
+    check(qsv_re[0] == 1 && qsv_im[0] == 0 && qsv_re[3] == 1 && qsv_im[3] == 0, "bell amplitudes");
     check(qsv_h == 1, "bell h");
     /* CZ sanity on the Bell state: flips ONLY the |11> sign, exactly. */
     qsv_gate_cz(2, 0, 1);
@@ -101,8 +100,7 @@ void _start(void) {
         qsv_diffusion(4);
     }
     check(qsv_norm_ok(4), "grover4 norm != 2^h");
-    check(qsv_re[11] == -16064 && qsv_im[11] == 0 && qsv_h == 28,
-          "grover4 amp != -16064 @ h=28");
+    check(qsv_re[11] == -16064 && qsv_im[11] == 0 && qsv_h == 28, "grover4 amp != -16064 @ h=28");
     {
         uint32_t num, den;
         qsv_reduced_prob(qsv_re[11], &num, &den);
