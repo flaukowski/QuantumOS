@@ -580,6 +580,74 @@ def _exercise_manifest(vm):
     print("OK: forged MANIFEST: line refused (reserved marker)")
 
 
+def _exercise_qpu(vm):
+    """QPU job broker (epic #148 A2+A3). The kernel brokers OPAQUE circuits
+    between capability-gated submitters (qpu-test, QPU WRITE) and the executor
+    (qpud, QPU EXECUTE) — it enforces the cap, the qsub quota, and the job-slot
+    lifecycle but never parses a circuit. Un-echoable, ledger-corroborated:
+    QSUBMIT records the exercised WRITE authority; a LIVE qsub QUOTA deny
+    (tick>0, distinct from the tick=0 selftest twin) proves the quota; DENYs
+    with perms=WRITE (capless + executor submit) and perms=EXECUTE (a submitter
+    trying to COMPLETE) prove the two-perm partition. Runs right after the
+    manifest gate so the boot QSUBMIT/QUOTA/DENY entries are still in the ring."""
+    QPU = "20816"  # DEVICE_ID_QPU (0x5150) as the ledger renders resource_id
+    # qpu-test idles in a yield loop after its proof, so it is almost always
+    # READY (rarely the RUNNING process at the snapshot instant) — accept any
+    # live state, unlike the shell which is RUNNING while it serves sysinfo.
+    p = next((pr["pid"] for pr in vm.sysinfo()["processes"]
+              if pr["name"] == "qpu-test" and pr["state"] in ("RUNNING", "READY")), None)
+    if p is None:
+        _fail("no live qpu-test process (the broker proof citizen)")
+    entries = vm.audit()["entries"]
+
+    # Half-added-kind tripwire — now effective (the bridge renders 'kind=?').
+    if any(e["kind"] in ("EMPTY", "?") for e in entries):
+        _fail("a live audit entry formats as EMPTY/? — half-added kind")
+
+    # Accepted submissions: exactly 2 (qsub_max). The two are field-identical
+    # and consecutive, so they COALESCE — assert the summed count, never the
+    # entry count (a poll-window interleaver could still split them).
+    qsub = [e for e in entries if e["kind"] == "QSUBMIT" and e["pid"] == p]
+    for e in qsub:
+        if not (e["resource_type"] == "DEV" and e["resource_id"] == QPU and e["perms"] == 0x2
+                and e["verdict"] == "OK" and e["tick"] > 0):
+            _fail(f"QSUBMIT entry has wrong fields: {e}")
+    if sum(e["count"] for e in qsub) != 2:
+        _fail(f"QSUBMIT count sum != 2 (qsub_max): {[e['count'] for e in qsub]}")
+
+    # LIVE qsub QUOTA deny: the third submit refused (tick>0, qpu-test pid).
+    if not any(e["kind"] == "QUOTA" and e["resource_type"] == "DEV" and e["resource_id"] == QPU
+               and e["perms"] == 0x2 and e["verdict"] == "EPERM" and e["tick"] > 0 and e["pid"] == p
+               for e in entries):
+        _fail("no LIVE qsub QUOTA deny (DEV:20816 WRITE, tick>0, qpu-test pid)")
+
+    # The synthetic selftest twin (tick==0, pid==1) must ALSO exist — proves the
+    # deny path is driven at boot AND that the live deny above is not the twin.
+    if not any(e["kind"] == "QUOTA" and e["resource_id"] == QPU and e["tick"] == 0 and e["pid"] == 1
+               for e in entries):
+        _fail("no synthetic qsub QUOTA selftest (DEV:20816, tick=0, pid=1)")
+
+    # SUBMIT denials (perms=WRITE): the capless ghost_test AND the executor qpud
+    # (EXECUTE holder) both tried and were refused — >=2 distinct pids.
+    wdeny = {e["pid"] for e in entries
+             if e["kind"] == "DENY" and e["resource_type"] == "DEV" and e["resource_id"] == QPU
+             and e["perms"] == 0x2 and e["verdict"] == "EPERM" and e["tick"] > 0}
+    if len(wdeny) < 2:
+        _fail(f"expected >=2 distinct pids denied QPU WRITE (capless + executor): {wdeny}")
+
+    # Cross-perm (perms=EXECUTE): a submitter's COMPLETE attempt refused.
+    if not any(e["kind"] == "DENY" and e["resource_id"] == QPU and e["perms"] == 0x4
+               and e["verdict"] == "EPERM" and e["tick"] > 0 for e in entries):
+        _fail("no cross-perm DENY (DEV:20816 EXECUTE — submitter tried to COMPLETE)")
+
+    # Manifest: qpu-test's qsub row reads used==max==2 (quota exhausted, durable).
+    qm = vm.manifest()["manifests"].get(p)
+    if not qm or qm.get("qsub_used") != 2 or qm.get("qsub_max") != 2:
+        _fail(f"qpu-test manifest qsub != 2/2: {qm}")
+    print(f"OK: QPU broker ledger — 2 QSUBMIT + live qsub QUOTA (pid {p}) + {len(wdeny)} WRITE "
+          f"denials + cross-perm EXECUTE deny; qpu-test qsub=2/2")
+
+
 def _exercise_delegation(vm):
     """Cross-ring capability delegation (epic #137 Phase D inc. 3). At boot the
     delegator (delegation-test) hands a NARROWED READ-only slice of field region
@@ -897,8 +965,12 @@ def main():
         # MDENY ledger entries must still be inside the ring.
         _exercise_manifest(vm)
 
+        # 4c-qpu. QPU job broker (epic #148 A2+A3). Immediately after manifest so
+        # the boot QSUBMIT/QUOTA/DENY entries are still inside the 256-ring.
+        _exercise_qpu(vm)
+
         # 4d. Cross-ring capability delegation (epic #137). Also early — the
-        # boot derive-GRANT / overreach-DENY must still be in the 128-ring.
+        # boot derive-GRANT / overreach-DENY must still be in the ring.
         _exercise_delegation(vm)
 
         # 5. run a citizen off the initrd. Exit 42 is hello's unique

@@ -19,6 +19,7 @@
 #include <kernel/console.h>
 #include <kernel/ata.h>
 #include <kernel/net.h>
+#include <kernel/qpu.h>
 #include <kernel/field.h>
 #include <kernel/syscall.h>
 #include <kernel/interrupts.h>
@@ -265,6 +266,27 @@ static svc_result_t start_slot(service_slot_t *slot) {
             boot_log(slot->info.name);
         }
     }
+    /* QPU authority (epic #148): the two rights are DISJOINT by construction —
+     * grant_qpu_submit mints WRITE only, grant_qpu_execute mints READ|EXECUTE
+     * only (never WRITE). A submitter that also held EXECUTE could forge its
+     * own results; an executor that also held WRITE could submit on quota it
+     * does not own. Keep the masks separate. */
+    if (slot->def.grant_qpu_submit) {
+        uint32_t qcap = CAP_ID_INVALID;
+        if (cap_create(pid, CAP_RESOURCE_DEVICE, DEVICE_ID_QPU, CAP_DEVICE | CAP_WRITE, 0, &qcap) !=
+            CAP_SUCCESS) {
+            boot_log("service: QPU submit cap grant failed");
+            boot_log(slot->info.name);
+        }
+    }
+    if (slot->def.grant_qpu_execute) {
+        uint32_t qcap = CAP_ID_INVALID;
+        if (cap_create(pid, CAP_RESOURCE_DEVICE, DEVICE_ID_QPU, CAP_DEVICE | CAP_READ | CAP_EXECUTE,
+                       0, &qcap) != CAP_SUCCESS) {
+            boot_log("service: QPU execute cap grant failed");
+            boot_log(slot->info.name);
+        }
+    }
     if (slot->def.grant_spawn) {
         uint32_t scap = CAP_ID_INVALID;
         if (cap_create(pid, CAP_RESOURCE_PROCESS, SPAWN_RESOURCE_ID, CAP_EXECUTE, 0, &scap) !=
@@ -340,6 +362,7 @@ static svc_result_t start_slot(service_slot_t *slot) {
         man.bound = 1;
         man.spawn_max = slot->def.spawn_max;
         man.cpu_limit = slot->def.cpu_limit; /* CPU quota (epic #144); 0 = unlimited */
+        man.qsub_max = slot->def.qsub_max;   /* QPU submit quota (epic #148); 0 = unlimited */
         if (slot->def.grant_quantum_pool) {
             man.entries[man.entry_count].resource_type = CAP_RESOURCE_QUANTUM;
             man.entries[man.entry_count].resource_id = QUANTUM_POOL_RESOURCE_ID;
@@ -381,6 +404,18 @@ static svc_result_t start_slot(service_slot_t *slot) {
             man.entries[man.entry_count].resource_id = slot->def.field_region;
             man.entries[man.entry_count].permissions =
                 CAP_READ | CAP_WRITE | (slot->def.grant_field_delegable ? CAP_GRANT : 0);
+            man.entry_count++;
+        }
+        if (slot->def.grant_qpu_submit) {
+            man.entries[man.entry_count].resource_type = CAP_RESOURCE_DEVICE;
+            man.entries[man.entry_count].resource_id = DEVICE_ID_QPU;
+            man.entries[man.entry_count].permissions = CAP_DEVICE | CAP_WRITE;
+            man.entry_count++;
+        }
+        if (slot->def.grant_qpu_execute) {
+            man.entries[man.entry_count].resource_type = CAP_RESOURCE_DEVICE;
+            man.entries[man.entry_count].resource_id = DEVICE_ID_QPU;
+            man.entries[man.entry_count].permissions = CAP_DEVICE | CAP_READ | CAP_EXECUTE;
             man.entry_count++;
         }
         manifest_bind(pid, &man);

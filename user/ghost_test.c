@@ -16,6 +16,7 @@
  */
 
 #include "ghost.h"
+#include "qpu_circuit.h"
 
 /* Deterministic ~15% corruption: flip every 7th bit (37/256 = 14.5%). */
 static void corrupt(uint32_t *pat) {
@@ -210,6 +211,28 @@ void _start(void) {
             write_str("FIELD: capless recall denied (EPERM)");
         } else {
             write_str("FIELD: WARNING — capless recall was NOT denied");
+        }
+    }
+
+    /* And for the QPU broker (epic #148): a capless SUBMIT of a WELL-FORMED
+     * circuit must be EPERM — checked EXACTLY (-4), so an ENOSYS/EINVAL path
+     * can never satisfy it. The cap check precedes the copy-in, so a capless
+     * caller costs the kernel nothing; this records a real AUDIT_DENY
+     * {DEV, DEVICE_ID_QPU, WRITE} the MCP gate corroborates. */
+    {
+        qpu_submit_req_t qreq;
+        for (unsigned i = 0; i < sizeof(qreq); i++) {
+            ((unsigned char *)&qreq)[i] = 0;
+        }
+        qreq.circuit_len = QC_HDR;
+        qreq.circuit[0] = QC_VERSION;
+        qreq.circuit[1] = 1; /* 1 qubit */
+        qreq.circuit[2] = 0; /* 0 ops */
+        long qr = qpu_submit_(&qreq);
+        if (qr == -4) {
+            write_str("QPU: capless submit denied (EPERM)");
+        } else {
+            write_str("QPU: WARNING - capless submit was NOT denied");
         }
     }
 

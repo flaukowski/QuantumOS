@@ -164,6 +164,8 @@ static const char *kind_name(uint16_t k) {
         return "REVOKE";
     case AUDIT_REAP:
         return "REAP";
+    case AUDIT_QSUBMIT:
+        return "QSUBMIT";
     case AUDIT_KIND_EMPTY:
         return "EMPTY";
     default:

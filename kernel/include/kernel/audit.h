@@ -13,7 +13,9 @@
  * created), REVOKE (a capability explicitly withdrawn via cap_revoke, incl.
  * its cascade), and REAP (slots freed because their owner died — the reaper's
  * cap_revoke_all_for_process + its cascade). It does NOT record successful
- * exercise of already-held authority. EXPIRE is still not recorded: expired
+ * exercise of already-held authority (two exceptions, both quota-bounded and
+ * coalescible: SPAWN, and QSUBMIT — a quantum job queued, the QPU WRITE right
+ * exercised, parallel to SPAWN). EXPIRE is still not recorded: expired
  * caps are never freed — they are refused at check/find/derive time and the
  * slot is reclaimed only by owner death (recorded then as REAP), so the
  * absence of an EXPIRE entry does not mean the cap was live until revoked.
@@ -59,6 +61,7 @@
 #define AUDIT_CPUKILL 6 /* a process was TERMINATED for exceeding its cpu_limit (epic #144) */
 #define AUDIT_REVOKE 7  /* a capability was EXPLICITLY withdrawn (cap_revoke + its cascade) */
 #define AUDIT_REAP 8    /* slots freed because their OWNER DIED (reaper cleanup + cascade) */
+#define AUDIT_QSUBMIT 9 /* a quantum job was queued (QPU WRITE authority exercised, #148) */
 
 /* Verdicts — 1-based likewise. */
 #define AUDIT_V_OK 1

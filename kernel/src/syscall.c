@@ -13,6 +13,7 @@
 #include <kernel/syscall.h>
 #include <kernel/audit.h>
 #include <kernel/manifest.h>
+#include <kernel/qpu.h>
 #include <kernel/process.h>
 #include <kernel/scheduler.h>
 #include <kernel/gdt.h>
@@ -59,6 +60,8 @@ extern const uint8_t _binary_delegation_test_elf_start[], _binary_delegation_tes
 extern const uint8_t _binary_subagentd_elf_start[], _binary_subagentd_elf_end[];
 extern const uint8_t _binary_cpu_hog_elf_start[], _binary_cpu_hog_elf_end[];
 extern const uint8_t _binary_qsv_elf_start[], _binary_qsv_elf_end[];
+extern const uint8_t _binary_qpud_elf_start[], _binary_qpud_elf_end[];
+extern const uint8_t _binary_qpu_test_elf_start[], _binary_qpu_test_elf_end[];
 
 /* Argument vector ABI (epic #62). MUST stay byte-identical to user_args_t
  * in user/usys.h — there is no shared header across the ring boundary. The
@@ -89,6 +92,8 @@ void user_quota_test_init(void);
 void user_delegation_demo_init(void);
 void user_cpu_hog_init(void);
 void user_qsv_init(void);
+void user_qpud_init(void);
+void user_qpu_test_init(void);
 
 /* int 0x80 stub (kernel/src/interrupts.S) */
 extern void isr128(void);
@@ -1568,6 +1573,126 @@ static uint64_t sys_cap_derive(uint32_t pid, uint64_t req_ptr) {
     return 0;
 }
 
+/* SYS_QPU — the QPU job broker (epic #148 A2+A3). Op-multiplexed like
+ * SYS_COM2/SYS_AUDIT. The kernel is a broker, never a circuit parser: it
+ * enforces the two-layer authority gate (capability + intent manifest) and the
+ * qsub quota, copies OPAQUE payloads in/out of the fixed job table, and records
+ * the exercised authority in the durable ledger. Request/result structs must
+ * match user/usys.h byte-for-byte (twin _Static_asserts on both sides). */
+typedef struct {
+    uint32_t circuit_len;
+    uint8_t circuit[QPU_CIRCUIT_MAX];
+} qpu_submit_req_k_t;
+_Static_assert(sizeof(qpu_submit_req_k_t) == 260, "qpu_submit_req ABI drift");
+
+typedef struct {
+    uint32_t job_id;
+    uint32_t owner_pid;
+    uint32_t circuit_len;
+    uint8_t circuit[QPU_CIRCUIT_MAX];
+} qpu_fetch_out_k_t;
+_Static_assert(sizeof(qpu_fetch_out_k_t) == 268, "qpu_fetch_out ABI drift");
+
+typedef struct {
+    uint32_t job_id;
+    uint32_t status;
+    uint32_t result_len;
+    uint8_t result[QPU_RESULT_MAX];
+} qpu_complete_req_k_t;
+_Static_assert(sizeof(qpu_complete_req_k_t) == 140, "qpu_complete_req ABI drift");
+
+typedef struct {
+    uint32_t state;
+    uint32_t status;
+    uint32_t result_len;
+    uint8_t result[QPU_RESULT_MAX];
+} qpu_poll_out_k_t;
+_Static_assert(sizeof(qpu_poll_out_k_t) == 140, "qpu_poll_out ABI drift");
+
+/* Copy a whole struct in from ring 3 (endpoint-validated, the sys_udp/
+ * cap_derive precedent). */
+static int qpu_copy_in(uint64_t uptr, void *dst, size_t n) {
+    if (!in_user_range(uptr) || !in_user_range(uptr + n - 1)) {
+        return 0;
+    }
+    const uint8_t *usrc = (const uint8_t *)uptr;
+    for (size_t i = 0; i < n; i++) {
+        ((uint8_t *)dst)[i] = usrc[i];
+    }
+    return 1;
+}
+
+static int qpu_copy_out(uint64_t uptr, const void *src, size_t n) {
+    if (!in_user_range(uptr) || !in_user_range(uptr + n - 1)) {
+        return 0;
+    }
+    uint8_t *udst = (uint8_t *)uptr;
+    for (size_t i = 0; i < n; i++) {
+        udst[i] = ((const uint8_t *)src)[i];
+    }
+    return 1;
+}
+
+static uint64_t sys_qpu(uint32_t pid, uint64_t op, uint64_t arg, uint64_t arg2) {
+    switch (op) {
+    case QPU_OP_SUBMIT: {
+        /* WRITE cap + intent gate first (records AUDIT_DENY/MDENY on a miss);
+         * the broker then does quota + in-flight checks. */
+        if (!authorize(pid, CAP_RESOURCE_DEVICE, CAP_WRITE, DEVICE_ID_QPU)) {
+            return SYSCALL_EPERM;
+        }
+        qpu_submit_req_k_t req;
+        if (!qpu_copy_in(arg, &req, sizeof(req))) {
+            return SYSCALL_EFAULT;
+        }
+        return qpu_submit(pid, (const qpu_submit_req_t *)&req);
+    }
+    case QPU_OP_FETCH: {
+        if (!authorize(pid, CAP_RESOURCE_DEVICE, CAP_EXECUTE, DEVICE_ID_QPU)) {
+            return SYSCALL_EPERM;
+        }
+        qpu_fetch_out_k_t out;
+        for (size_t i = 0; i < sizeof(out); i++) {
+            ((uint8_t *)&out)[i] = 0;
+        }
+        uint64_t r = qpu_fetch(pid, (qpu_fetch_out_t *)&out);
+        if (r != 0 && !qpu_copy_out(arg, &out, sizeof(out))) {
+            return SYSCALL_EFAULT;
+        }
+        return r;
+    }
+    case QPU_OP_COMPLETE: {
+        if (!authorize(pid, CAP_RESOURCE_DEVICE, CAP_EXECUTE, DEVICE_ID_QPU)) {
+            return SYSCALL_EPERM;
+        }
+        qpu_complete_req_k_t req;
+        if (!qpu_copy_in(arg, &req, sizeof(req))) {
+            return SYSCALL_EFAULT;
+        }
+        return qpu_complete(pid, (const qpu_complete_req_t *)&req);
+    }
+    case QPU_OP_POLL: {
+        /* POLL is ownership-gated (the broker checks owner_pid + generation)
+         * under the same WRITE authority a submitter already holds. */
+        if (!authorize(pid, CAP_RESOURCE_DEVICE, CAP_WRITE, DEVICE_ID_QPU)) {
+            return SYSCALL_EPERM;
+        }
+        qpu_poll_out_k_t out;
+        for (size_t i = 0; i < sizeof(out); i++) {
+            ((uint8_t *)&out)[i] = 0;
+        }
+        uint64_t r = qpu_poll(pid, (uint32_t)arg, (qpu_poll_out_t *)&out);
+        /* On a successful poll (state code >= 1) copy the struct out. */
+        if ((int64_t)r > 0 && !qpu_copy_out(arg2, &out, sizeof(out))) {
+            return SYSCALL_EFAULT;
+        }
+        return r;
+    }
+    default:
+        return SYSCALL_EINVAL;
+    }
+}
+
 /* ============================================================================
  * Dispatch
  * ============================================================================ */
@@ -1680,6 +1805,9 @@ static void syscall_dispatch(cpu_state_t *state) {
         break;
     case SYS_CAP_DERIVE:
         state->rax = sys_cap_derive(pid, state->rdi);
+        break;
+    case SYS_QPU:
+        state->rax = sys_qpu(pid, state->rdi, state->rsi, state->rdx);
         break;
     default:
         state->rax = SYSCALL_ENOSYS;
@@ -1881,6 +2009,11 @@ void user_init(void) {
     user_quantum_demo_init();
     user_kannaka_demo_init();
     user_qsv_init();
+    /* qpud (the QPU executor) BEFORE qpu_test (the submitter): qpu_test
+     * declares a dependency on qpud AND its bounded poll needs the executor
+     * already fetch-ready (epic #148). */
+    user_qpud_init();
+    user_qpu_test_init();
 }
 
 /* Bring up quantumd — a quantum-pool service (kannaka-quantum, a fourth
@@ -2469,5 +2602,56 @@ void user_qsv_init(void) {
         boot_log("qsv: exact integer quantum state-vector proof (ring 3, zero rounding)");
     } else {
         boot_log("Warning: qsv service failed to start");
+    }
+}
+
+/* Bring up qpud — the QPU executor service (epic #148, quantum-stack A2). The
+ * SOLE holder of the QPU EXECUTE cap (grant_qpu_execute mints READ|EXECUTE,
+ * never WRITE), so it is the only process that may FETCH and COMPLETE brokered
+ * jobs. Monitored (a watchdog rebirth re-mints its cap + rebinds its manifest;
+ * the broker fails any job it was mid-executing closed to EXECFAIL). */
+void user_qpud_init(void) {
+    service_definition_t qpud_def = {
+        .name = "qpud",
+        .entry = NULL, /* user-process service */
+        .user_elf_start = _binary_qpud_elf_start,
+        .user_elf_end = _binary_qpud_elf_end,
+        .dependencies = {NULL},
+        .max_restarts = 5,
+        .grant_qpu_execute = 1,
+    };
+    uint32_t sid = 0;
+    if (service_register(&qpud_def, &sid) == SVC_SUCCESS &&
+        service_start("qpud", NULL) == SVC_SUCCESS) {
+        service_monitor(sid, true);
+        boot_log("qpud: QPU executor (exact integer engine, ring 3)");
+    } else {
+        boot_log("Warning: qpud service failed to start");
+    }
+}
+
+/* Bring up qpu_test — the QPU broker proof citizen (epic #148, A2+A3). Holds
+ * the SUBMIT cap with a manifest qsub quota of 2; submits opaque circuits,
+ * polls the kernel for qpud's exact results, and proves the quota + cross-perm
+ * partition. Depends on qpud (must be fetch-ready). NOT monitored — a one-shot
+ * proof that idles forever after (a monitored respawn would double the ledger's
+ * QSUBMIT count). */
+void user_qpu_test_init(void) {
+    service_definition_t qt_def = {
+        .name = "qpu-test",
+        .entry = NULL, /* user-process service */
+        .user_elf_start = _binary_qpu_test_elf_start,
+        .user_elf_end = _binary_qpu_test_elf_end,
+        .dependencies = {"qpud", NULL},
+        .max_restarts = 1,
+        .grant_qpu_submit = 1,
+        .qsub_max = 2,
+    };
+    uint32_t sid = 0;
+    if (service_register(&qt_def, &sid) == SVC_SUCCESS &&
+        service_start("qpu-test", NULL) == SVC_SUCCESS) {
+        boot_log("qpu-test: QPU broker proof (submit/execute/poll + quota + partition)");
+    } else {
+        boot_log("Warning: qpu-test service failed to start");
     }
 }

@@ -148,6 +148,20 @@ typedef struct {
      * with spawn_max=1; qsh stays 0 — a finite shell quota would brick
      * long-lived agent sessions no CI boot can ever exercise. */
     uint32_t spawn_max;
+    /* Grant a CAP_RESOURCE_DEVICE WRITE cap over DEVICE_ID_QPU, re-minted on
+     * every start (epic #148): the QPU SUBMIT right — queue an opaque circuit
+     * for execution and POLL the result. Held by submitters (qpu_test now,
+     * qsh later). WRITE and EXECUTE must NEVER co-occur on a QPU cap. */
+    uint8_t grant_qpu_submit;
+    /* Grant a CAP_RESOURCE_DEVICE READ|EXECUTE cap over DEVICE_ID_QPU, the
+     * QPU EXECUTOR right (FETCH pending jobs + COMPLETE them). Held ONLY by
+     * qpud, the single executor. Never mints CAP_WRITE. */
+    uint8_t grant_qpu_execute;
+    /* Manifest QPU-submission quota (epic #148): accepted SYS_QPU submissions
+     * allowed per incarnation (rebirth resets, mirroring spawn_max). 0 =
+     * unlimited. Only meaningful alongside grant_qpu_submit. qpu_test proves
+     * enforcement with qsub_max=2. */
+    uint32_t qsub_max;
 } service_definition_t;
 
 /* ============================================================================
