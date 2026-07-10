@@ -55,6 +55,7 @@ FRAME_SIG = 0x12
 
 SWARM_OP_STATUS = 0x01
 SWARM_OP_RECALL = 0x02
+SWARM_OP_QSUBMIT = 0x03  # host submits an opaque circuit to the SYS_QPU broker (epic #149 B1)
 
 # ---- Lamport parameters (user/swarm.h) ------------------------------------
 LAMPORT_BITS = 256
@@ -801,6 +802,22 @@ class QosVM:
         r_q16 = int.from_bytes(payload[1:5], "little") if len(payload) >= 5 else 0
         live = payload[5] if len(payload) > 5 else 0
         return {"r": r_q16 / 65536.0, "live": live, "identity": self.identity()}
+
+    def qsubmit(self, circuit, deadline_s=10.0):
+        """Submit an OPAQUE circuit (qpu_circuit.h bytes) to the in-OS QPU broker
+        over the attested COM2 bridge (epic #149 B1): swarm_svc forwards it to
+        SYS_QPU, qpud runs it on the exact integer engine, and the exact result
+        comes back over the wire. Returns {status, result} where status is
+        0=OK / 1=refused(quota) / 2=broker-or-EINVAL and result is the 20-byte
+        QC result (present on status 0). The deadline is generous: swarm_svc
+        never self-times-out on a live qpud (it polls to DONE, heartbeating), so
+        a timeout here means the VM is wedged, not a slow circuit."""
+        self._ensure_verified()
+        payload = self._transact(frame(FRAME_DATA, bytes([SWARM_OP_QSUBMIT]) + bytes(circuit)),
+                                 SWARM_OP_QSUBMIT, time.time() + deadline_s)
+        status = payload[1] if len(payload) >= 2 else 2
+        result = bytes(payload[2:]) if len(payload) > 2 else b""
+        return {"status": status, "result": result}
 
     # -- COM1 scripted qsh --------------------------------------------------
     def _send_line(self, line):

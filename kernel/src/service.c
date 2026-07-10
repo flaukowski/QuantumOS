@@ -406,13 +406,17 @@ static svc_result_t start_slot(service_slot_t *slot) {
                 CAP_READ | CAP_WRITE | (slot->def.grant_field_delegable ? CAP_GRANT : 0);
             man.entry_count++;
         }
-        if (slot->def.grant_qpu_submit) {
+        /* The QPU rows are last; guard the append against MANIFEST_MAX_ENTRIES
+         * so a future service that adds grant flags past the current 8-row max
+         * fails closed (drops the row) instead of writing past entries[] — the
+         * OOB write manifest_bind's post-hoc clamp cannot undo. */
+        if (slot->def.grant_qpu_submit && man.entry_count < MANIFEST_MAX_ENTRIES) {
             man.entries[man.entry_count].resource_type = CAP_RESOURCE_DEVICE;
             man.entries[man.entry_count].resource_id = DEVICE_ID_QPU;
             man.entries[man.entry_count].permissions = CAP_DEVICE | CAP_WRITE;
             man.entry_count++;
         }
-        if (slot->def.grant_qpu_execute) {
+        if (slot->def.grant_qpu_execute && man.entry_count < MANIFEST_MAX_ENTRIES) {
             man.entries[man.entry_count].resource_type = CAP_RESOURCE_DEVICE;
             man.entries[man.entry_count].resource_id = DEVICE_ID_QPU;
             man.entries[man.entry_count].permissions = CAP_DEVICE | CAP_READ | CAP_EXECUTE;

@@ -197,7 +197,14 @@ format and dispatches to PennyLane `lightning.qubit` (cuQuantum on
 `lightning.gpu`, real QPUs via qBraid/Braket later); a hermetic CI
 cross-oracle (`scripts/test_qsv_oracle.py`) asserts the exact integer
 engine and PennyLane agree to 1e-9 on identical circuits — two independent
-implementations, so neither can fake the other.
+implementations, so neither can fake the other. A host agent can also reach
+the *in-OS* broker over the attested COM2 bridge: `swarm_svc` gains a
+`SWARM_OP_QSUBMIT` frame that forwards a host-framed circuit to `SYS_QPU`
+and returns the exact result — the submit is non-blocking (the job is
+polled one step per main-loop pass so a slow circuit can never starve the
+watchdog and kill the sole COM2 bridge). The `ci-smoke-qsubmit` gate proves
+Bell and Grover-3q come back over the wire the host never typed,
+cross-checked against the PennyLane gateway, with the qsub quota enforced.
 
 **The kernel holographic field (epic #95).** `SYS_IMPRINT` stores a
 byte pattern (≤ 64 bytes, with a Q15 importance) into one of the

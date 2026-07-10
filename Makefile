@@ -111,7 +111,7 @@ OBJECTS = $(KERNEL_SOURCES:$(KERNEL_DIR)/src/%.c=$(BUILD_DIR)/%.o) \
 -include $(OBJECTS:.o=.d)
 
 # Targets
-.PHONY: all clean kernel run debug dump test test-list test-coverage ci-smoke ci-smoke-disk ci-smoke-net ci-smoke-http ci-smoke-httpd ci-smoke-quiet ci-smoke-resonant ci-smoke-qseed ci-smoke-swarm ci-smoke-mcp ci-smoke-mcp-gate ci-smoke-society ci-smoke-society-gate ci-smoke-society3 ci-smoke-society3-gate ci-smoke-iso ci-smoke-kbd ci-smoke-noserial ci-smoke-screen swarm-pingpong
+.PHONY: all clean kernel run debug dump test test-list test-coverage ci-smoke ci-smoke-disk ci-smoke-net ci-smoke-http ci-smoke-httpd ci-smoke-quiet ci-smoke-resonant ci-smoke-qseed ci-smoke-swarm ci-smoke-mcp ci-smoke-mcp-gate ci-smoke-qsubmit ci-smoke-society ci-smoke-society-gate ci-smoke-society3 ci-smoke-society3-gate ci-smoke-iso ci-smoke-kbd ci-smoke-noserial ci-smoke-screen swarm-pingpong
 
 all: kernel
 
@@ -1725,6 +1725,18 @@ ci-smoke-mcp: kernel ci-smoke-mcp-gate
 ci-smoke-mcp-gate:
 	@echo "=== QuantumOS MCP Server Lifecycle Test (epics #99, #125) ==="
 	timeout -k 5 $(MCP_GATE_TIMEOUT) python3 scripts/test_qos_mcp.py
+
+# CI Smoke Test (COM2 quantum submit, epic #149 B1): a host agent frames an
+# OPAQUE circuit over the attested COM2 bridge; swarm_svc forwards it to the
+# SYS_QPU broker, qpud runs it on the exact integer engine, and the exact result
+# comes back over the wire the host never typed. Two DISTINCT circuits (Bell +
+# Grover-3q) rule out a hardcoded bridge; the Grover-3q wire result is
+# cross-checked against the host PennyLane gateway (if installed); a malformed
+# circuit returns a wire-visible broker error; and the qsub quota is enforced
+# over the wire with the swarm-svc incarnation asserted stable across the burst.
+ci-smoke-qsubmit: kernel
+	@echo "=== QuantumOS COM2 Quantum-Submit Test (epic #149 B1) ==="
+	QOS_KERNEL=$(BUILD_DIR)/kernel.elf32 python3 scripts/test_qos_qsubmit.py
 
 # Agent society (epic #131): boots TWO attested QuantumOS VMs coupled into one
 # holographic field and proves they synchronize (R_x >= 0.80 from a divergent

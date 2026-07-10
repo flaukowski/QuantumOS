@@ -67,6 +67,10 @@
  * deliberately tiny and explicit. */
 #define SWARM_OP_STATUS 0x01u /* -> ghostd GHOST_STATUS : field R + live */
 #define SWARM_OP_RECALL 0x02u /* -> ghostd GHOST_RECALL : payload = 32B probe */
+#define SWARM_OP_QSUBMIT                                                                           \
+    0x03u /* -> SYS_QPU broker: payload = opaque circuit (epic #149 B1).
+           * Reply: [0x03][status u8][result QC_RESULT_LEN on OK].
+           * status: 0=OK, 1=refused (quota/EPERM), 2=broker/EINVAL error. */
 
 /* ---- Lamport parameters ---- */
 #define LAMPORT_BITS 256    /* SHA-256 digest width */

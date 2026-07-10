@@ -73,3 +73,34 @@ def grover(n, target, iters):
 
 def h_s_h():
     return build(1, [(QC_OP_H, 0, 0), (QC_OP_S, 0, 0), (QC_OP_H, 0, 0)], 0)
+
+
+QC_RESULT_LEN = 20
+QC_STATUS_OK = 0
+QC_STATUS_EINVAL = 1
+
+
+def parse_result(result):
+    """Decode the QC_RESULT_LEN result bytes (user/qpu_circuit.h layout):
+    (status, n_qubits, h, prob_num, prob_den, amp_re, amp_im)."""
+    if len(result) < QC_RESULT_LEN:
+        raise ValueError(f"result too short: {len(result)} < {QC_RESULT_LEN}")
+
+    def u16(o):
+        return result[o] | (result[o + 1] << 8)
+
+    def u32(o):
+        return int.from_bytes(result[o:o + 4], "little")
+
+    def i32(o):
+        return int.from_bytes(result[o:o + 4], "little", signed=True)
+
+    return {
+        "status": result[0],
+        "n_qubits": result[1],
+        "h": u16(2),
+        "num": u32(4),
+        "den": u32(8),
+        "amp_re": i32(12),
+        "amp_im": i32(16),
+    }
