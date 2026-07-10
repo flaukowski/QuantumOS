@@ -426,7 +426,13 @@ ci-smoke: kernel
 	@echo "[1/3] Build verified: $(BUILD_DIR)/kernel.elf exists"
 	@test -f $(BUILD_DIR)/kernel.elf || (echo "ERROR: Kernel not built" && exit 1)
 	@echo "[2/3] Running QEMU boot test (14 second timeout, shell session piped into the console)..."
-	@( printf 'help\nps\nfree\nuptime\ndate\nghost\nqrand\nls\ncat /docs/hello.txt\nrun /bin/hello\nrun /bin/args alpha quantumos\nrun /bin/libqtest\nrun /bin/consciousnessd\nrun /bin/qtop\nrun /bin/life\nimprint the cat sat on the mat\nimprint pure quantum wave dynamics\nimprint hello little world\nrecall the cxt sxt on thx mxt\nfieldtest\nwrite /data/note ramfs-works\nls /data\nrm /data/note\nsync\nexit\n'; sleep 20 ) | \
+	@# The SECOND `ghost` (after the run legs) gates qsh's first-match send_msg
+	@# invariant (epic #175): qsh must still hold EXACTLY ONE IPC WRITE cap
+	@# (->ghostd) after spawning children — a blanket spawn-channel mint (or any
+	@# future change giving qsh a second IPC cap in a lower first-fit slot) would
+	@# route this ghost_req to a dead child instead of ghostd and time out. The
+	@# ghost-before-run leg alone never exercises that window.
+	@( printf 'help\nps\nfree\nuptime\ndate\nghost\nqrand\nls\ncat /docs/hello.txt\nrun /bin/hello\nrun /bin/args alpha quantumos\nrun /bin/libqtest\nrun /bin/consciousnessd\nrun /bin/qtop\nrun /bin/life\nghost\nimprint the cat sat on the mat\nimprint pure quantum wave dynamics\nimprint hello little world\nrecall the cxt sxt on thx mxt\nfieldtest\nwrite /data/note ramfs-works\nls /data\nrm /data/note\nsync\nexit\n'; sleep 20 ) | \
 		timeout 14s qemu-system-x86_64 -kernel $(BUILD_DIR)/kernel.elf32 \
 		-append agentdemo \
 		-serial stdio -m 128M -display none -no-reboot 2>&1 | tee /tmp/qemu-boot.log || true
@@ -678,13 +684,20 @@ ci-smoke: kernel
 		echo ""; echo "=== Smoke Test FAILED ==="; exit 1; \
 	fi
 	@echo "SUCCESS: free reported live kernel memory stats"
-	@# 'ghost' must fetch ghostd's field status over capability-checked IPC.
-	@if ! grep -q "qsh: ghost R=" /tmp/qemu-boot.log 2>/dev/null; then \
-		echo "ERROR: piped 'ghost' got no field status from ghostd (qsh: ghost R=)"; \
+	@# 'ghost' must fetch ghostd's field status over capability-checked IPC —
+	@# TWICE: once before any 'run' and once AFTER the spawn legs. The second
+	@# answer gates the first-match routing invariant (epic #175): if a spawn
+	@# ever handed qsh a second IPC WRITE cap (first-fit slots below the ghostd
+	@# cap are guaranteed free by then), the post-run ghost_req would misroute
+	@# to a dead child and never answer.
+	@if [ "$$(grep -c 'qsh: ghost R=' /tmp/qemu-boot.log 2>/dev/null)" -lt 2 ]; then \
+		echo "ERROR: expected TWO 'ghost' answers (pre-run + post-run); the post-run one gates"; \
+		echo "       qsh's singleton-IPC-cap first-match invariant (qsh: ghost R= x2)"; \
+		grep -c "qsh: ghost R=" /tmp/qemu-boot.log 2>/dev/null || true; \
 		echo "Boot log:"; cat /tmp/qemu-boot.log 2>/dev/null || true; \
 		echo ""; echo "=== Smoke Test FAILED ==="; exit 1; \
 	fi
-	@echo "SUCCESS: shell queried ghostd's field over capability IPC"
+	@echo "SUCCESS: shell queried ghostd's field over capability IPC (pre-run AND post-run)"
 	@# 'uptime' + 'qrand' must answer (the shell's declared quantum-pool cap works).
 	@if ! grep -q "qsh: uptime " /tmp/qemu-boot.log 2>/dev/null; then \
 		echo "ERROR: piped 'uptime' produced no answer (qsh: uptime)"; \
