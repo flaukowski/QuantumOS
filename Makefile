@@ -155,7 +155,7 @@ $(LIBQ_A): $(LIBQ_OBJS)
 
 # The archive is appended AFTER $< on the link line: ld resolves left-to-right,
 # so the program's undefined symbols must precede the archive that satisfies them.
-$(USER_BUILD)/%.elf: $(USER_DIR)/%.c $(USER_DIR)/user.ld $(USER_DIR)/usys.h $(USER_DIR)/ghost.h $(USER_DIR)/paradox.h $(USER_DIR)/sha256.h $(USER_DIR)/swarm.h $(LIBQ_HDRS) $(LIBQ_A)
+$(USER_BUILD)/%.elf: $(USER_DIR)/%.c $(USER_DIR)/user.ld $(USER_DIR)/usys.h $(USER_DIR)/ghost.h $(USER_DIR)/paradox.h $(USER_DIR)/sha256.h $(USER_DIR)/swarm.h $(USER_DIR)/qsv_engine.h $(LIBQ_HDRS) $(LIBQ_A)
 	@mkdir -p $(USER_BUILD)
 	@echo "Building user program: $<..."
 	$(CC) $(USER_CFLAGS) -T $(USER_DIR)/user.ld -o $@ $< $(LIBQ_A)
