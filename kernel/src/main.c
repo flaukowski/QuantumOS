@@ -49,6 +49,10 @@ extern uint8_t __bss_start;
 extern uint8_t __bss_end;
 extern uint8_t __end;
 
+// ELF-loader hardening self-test (kernel/src/process_test.c): drives the
+// malformed-spawn rejection paths and asserts no frame leak. Returns 0 on pass.
+extern int elf_spawn_selftest(void);
+
 // Boot state tracking
 static boot_state_t current_boot_state = BOOT_STATE_FIRMWARE;
 static boot_config_t boot_config;
@@ -320,6 +324,17 @@ static void core_services_init(void) {
 
     // Initialize process management system
     process_subsystem_init();
+
+    // ELF-loader hardening gate (adversarial bug-hunt of the proc/mem core):
+    // three malformed spawns must be REJECTED with zero frame leak. Runs before
+    // the scheduler starts (all paths return before finalize_user_process). A
+    // constant-true guard cannot ship green: without the loader fixes this leaks
+    // frames / spawns off an out-of-bounds read and the boot never reaches
+    // "QuantumOS ready".
+    if (elf_spawn_selftest() != 0) {
+        boot_panic("ELF-loader hardening self-test failed");
+    }
+    boot_log("ELFGUARD: malformed spawn rejected, no frame leak");
 
     // Initialize IPC system
     ipc_subsystem_init();

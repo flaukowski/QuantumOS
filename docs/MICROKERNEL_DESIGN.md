@@ -144,6 +144,70 @@ mem_result_t memory_protect(void *virt_addr, size_t size, uint32_t perms);
 mem_result_t memory_alloc(void **addr, size_t size, uint32_t perms);
 ```
 
+### Shared-table atomicity (single-CPU invariant)
+
+QuantumOS is single-CPU, and syscalls enter through an **interrupt gate**, so
+they run `cli`'d (`IF=0`) and are atomic with respect to interrupts and to each
+other. Kernel data structures a syscall mutates — the PMM frame bitmap and
+free/used counters, the kernel-heap free-list, the capability table, the IPC
+free-list, the QPU job table, the scheduler `ready_queue[]` — rely on this: a
+`cli`'d syscall reads-modifies-writes them without its own lock.
+
+The one thing that breaks the assumption is a mutator that reaches those same
+tables with **interrupts enabled (`IF=1`)**. Two paths do:
+
+- the **idle-loop reaper** (`process_reap`), which the idle loop deliberately
+  runs inside `interrupt_disable_all()` — so it is safe; and
+- the **health-monitor thread** (`service.c`), a `PRIORITY_HIGH` kernel thread
+  that runs at `IF=1` and, on a missed heartbeat, calls
+  `service_restart → service_stop → process_destroy`.
+
+That second path is the recurring hazard: a timer IRQ can preempt it mid-update,
+switch to a thread that enters a `cli`'d `SYS_SPAWN`, and let that spawn mutate
+the very table the monitor had half-updated — losing a write. The invariant is
+therefore: **every `IF=1` mutator of a shared table must bracket its critical
+section `cli`'d**, or delegate to a table that self-brackets. Concretely:
+
+- `pmm_alloc_frame` / `pmm_free_frame` bracket their bitmap+counter RMW in
+  `irq_save()/irq_restore()`, exactly as `kmalloc`/`kfree` already do (a lost
+  bitmap update would mark an in-use frame free and re-hand-out one physical
+  frame to two address spaces).
+- `service_stop` brackets its whole generation-guard → `process_set_state` →
+  `process_destroy` → slot retire in `svc_irq_save()/svc_irq_restore()`
+  (mirroring `start_slot`'s spawn-half bracket). Without it the generation check
+  is a TOCTOU that can destroy an innocent recycled pid, and the `ready_queue[]`
+  unlink races the timer scheduler into a use-after-free of the reaped PCB.
+- `cap_revoke_all_for_process` (capability table) and `manifest_bind`
+  (manifest table) already self-bracket, so the `process_destroy` they run
+  under is safe on those tables.
+
+### ELF loader validation
+
+`elf_load` runs inside the `cli`'d `SYS_SPAWN` and loads an `ET_EXEC` image from
+the (build-time trusted) initrd, but validates defensively so a malformed image
+can neither leak kernel memory nor corrupt the address space:
+
+- **Overflow-safe bounds.** The program-header table check
+  (`e_phoff + e_phnum*e_phentsize`) and each segment's file-extent check
+  (`p_offset + p_filesz`) are written as `a > size || b > size - a` so an
+  attacker-shaped `e_phoff`/`p_offset` near `2^64` cannot wrap the sum below
+  `size` and pass — the old additive form did, then read kernel memory far
+  outside the image into a user-mapped page.
+- **User-half confinement.** Every `PT_LOAD` segment must satisfy
+  `USER_VBASE ≤ p_vaddr` and `p_vaddr + p_memsz ≤ 0x80000000` (no wrap), with
+  `p_filesz ≤ p_memsz`. A `p_vaddr` below `USER_VBASE` would otherwise map
+  through the *shared* boot page directory's 2 MB `PS` pages — `vmspace_map_page`
+  would misread a 2 MB frame as a page table and corrupt physical memory.
+- **No frame leak on error.** `load_segment` frees a frame it allocated but
+  could not map, and `spawn_elf_args` calls `vmspace_destroy` on any `elf_load`
+  error — otherwise spawning a non-ELF initrd file from qsh leaked the two
+  address-space frames per attempt (a ring-3-reachable exhaustion DoS).
+
+A kernel boot self-test (`elf_spawn_selftest`) drives all three rejection paths
+every boot and asserts the pmm free-frame count is unchanged, emitting
+`ELFGUARD: malformed spawn rejected, no frame leak`; the CI smoke gate greps for
+it, and without the fixes the self-test panics the boot before it prints.
+
 ## Process Management
 
 ### Process Structure

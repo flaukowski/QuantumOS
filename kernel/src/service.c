@@ -473,13 +473,25 @@ svc_result_t service_stop(uint32_t service_id) {
      * pids are recycled first-fit, so an unguarded destroy here would remove
      * an innocent process that landed in the freed slot. The generation check
      * makes this a no-op when the slot has been recycled (the process is
-     * already gone, which is what we wanted anyway). */
+     * already gone, which is what we wanted anyway).
+     *
+     * The whole guard->retire sequence runs cli'd, mirroring start_slot's
+     * spawn-half bracket. service_stop is reached from the IF=1 health-monitor
+     * thread, so without this: (1) the guard is a TOCTOU — a timer IRQ between
+     * the generation check and process_destroy lets the idle reaper free the
+     * slot and a cli'd SYS_SPAWN recycle it, so we would BLOCK+destroy an
+     * innocent recycled process; and (2) process_set_state's remove_from_ready
+     * _queue and process_destroy's kfree(stack)/PCB-recycle race the timer
+     * scheduler mid-unlink on the un-cli'd ready_queue[], a use-after-free.
+     * cli across the commit closes both windows. */
+    uint64_t irqflags = svc_irq_save();
     if (slot->info.pid != 0 && process_is_valid(slot->info.pid) &&
         process_get_generation(slot->info.pid) == slot->info.pid_generation) {
         process_set_state(slot->info.pid, PROCESS_STATE_BLOCKED);
         process_destroy(slot->info.pid);
     }
     slot->info.pid = 0;
+    svc_irq_restore(irqflags);
 
     slot->info.capabilities = CAP_ID_INVALID;
     slot->info.state = SERVICE_STATE_STOPPED;
