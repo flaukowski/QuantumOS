@@ -564,6 +564,27 @@ jobs:
     - name: Prove persistence across reboots
       run: make ci-smoke-disk
 
+  quantum-gateway:
+    name: Quantum Gateway Cross-Oracle (exact engine vs PennyLane — epic #149)
+    runs-on: ubuntu-latest
+    # Phase 2 of the quantum stack: the host gateway dispatches the SAME opaque
+    # circuit wire format the in-OS broker uses to PennyLane lightning.qubit,
+    # and this gate asserts the two independent engines — the freestanding exact
+    # integer simulator (qsv_mirror) and Xanadu's C++ float state vector — agree
+    # to 1e-9 on Bell/GHZ/Grover, with a teeth check that a wrong circuit
+    # DISAGREES. Hermetic (pinned wheels); no OS boot needed.
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.12'
+    - name: Install pinned PennyLane + Lightning
+      run: pip install "pennylane==0.45.1" "pennylane-lightning==0.45.0" "numpy>=2.0"
+    - name: Cross-oracle (exact integer engine vs lightning.qubit)
+      run: python scripts/test_qsv_oracle.py
+
   networking:
     name: Networking Test (rtl8139 + user-net ARP — epic #73)
     runs-on: ubuntu-latest

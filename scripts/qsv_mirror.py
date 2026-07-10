@@ -77,9 +77,67 @@ class QSV:
     def norm2(self):
         return sum(r * r + i * i for r, i in zip(self.re, self.im))
 
+    def CNOT(self, c, t):
+        for k in range(1 << self.n):
+            if (k >> c) & 1 and not (k >> t) & 1:
+                j = k | (1 << t)
+                self.re[k], self.re[j] = self.re[j], self.re[k]
+                self.im[k], self.im[j] = self.im[j], self.im[k]
+
+    def CZ(self, a, b):
+        for k in range(1 << self.n):
+            if (k >> a) & 1 and (k >> b) & 1:
+                self.re[k], self.im[k] = -self.re[k], -self.im[k]
+
+    def Z(self, q):
+        for k in range(1 << self.n):
+            if (k >> q) & 1:
+                self.re[k], self.im[k] = -self.re[k], -self.im[k]
+
+    def S(self, q):
+        for k in range(1 << self.n):
+            if (k >> q) & 1:
+                self.re[k], self.im[k] = -self.im[k], self.re[k]
+
     def digest(self):
         buf = b"".join(struct.pack("<ii", self.re[k], self.im[k]) for k in range(1 << self.n))
         return hashlib.sha256(buf).hexdigest()
+
+    def probs(self):
+        """Exact probability of every basis state as a Fraction |v|^2 / 2^h."""
+        from fractions import Fraction
+        scale = 1 << self.h
+        return [Fraction(r * r + i * i, scale) for r, i in zip(self.re, self.im)]
+
+
+def run_bytes(circuit):
+    """Run an opaque qpu_circuit.h circuit on the exact integer engine and
+    return (n_qubits, probe, exact-probability list as Fractions). The single
+    source of truth the cross-oracle checks PennyLane against."""
+    import qpu_circuit as qc
+    n, probe, ops = qc.parse(circuit)
+    s = QSV(n)
+    for opcode, a, b in ops:
+        if opcode == qc.QC_OP_H:
+            s.H(a)
+        elif opcode == qc.QC_OP_X:
+            s.X(a)
+        elif opcode == qc.QC_OP_Z:
+            s.Z(a)
+        elif opcode == qc.QC_OP_S:
+            s.S(a)
+        elif opcode == qc.QC_OP_CNOT:
+            s.CNOT(a, b)
+        elif opcode == qc.QC_OP_CZ:
+            s.CZ(a, b)
+        elif opcode == qc.QC_OP_ORACLE:
+            s.oracle(a | (b << 8))
+        elif opcode == qc.QC_OP_DIFFUSION:
+            s.diffusion()
+        else:
+            raise ValueError(f"unknown opcode {opcode}")
+    assert s.norm2() == 1 << s.h, "unitarity broken: norm != 2^h"
+    return n, probe, s.probs()
 
 
 def grover4(target):
