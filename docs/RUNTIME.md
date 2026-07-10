@@ -191,7 +191,13 @@ and checks the EXACT integer results `qpud` returned through the broker
 then proves the quota (a third submit refused) and both cross-perm
 denials. `ghost_test` proves a capless submit is refused. Later backends
 (simulation past 12 qubits, real QPUs — Phases 2–3) are dispatched from
-`qpud` to the host gateway; the kernel surface is unchanged.
+`qpud` to the host gateway; the kernel surface is unchanged. That host
+gateway (`scripts/qsv_gateway.py`) terminates the SAME opaque circuit wire
+format and dispatches to PennyLane `lightning.qubit` (cuQuantum on
+`lightning.gpu`, real QPUs via qBraid/Braket later); a hermetic CI
+cross-oracle (`scripts/test_qsv_oracle.py`) asserts the exact integer
+engine and PennyLane agree to 1e-9 on identical circuits — two independent
+implementations, so neither can fake the other.
 
 **The kernel holographic field (epic #95).** `SYS_IMPRINT` stores a
 byte pattern (≤ 64 bytes, with a Q15 importance) into one of the
