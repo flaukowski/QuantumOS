@@ -339,6 +339,22 @@ single-basin binary attractor that relaxes onto one pattern, the kernel
 field kannakad speaks to is the ranked, importance-weighted cousin. A
 ci-smoke gate asserts all three behaviours (`RESONANCE VERIFIED`).
 
+`user/agentd.c` (+ its capless sub-agent `user/agentsub.c`) is the **agent-native
+end-to-end demo** — one ring-3 citizen exercising the whole agentic stack in a
+single story, each step with a verifiable outcome (agentd carries no engine, so
+a correct result can only have come back through the kernel's brokers): it
+**submits a Bell circuit** through the `SYS_QPU` broker and checks `qpud`'s exact
+`p(00) = 1/2`; **imprints and recalls** a phrase in holographic field region 3
+from a deliberately corrupted probe; **spawns** `/bin/hello` and waits for it to
+exit (real spawn authority); and **delegates** a strictly-narrowed READ slice of
+its region-3 field cap to `agentsub` via `SYS_CAP_DERIVE` over a
+capability-checked IPC pair, which the sub-agent recalls with (and confirms WRITE
+was withheld). On all four it prints `AGENTD: DEMO OK`; a ci-smoke gate asserts
+it. Being a heavyweight showcase, it runs only on an interactive/non-`quiet`
+boot (the default ci-smoke and the non-quiet ISO entry) — under `quiet` (the
+minimal-boot flag the MCP/society CI gates use) it is skipped so its extra boot
+work never perturbs their timing-sensitive proofs.
+
 `user/quantumd.c` is the essence of `kannaka-quantum`, and — unlike the two
 above — a **kernel-embedded service**, not a `/bin` program. `SYS_QRAND` and
 `SYS_QSEED` are capability-gated (a capless `/bin` caller gets EPERM by

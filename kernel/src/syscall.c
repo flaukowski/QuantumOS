@@ -62,6 +62,8 @@ extern const uint8_t _binary_cpu_hog_elf_start[], _binary_cpu_hog_elf_end[];
 extern const uint8_t _binary_qsv_elf_start[], _binary_qsv_elf_end[];
 extern const uint8_t _binary_qpud_elf_start[], _binary_qpud_elf_end[];
 extern const uint8_t _binary_qpu_test_elf_start[], _binary_qpu_test_elf_end[];
+extern const uint8_t _binary_agentd_elf_start[], _binary_agentd_elf_end[];
+extern const uint8_t _binary_agentsub_elf_start[], _binary_agentsub_elf_end[];
 
 /* Argument vector ABI (epic #62). MUST stay byte-identical to user_args_t
  * in user/usys.h — there is no shared header across the ring boundary. The
@@ -94,6 +96,7 @@ void user_cpu_hog_init(void);
 void user_qsv_init(void);
 void user_qpud_init(void);
 void user_qpu_test_init(void);
+void user_agent_demo_init(void);
 
 /* int 0x80 stub (kernel/src/interrupts.S) */
 extern void isr128(void);
@@ -2133,6 +2136,9 @@ void user_init(void) {
      * already fetch-ready (epic #148). */
     user_qpud_init();
     user_qpu_test_init();
+    /* The agent-native end-to-end demo — after qpud so its QPU step can execute.
+     * Its own sub-agent is started + IPC-wired inside. */
+    user_agent_demo_init();
 }
 
 /* Bring up quantumd — a quantum-pool service (kannaka-quantum, a fourth
@@ -2782,4 +2788,77 @@ void user_qpu_test_init(void) {
     } else {
         boot_log("Warning: qpu-test service failed to start");
     }
+}
+
+/* The agent-native end-to-end demo (the mission showcase). agentd holds the four
+ * grants its story needs — QPU submit (qsub quota), field region 3, the CAP_GRANT
+ * to DELEGATE that region, and spawn — and its sub-agent agentsub is capless. As
+ * with the delegation demo, both are registered + started here and a bidirectional
+ * capability-checked IPC pair is minted so agentd can SYS_CAP_DERIVE to agentsub
+ * (the IPC-peer requirement) and each can send/recv. Neither is monitored: they
+ * run their one-shot proof and idle, so the derived cap's cascade-revoke provenance
+ * (and the AGENTD gate line) stay stable. Both spawn READY but do not run until the
+ * timer starts after user_init, so the IPC caps exist before either sends. */
+void user_agent_demo_init(void) {
+    /* The demo is a heavyweight SHOWCASE (an extra QPU job, a spawn, a field
+     * imprint/recall, and a delegation handshake). Run it only on an interactive/
+     * showcase boot, NOT under `quiet` — the minimal-boot flag the specialized CI
+     * gates (MCP, society, quiet) use. There its added boot work would delay
+     * other timing-sensitive proofs (e.g. the delegation-reap the MCP gate polls
+     * for) without those gates ever checking the demo. The default ci-smoke boot
+     * (no `quiet`) and the non-quiet ISO entry still run + gate it. */
+    if (boot_is_quiet()) {
+        boot_log("agentd: end-to-end demo skipped (quiet boot)");
+        return;
+    }
+    service_definition_t agentsub_def = {
+        .name = "agentsub",
+        .entry = NULL, /* user-process service; NO grants — capless by design */
+        .user_elf_start = _binary_agentsub_elf_start,
+        .user_elf_end = _binary_agentsub_elf_end,
+        .dependencies = {NULL},
+        .max_restarts = 1,
+    };
+    service_definition_t agentd_def = {
+        .name = "agentd",
+        .entry = NULL,
+        .user_elf_start = _binary_agentd_elf_start,
+        .user_elf_end = _binary_agentd_elf_end,
+        .dependencies = {"qpud", NULL}, /* its QPU step needs the executor fetch-ready */
+        .max_restarts = 1,
+        .grant_qpu_submit = 1,
+        .qsub_max = 4,
+        .grant_spawn = 1,
+        .spawn_max = 2,
+        /* Sole CAP_GRANT holder for region 3: READ|WRITE|GRANT, so it can imprint,
+         * recall, and delegate a narrowed READ slice. */
+        .grant_field = 1,
+        .field_region = 3,
+        .grant_field_delegable = 1,
+    };
+
+    uint32_t sub_sid = 0, ag_sid = 0, sub_pid = 0, ag_pid = 0;
+    service_info_t info;
+    if (service_register(&agentsub_def, &sub_sid) == SVC_SUCCESS &&
+        service_start("agentsub", NULL) == SVC_SUCCESS &&
+        service_status(sub_sid, &info) == SVC_SUCCESS) {
+        sub_pid = info.pid;
+    }
+    if (service_register(&agentd_def, &ag_sid) == SVC_SUCCESS &&
+        service_start("agentd", NULL) == SVC_SUCCESS &&
+        service_status(ag_sid, &info) == SVC_SUCCESS) {
+        ag_pid = info.pid;
+    }
+    if (sub_pid == 0 || ag_pid == 0) {
+        boot_log("Warning: agent demo failed to start");
+        return;
+    }
+
+    /* Bidirectional capability-checked IPC (the delegation-demo pattern): agentd
+     * can reach agentsub (the SYS_CAP_DERIVE IPC-peer requirement) and back. */
+    uint32_t cap = CAP_ID_INVALID;
+    cap_create(ag_pid, CAP_RESOURCE_IPC, sub_pid, CAP_READ | CAP_WRITE, 0, &cap);
+    cap_create(sub_pid, CAP_RESOURCE_IPC, ag_pid, CAP_READ | CAP_WRITE, 0, &cap);
+
+    boot_log("agentd: agent-native end-to-end demo (QPU + field + spawn + delegate)");
 }

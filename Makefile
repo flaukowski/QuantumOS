@@ -87,7 +87,7 @@ ASSEMBLY_SOURCES = $(wildcard $(KERNEL_DIR)/src/*.S)
 # objects (symbols _binary_<name>_elf_start/_end)
 USER_DIR = user
 USER_BUILD = $(BUILD_DIR)/user
-USER_PROGS = init echo client hbsvc ghostd ghost_test paradoxd paradox_test swarm_svc qsh quantumd kannakad fieldsyncd httpd quota_test delegation_test subagentd cpu_hog qsv qpud qpu_test
+USER_PROGS = init echo client hbsvc ghostd ghost_test paradoxd paradox_test swarm_svc qsh quantumd kannakad fieldsyncd httpd quota_test delegation_test subagentd cpu_hog qsv qpud qpu_test agentd agentsub
 USER_ELF_OBJS = $(USER_PROGS:%=$(USER_BUILD)/%_elf.o)
 
 # libq: the freestanding ring-3 runtime, built as a static archive and linked
@@ -1065,6 +1065,22 @@ ci-smoke: kernel
 		echo ""; echo "=== Smoke Test FAILED ==="; exit 1; \
 	fi
 	@echo "SUCCESS: capability delegation proven (narrowed cap enforced + cascade-revoked; no BROKEN)"
+	@# Agent-native end-to-end demo (the mission showcase): a single ring-3 citizen
+	@# runs a QPU job through the broker, imprints+recalls holographic field memory,
+	@# spawns a sub-process, AND delegates a narrowed field cap to its sub-agent —
+	@# all four verified. The one gate line prints only if EVERY step succeeded.
+	@if ! grep -q "AGENTD: DEMO OK qpu+field+spawn+delegate" /tmp/qemu-boot.log 2>/dev/null; then \
+		echo "ERROR: agent-native end-to-end demo did not complete (AGENTD: DEMO OK)"; \
+		grep -E "AGENT BROKEN|AGENTD: DEMO BROKEN|AGENTSUB BROKEN" /tmp/qemu-boot.log 2>/dev/null || true; \
+		echo "Boot log:"; cat /tmp/qemu-boot.log 2>/dev/null || true; \
+		echo ""; echo "=== Smoke Test FAILED ==="; exit 1; \
+	fi
+	@if grep -qE "AGENT BROKEN|AGENTD: DEMO BROKEN|AGENTSUB BROKEN" /tmp/qemu-boot.log 2>/dev/null; then \
+		echo "ERROR: agent demo reported a BROKEN step"; \
+		grep -E "AGENT BROKEN|AGENTD: DEMO BROKEN|AGENTSUB BROKEN" /tmp/qemu-boot.log 2>/dev/null || true; \
+		echo ""; echo "=== Smoke Test FAILED ==="; exit 1; \
+	fi
+	@echo "SUCCESS: agent-native demo proven end to end (QPU + field + spawn + delegate)"
 	@# Supervision gate: after the piped 'exit', the watchdog must restart the
 	@# shell, which reintroduces itself as reborn.
 	@if ! grep -q "QSH: reborn" /tmp/qemu-boot.log 2>/dev/null; then \
