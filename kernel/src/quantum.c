@@ -57,6 +57,31 @@ static uint64_t xorshift64(void) {
     return x;
 }
 
+/* SplitMix64 avalanche — diffuse every input bit before mixing a seed in. */
+static uint64_t splitmix64(uint64_t x) {
+    uint64_t z = x + 0x9E3779B97F4A7C15ULL;
+    z = (z ^ (z >> 30)) * 0xBF58476D1CE4E5B9ULL;
+    z = (z ^ (z >> 27)) * 0x94D049BB133111EBULL;
+    return z ^ (z >> 31);
+}
+
+/* Mix `seed` into `state`, NEVER returning 0. xorshift64 has 0 as an ABSORBING
+ * fixed point (xorshift64(0)==0 forever), so a zero state silently and
+ * permanently disables all kernel randomness — SYS_QRAND returns zero bytes
+ * (while still reporting provenance OK), quantum_kernel_rand() returns 0, the
+ * DNS transaction-id/source-port anti-spoof randomization collapses to a
+ * constant, and any service's Lamport key material becomes predictable. Because
+ * splitmix64 is a bijection, an attacker who controls the untrusted `qseed=`
+ * boot token can invert it and pick the ONE value whose avalanche equals the
+ * golden init constant, cancelling the state to exactly 0. The guard closes it. */
+static uint64_t mix_seed_nonzero(uint64_t state, uint64_t seed) {
+    state ^= splitmix64(seed);
+    if (state == 0) {
+        state = 0x9E3779B97F4A7C15ULL;
+    }
+    return state;
+}
+
 static cap_result_t check_pool_cap(uint32_t pid, uint32_t cap_id, uint32_t required_perms) {
     return cap_check(cap_id, pid, CAP_RESOURCE_QUANTUM, QUANTUM_POOL_RESOURCE_ID, required_perms);
 }
@@ -93,15 +118,13 @@ quantum_result_t quantum_init(void) {
     pool_stats.high_fidelity_qubits = QUANTUM_MAX_QUBITS;
 
     if (boot_entropy_present) {
-        /* Mix the externally supplied quantum entropy into the PRNG
-         * state (SplitMix-style avalanche so all bits diffuse) */
-        uint64_t z = boot_entropy + 0x9E3779B97F4A7C15ULL;
-        z = (z ^ (z >> 30)) * 0xBF58476D1CE4E5B9ULL;
-        z = (z ^ (z >> 27)) * 0x94D049BB133111EBULL;
-        prng_state ^= (z ^ (z >> 31));
+        /* Mix the externally supplied quantum entropy into the PRNG state
+         * (SplitMix avalanche + non-zero guard: an adversarial qseed must never
+         * be able to zero the generator — see mix_seed_nonzero). */
+        prng_state = mix_seed_nonzero(prng_state, boot_entropy);
         boot_log("Quantum entropy: seeded from boot handoff (qBraid quantum lab)");
     } else {
-        prng_state ^= timer_get_ticks() + 1;
+        prng_state = mix_seed_nonzero(prng_state, timer_get_ticks() + 1);
         boot_log("Quantum entropy: internal default (no boot seed)");
     }
 
@@ -508,6 +531,19 @@ quantum_result_t quantum_selftest(void) {
 
     cap_revoke(cap, 1);
     cap_revoke(bad_cap, 2);
+
+    /* Adversarial-qseed guard (bug-hunt of the untrusted boot cmdline): the
+     * qseed= token must NEVER be able to zero the PRNG (xorshift64's absorbing
+     * fixed point silently kills all randomness). mix_seed_nonzero is the exact
+     * path quantum_init seeds through. Two cases: the specific attacker value
+     * whose splitmix64 avalanche inverts to the golden constant (cancelling
+     * state to 0), and the generic state == splitmix64(seed) cancellation. The
+     * boot gates on the line below; without the guard the first assert trips and
+     * the boot panics before "QuantumOS ready". */
+    QT_ASSERT(mix_seed_nonzero(0x9E3779B97F4A7C15ULL, 0xCD36DA00563C5EF6ULL) != 0,
+              "qseed cannot zero PRNG (attacker value)");
+    QT_ASSERT(mix_seed_nonzero(splitmix64(0), 0) != 0, "qseed cannot zero PRNG (generic)");
+    boot_log("QSEEDGUARD: PRNG survives adversarial qseed (non-zero)");
 
     boot_log("quantum self-test: PASS");
     return QUANTUM_SUCCESS;

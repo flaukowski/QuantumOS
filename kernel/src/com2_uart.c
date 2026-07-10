@@ -30,6 +30,19 @@
 
 static uint8_t com2_ready = 0;
 
+/* Upper bound on the per-byte THR-drain wait, mirroring console.c's COM1
+ * THR_DRAIN_SPINS. com2_write runs cli'd from SYS_COM2, so an UNBOUNDED spin on
+ * a wedged port — a swarm peer that stops draining the serial link, leaving THRE
+ * clear forever — would freeze the ENTIRE kernel (no timer tick, no preemption),
+ * not just the writer. Capping it trades a dropped byte on a genuinely stuck
+ * port for guaranteed liveness. ~2M iterations far exceeds a real 115200-baud
+ * byte time yet is a small bounded stall. */
+#define COM2_THR_DRAIN_SPINS 2000000u
+
+/* Sticky: set once COM2's THR fails to drain within the spin cap, so a wedged
+ * or absent peer is not paid for on every subsequent byte (cli'd) forever. */
+static uint8_t com2_dead = 0;
+
 static inline void io_outb(uint16_t port, uint8_t value) {
     __asm__ volatile("outb %0, %1" : : "a"(value), "Nd"(port));
 }
@@ -61,12 +74,19 @@ void com2_init(void) {
 }
 
 uint32_t com2_write(const uint8_t *buf, uint32_t len) {
-    if (!com2_ready || !buf) {
+    if (!com2_ready || !buf || com2_dead) {
         return 0;
     }
     for (uint32_t i = 0; i < len; i++) {
+        uint32_t spins = 0;
         while (!(io_inb(COM2_PORT_BASE + UART_LSR) & LSR_THR_EMPTY)) {
-            /* spin until the transmit holding register drains */
+            if (++spins >= COM2_THR_DRAIN_SPINS) {
+                /* Port wedged: latch it dead and stop hanging the kernel with
+                 * interrupts disabled. Return the count written so far so the
+                 * ring-3 caller (swarm_svc) sees a short write and stops. */
+                com2_dead = 1;
+                return i;
+            }
         }
         io_outb(COM2_PORT_BASE + UART_THR, buf[i]);
     }
