@@ -42,6 +42,15 @@ def _probs_pennylane(circuit, device):
     n, _probe, ops = qc.parse(circuit)
     dev = qml.device(device, wires=n)
     wires = list(range(n))
+    # PennyLane indexes a basis integer/probs vector BIG-endian (wire 0 = MSB);
+    # the exact engine (and the OS) is LITTLE-endian (qubit 0 = LSB). So the
+    # index/integer-mapping calls — probs() and FlipSign() — take the REVERSED
+    # wire order to read out little-endian. The elementary gates act on physical
+    # wire labels and are unchanged. (A previous version passed `wires` to probs;
+    # that was masked by symmetric Bell/GHZ and Grover's near-uniform tail but
+    # gave WRONG probabilities for asymmetric circuits — e.g. H on qubit 0 of a
+    # 3q register put mass at index 4 instead of 1.)
+    rw = wires[::-1]
 
     def build():
         for opcode, a, b in ops:
@@ -58,21 +67,16 @@ def _probs_pennylane(circuit, device):
             elif opcode == qc.QC_OP_CZ:
                 qml.CZ([a, b])
             elif opcode == qc.QC_OP_ORACLE:
-                qml.FlipSign(a | (b << 8), wires=wires)
+                qml.FlipSign(a | (b << 8), wires=rw)
             elif opcode == qc.QC_OP_DIFFUSION:
-                qml.GroverOperator(wires=wires)
+                qml.GroverOperator(wires=rw)
             else:
                 raise ValueError(f"unknown opcode {opcode}")
 
     @qml.qnode(dev)
     def circuit_fn():
         build()
-        # Convention: FlipSign/GroverOperator/probs all take the SAME `wires`
-        # order, which makes PennyLane self-consistent — a target integer T
-        # lands at probs index T, exactly as the exact engine indexes basis T.
-        # (Verified against non-palindromic Grover-4q target 11 -> index 11;
-        # reversing the wires mis-maps it to 13.)
-        return qml.probs(wires=wires)
+        return qml.probs(wires=rw)
 
     return list(circuit_fn())
 

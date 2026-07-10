@@ -32,9 +32,10 @@ import qpu_circuit as qc
 from qos_bridge import QosVM
 
 QSEED = "DEADBEEFCAFEBABE"
-QSUB_MAX = 4  # swarm-svc .qsub_max (syscall.c); a submission that reaches the
+QSUB_MAX = 5  # swarm-svc .qsub_max (syscall.c); a submission that reaches the
 #               broker charges quota even if the executor later rejects it, so
-#               bell + grover3 + large + malformed = 4 charges, then 1 refused.
+#               bell + grover3 + large + malformed + overflow = 5 charges, then
+#               1 refused.
 
 
 def _fail(msg):
@@ -112,10 +113,20 @@ def main():
         _fail(f"malformed circuit: executor did not forward EINVAL: {rb['result'][:1]!r}")
     print("OK: malformed circuit → wire broker error (status=2, EINVAL forwarded)")
 
-    # 6. Quota: bell + grover3 + large + malformed = 4 charges = qsub_max, so the
-    #    5th submit must be refused (status=1). Assert the swarm-svc incarnation
-    #    is unchanged across the run (a rebirth would reset qsub_used and
-    #    invalidate this) via the process table.
+    # 5b. Overflow guard (charges quota #5): 64 H gates on one qubit drive the
+    #     amplitude to 2^32, overflowing int32. The executor must DETECT this
+    #     (int64 butterfly + sticky flag) and reject with EINVAL rather than
+    #     report a wrapped amplitude as a valid probability.
+    overflow = qc.build(1, [(qc.QC_OP_H, 0, 0)] * 64, probe=0)
+    ro = vm.qsubmit(overflow)
+    if ro["status"] != 2:
+        _fail(f"overflow circuit: wire status {ro['status']} != 2 (should reject, not wrap)")
+    print("OK: int32-overflowing circuit rejected (status=2 — no wrapped amplitude)")
+
+    # 6. Quota: bell + grover3 + large + malformed + overflow = 5 charges =
+    #    qsub_max, so the 6th submit must be refused (status=1). Assert the
+    #    swarm-svc incarnation is unchanged across the run (a rebirth would reset
+    #    qsub_used and invalidate this) via the process table.
     def swarm_pid():
         return next((p["pid"] for p in vm.sysinfo()["processes"]
                      if p["name"] == "swarm-svc" and p["state"] in ("RUNNING", "READY")), None)

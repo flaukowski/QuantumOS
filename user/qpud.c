@@ -101,6 +101,12 @@ static void run_circuit(const unsigned char *c, unsigned int len, unsigned char 
             goto einval;
         }
     }
+    /* An amplitude overflowed int32 during an H butterfly (a deep host circuit):
+     * the state is corrupt, reject rather than report a wrapped value. Checked
+     * BEFORE qsv_norm_ok, which runs after the wrap and would miss it. */
+    if (qsv_overflow) {
+        goto einval;
+    }
     /* Unitarity must hold exactly (integer identity) or the result is not
      * trustworthy — reject rather than report a non-physical amplitude. */
     if (!qsv_norm_ok(n)) {
@@ -111,8 +117,21 @@ static void run_circuit(const unsigned char *c, unsigned int len, unsigned char 
         int amp_im = qsv_im[probe];
         unsigned long long mag2 =
             (unsigned long long)((long long)amp_re * amp_re + (long long)amp_im * amp_im);
+        /* A legal ZERO-probability probe (the amplitude at probe is 0) reduces
+         * to 0/1 — report it directly, before the hh>31 guard which would
+         * otherwise falsely reject a p=0 result on a circuit with h>31. */
+        if (mag2 == 0) {
+            out[0] = QC_STATUS_OK;
+            out[1] = (unsigned char)n;
+            put_u16(out + 2, qsv_h);
+            put_u32(out + 4, 0); /* num = 0 */
+            put_u32(out + 8, 1); /* den = 1 -> p = 0 */
+            put_u32(out + 12, (unsigned int)amp_re);
+            put_u32(out + 16, (unsigned int)amp_im);
+            return;
+        }
         unsigned int hh = qsv_h;
-        while (mag2 != 0 && (mag2 & 1) == 0 && hh > 0) {
+        while ((mag2 & 1) == 0 && hh > 0) {
             mag2 >>= 1;
             hh--;
         }

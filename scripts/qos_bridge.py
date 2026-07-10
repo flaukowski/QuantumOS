@@ -780,6 +780,11 @@ class QosVM:
     def _transact(self, req_frame, expect_op, deadline):
         """Send one DATA request and return the matching-opcode reply payload."""
         with self._io_lock:
+            # Drop any bytes left in the reassembly buffer from a PRIOR transact
+            # (e.g. a reply that arrived after that call's deadline). The wire
+            # carries no request/reply correlation id, so a stale same-opcode
+            # frame here would be mis-attributed to THIS request — flush first.
+            self._parser.buf.clear()
             self._com2.sendall(req_frame)
             while time.time() < deadline:
                 chunk = self._recv_com2()

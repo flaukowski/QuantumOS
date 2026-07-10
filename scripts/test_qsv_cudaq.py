@@ -40,6 +40,9 @@ def main():
         ("ghz3", qc.ghz(3)),
         ("ghz6", qc.ghz(6)),
         ("h_s_h", qc.h_s_h()),
+        # asymmetric — catches any qubit-ordering bug the symmetric cases hide.
+        ("H0-3q", qc.build(3, [(qc.QC_OP_H, 0, 0)], 0)),
+        ("H0-X2-3q", qc.build(3, [(qc.QC_OP_H, 0, 0), (qc.QC_OP_X, 2, 0)], 0)),
     ]
     ok = True
     for name, circ in cases:

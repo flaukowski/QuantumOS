@@ -215,7 +215,13 @@ the exact integer engine on its free local CPU target); and
 and metered, so a maintainer-invoked `workflow_dispatch`, never an
 autonomous gate). The in-OS `AUDIT_QSUBMIT` ledger entry lets an auditor
 reconcile a real-QPU submission's upstream job id against the OS-side
-authority record — who submitted, under what grant and quota.
+authority record — who submitted, under what grant and quota. Every backend
+reports probabilities in the exact engine's **little-endian** basis order
+(qubit 0 = LSB); the cross-oracle tests include asymmetric circuits, so a
+big-endian readout (which symmetric Bell/GHZ hide) is caught, not trusted.
+The executor rejects a circuit whose amplitudes overflow int32 rather than
+report a wrapped value, and the broker's process-death sweep runs cli'd so a
+watchdog teardown can never race a concurrent submit.
 
 **The kernel holographic field (epic #95).** `SYS_IMPRINT` stores a
 byte pattern (≤ 64 bytes, with a Q15 importance) into one of the

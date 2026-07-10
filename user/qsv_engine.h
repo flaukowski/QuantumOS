@@ -31,6 +31,13 @@
 static int32_t qsv_re[QSV_DIM];
 static int32_t qsv_im[QSV_DIM];
 static uint32_t qsv_h; /* running Hadamard count == -log2 of the scale^2 */
+/* Sticky overflow flag: the H butterfly (a+b, a-b) can push an int32 amplitude
+ * past +/-2^31 on a deep enough circuit (host-supplied circuits are opaque and
+ * unbounded in gate count). Signed int32 overflow is UB, so the butterfly does
+ * its arithmetic in int64 and sets this flag on any out-of-range result; the
+ * caller (qpud) rejects the circuit rather than trusting a wrapped amplitude
+ * (qsv_norm_ok runs AFTER the arithmetic and would miss the boundary). */
+static int qsv_overflow;
 
 static inline void qsv_reset(int n) {
     for (int k = 0; k < (1 << n); k++) {
@@ -39,6 +46,7 @@ static inline void qsv_reset(int n) {
     }
     qsv_re[0] = 1;
     qsv_h = 0;
+    qsv_overflow = 0;
 }
 
 /* H on qubit q: butterfly (a,b) -> (a+b, a-b). The ONLY gate that grows
@@ -48,12 +56,20 @@ static inline void qsv_gate_h(int n, int q) {
     int step = 1 << q;
     for (int base = 0; base < (1 << n); base += step << 1) {
         for (int k = base; k < base + step; k++) {
-            int32_t ar = qsv_re[k], ai = qsv_im[k];
-            int32_t br = qsv_re[k + step], bi = qsv_im[k + step];
-            qsv_re[k] = ar + br;
-            qsv_im[k] = ai + bi;
-            qsv_re[k + step] = ar - br;
-            qsv_im[k + step] = ai - bi;
+            /* int64 intermediates avoid the UB of a signed int32 overflow; the
+             * truncating cast is defined, and a value that changes under it is
+             * flagged so the caller rejects the circuit. */
+            int64_t ar = qsv_re[k], ai = qsv_im[k];
+            int64_t br = qsv_re[k + step], bi = qsv_im[k + step];
+            int64_t sr = ar + br, si = ai + bi, dr = ar - br, di = ai - bi;
+            if ((int64_t)(int32_t)sr != sr || (int64_t)(int32_t)si != si ||
+                (int64_t)(int32_t)dr != dr || (int64_t)(int32_t)di != di) {
+                qsv_overflow = 1;
+            }
+            qsv_re[k] = (int32_t)sr;
+            qsv_im[k] = (int32_t)si;
+            qsv_re[k + step] = (int32_t)dr;
+            qsv_im[k + step] = (int32_t)di;
         }
     }
     qsv_h++;
