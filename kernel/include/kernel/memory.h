@@ -93,6 +93,9 @@ void *pmm_alloc_frame(void);
 mem_result_t pmm_free_frame(void *frame_addr);
 uint32_t pmm_get_free_frames(void);
 uint32_t pmm_get_total_frames(void);
+// Frame-allocator correctness self-test (guards the rover optimization).
+// Returns 0 on pass, negative on the first failing invariant.
+int pmm_alloc_selftest(void);
 
 // Virtual memory management
 mem_result_t vmm_init(void);

@@ -14,6 +14,16 @@ static physical_memory_t pmm;
 static virtual_memory_t vmm;
 static memory_allocator_t kernel_heap;
 
+// Frame allocator search rover: the index pmm_alloc_frame starts its next scan
+// from. Without it every allocation re-scanned the bitmap from frame 0 — O(total
+// frames) per call, and the low frames are permanently reserved (kernel image +
+// bitmap), so the scan always paid to skip them first. The rover advances past
+// the last frame handed out so a run of sequential allocations (page tables, a
+// spawn's segments+stack) is amortized O(1); pmm_free_frame rewinds it to a
+// freed frame so holes are refilled before the rover marches on. Guarded by the
+// same irq_save bracket as the bitmap it indexes. Invariant: 0 <= hint < total.
+static uint32_t pmm_alloc_hint;
+
 // Interrupt save/restore (single CPU). The PMM bitmap+counters and the heap
 // free-list are shared tables that the IF=1 process-teardown path mutates
 // (health_monitor_thread -> process_destroy -> vmspace_destroy -> pmm_free_frame,
@@ -75,10 +85,18 @@ mem_result_t pmm_init(uint64_t total_memory) {
 void *pmm_alloc_frame(void) {
     // Atomic vs the IF=1 teardown path (see irq_save note): the scan+mark of the
     // bitmap byte and the counter updates must not be split by a timer IRQ that
-    // preempts into pmm_free_frame on the same byte.
+    // preempts into pmm_free_frame on the same byte. The rover (pmm_alloc_hint)
+    // is part of that shared state, so it is read/written inside the bracket.
     uint64_t flags = irq_save();
-    // Find first free frame
-    for (uint32_t i = 0; i < pmm.total_frames; i++) {
+    uint32_t total = pmm.total_frames;
+    // Scan from the rover, wrapping once, so every frame is examined AT MOST once
+    // — the allocator still returns a free frame iff one exists, but a run of
+    // sequential allocations no longer re-scans the reserved low frames each call.
+    for (uint32_t n = 0; n < total; n++) {
+        uint32_t i = pmm_alloc_hint + n;
+        if (i >= total) {
+            i -= total; // single wrap: pmm_alloc_hint < total and n < total, so i < 2*total
+        }
         uint32_t byte_index = i / 8;
         uint8_t bit_index = i % 8;
 
@@ -87,6 +105,9 @@ void *pmm_alloc_frame(void) {
             pmm.frame_bitmap[byte_index] |= (1 << bit_index);
             pmm.free_frames--;
             pmm.used_frames++;
+
+            // Advance the rover past this frame (wrap to 0 at the end).
+            pmm_alloc_hint = (i + 1 < total) ? (i + 1) : 0;
 
             void *frame_addr = (void *)(uintptr_t)(i * PAGE_SIZE);
             irq_restore(flags);
@@ -120,6 +141,12 @@ mem_result_t pmm_free_frame(void *frame_addr) {
     pmm.free_frames++;
     pmm.used_frames--;
 
+    // Rewind the rover so a freed hole below it is refilled before the rover
+    // marches further — keeps allocations compact and the scan short.
+    if ((uint32_t)frame_num < pmm_alloc_hint) {
+        pmm_alloc_hint = (uint32_t)frame_num;
+    }
+
     irq_restore(flags);
     return MEM_SUCCESS;
 }
@@ -130,6 +157,88 @@ uint32_t pmm_get_free_frames(void) {
 
 uint32_t pmm_get_total_frames(void) {
     return pmm.total_frames;
+}
+
+// Frame-allocator correctness self-test (the rover optimization's gate). The
+// rover changes WHICH free frame is returned, so its risk is a hint/wrap bug
+// that double-hands a live frame or loses one. This asserts, deterministically:
+//   A. a batch of allocations are all DISTINCT (no double-hand),
+//   B. after freeing one, the next allocation never returns a still-live frame
+//      (the rewind/wrap picks a genuinely free slot),
+//   C. freeing the batch restores the exact free-frame count (no leak, no loss).
+// Returns 0 on pass. The boot itself allocates thousands of frames (wrapping the
+// rover many times), so a broken wrap ALSO fails the boot's later gates. Runs at
+// init time on one CPU; the temporary allocations are all released before return.
+int pmm_alloc_selftest(void) {
+    uint32_t base = pmm_get_free_frames();
+    void *f[32];
+
+    // A. distinct allocations
+    for (int i = 0; i < 32; i++) {
+        f[i] = pmm_alloc_frame();
+        if (!f[i]) {
+            for (int j = 0; j < i; j++) {
+                pmm_free_frame(f[j]);
+            }
+            return -1;
+        }
+    }
+    for (int i = 0; i < 32; i++) {
+        for (int j = i + 1; j < 32; j++) {
+            if (f[i] == f[j]) {
+                return -2; /* double-hand (boot panics -> memory not restored, fine) */
+            }
+        }
+    }
+
+    // B. free one, realloc must not collide with a still-live frame
+    pmm_free_frame(f[0]);
+    void *g = pmm_alloc_frame();
+    if (!g) {
+        return -3;
+    }
+    for (int i = 1; i < 32; i++) {
+        if (g == f[i]) {
+            return -4;
+        }
+    }
+    f[0] = g;
+
+    // C. free all; the count must return exactly to baseline
+    for (int i = 0; i < 32; i++) {
+        pmm_free_frame(f[i]);
+    }
+    if (pmm_get_free_frames() != base) {
+        return -5;
+    }
+
+    // D. WRAP correctness — the invariant a from-the-bottom test would miss. The
+    // modulo-to-0 wrap only fires when a scan finds NOTHING free from `hint` to
+    // the end, so mark the top 4 frames used (direct bitmap poke — restored
+    // below; single-CPU, pre-scheduler) and point the rover at them. The next
+    // allocation MUST wrap past total to reach a free low frame: a correct wrap
+    // returns a valid in-range frame; a broken one yields addr >= RAM (or NULL).
+    uint32_t total = pmm_get_total_frames();
+    if (total > 16) {
+        for (uint32_t k = total - 4; k < total; k++) {
+            pmm.frame_bitmap[k / 8] |= (uint8_t)(1u << (k % 8)); /* occupy top */
+        }
+        pmm_alloc_hint = total - 4;
+        uint64_t limit = (uint64_t)total * PAGE_SIZE;
+        void *wrapped = pmm_alloc_frame(); /* forced to wrap to 0 to find a frame */
+        int ok = wrapped != NULL && (uint64_t)(uintptr_t)wrapped < limit;
+        if (wrapped) {
+            pmm_free_frame(wrapped);
+        }
+        for (uint32_t k = total - 4; k < total; k++) {
+            pmm.frame_bitmap[k / 8] &= (uint8_t) ~(1u << (k % 8)); /* release top */
+        }
+        pmm_alloc_hint = 0;
+        if (!ok || pmm_get_free_frames() != base) {
+            return -6;
+        }
+    }
+    return 0;
 }
 
 // Virtual memory management
