@@ -99,6 +99,14 @@ void audit_reap(uint32_t pid, uint32_t resource_type, uint32_t resource_id, uint
     audit_record(AUDIT_REAP, pid, AUDIT_V_OK, resource_type, resource_id, permissions);
 }
 
+/* UNLINK records the SURVIVING owner (the peer left holding a channel half
+ * whose target died) — never the dead pid, which is already carried in
+ * resource_id. See audit.h: REAP must keep meaning "owner died". */
+void audit_unlink(uint32_t pid, uint32_t resource_type, uint32_t resource_id,
+                  uint32_t permissions) {
+    audit_record(AUDIT_UNLINK, pid, AUDIT_V_OK, resource_type, resource_id, permissions);
+}
+
 /* ---- freestanding formatting (no libc) ---- */
 static size_t put_str(char *b, size_t o, size_t max, const char *s) {
     while (*s && o < max - 1) {
@@ -166,6 +174,8 @@ static const char *kind_name(uint16_t k) {
         return "REAP";
     case AUDIT_QSUBMIT:
         return "QSUBMIT";
+    case AUDIT_UNLINK:
+        return "UNLINK";
     case AUDIT_KIND_EMPTY:
         return "EMPTY";
     default:

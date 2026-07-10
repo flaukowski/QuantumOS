@@ -150,6 +150,15 @@ typedef struct {
      * with spawn_max=1; qsh stays 0 — a finite shell quota would brick
      * long-lived agent sessions no CI boot can ever exercise. */
     uint32_t spawn_max;
+    /* OPT IN to spawn-time parent<->child IPC channels (epic #175): every
+     * SYS_SPAWN by this citizen mints a bidirectional capability-checked IPC
+     * pair between it and the child (the pipe-at-fork analogue), tagged so the
+     * surviving half UNLINKs when either end dies. DELIBERATELY opt-in and NOT
+     * set for qsh: untargeted send_msg routes FIRST-MATCH over the sender's
+     * IPC caps, so blanket minting would break any spawner that relies on a
+     * singleton IPC cap (qsh's `ghost` builtin), and would un-capless every
+     * `run` child. Only meaningful alongside grant_spawn. agentd only. */
+    uint8_t grant_spawn_channel;
     /* Grant a CAP_RESOURCE_DEVICE WRITE cap over DEVICE_ID_QPU, re-minted on
      * every start (epic #148): the QPU SUBMIT right — queue an opaque circuit
      * for execution and POLL the result. Held by submitters (qpu_test now,

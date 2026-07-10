@@ -361,6 +361,7 @@ static svc_result_t start_slot(service_slot_t *slot) {
         memset(&man, 0, sizeof(man));
         man.bound = 1;
         man.spawn_max = slot->def.spawn_max;
+        man.spawn_channel = slot->def.grant_spawn_channel; /* spawn-time IPC pairs (epic #175) */
         man.cpu_limit = slot->def.cpu_limit; /* CPU quota (epic #144); 0 = unlimited */
         man.qsub_max = slot->def.qsub_max;   /* QPU submit quota (epic #148); 0 = unlimited */
         if (slot->def.grant_quantum_pool) {

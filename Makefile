@@ -87,7 +87,7 @@ ASSEMBLY_SOURCES = $(wildcard $(KERNEL_DIR)/src/*.S)
 # objects (symbols _binary_<name>_elf_start/_end)
 USER_DIR = user
 USER_BUILD = $(BUILD_DIR)/user
-USER_PROGS = init echo client hbsvc ghostd ghost_test paradoxd paradox_test swarm_svc qsh quantumd kannakad fieldsyncd httpd quota_test delegation_test subagentd cpu_hog qsv qpud qpu_test agentd agentsub
+USER_PROGS = init echo client hbsvc ghostd ghost_test paradoxd paradox_test swarm_svc qsh quantumd kannakad fieldsyncd httpd quota_test delegation_test subagentd cpu_hog qsv qpud qpu_test agentd
 USER_ELF_OBJS = $(USER_PROGS:%=$(USER_BUILD)/%_elf.o)
 
 # libq: the freestanding ring-3 runtime, built as a static archive and linked
@@ -178,7 +178,7 @@ $(USER_BUILD)/%_elf.o: $(USER_BUILD)/%.elf
 ROOTFS_DIR = rootfs
 ROOTFS_FILES = $(shell find $(ROOTFS_DIR) -type f 2>/dev/null)
 ROOTFS_STAGE = $(BUILD_DIR)/rootfs-stage
-INITRD_BIN_PROGS = hello args libqtest consciousnessd qtop qprobe life
+INITRD_BIN_PROGS = hello args libqtest consciousnessd qtop qprobe life agentsub
 
 $(BUILD_DIR)/initrd.tar: $(ROOTFS_FILES) $(INITRD_BIN_PROGS:%=$(USER_BUILD)/%.elf)
 	@mkdir -p $(BUILD_DIR)
@@ -467,6 +467,20 @@ ci-smoke: kernel
 		exit 1; \
 	fi
 	@echo "SUCCESS: capability high-water-mark gate passed (bounded lookups, correct coverage)"
+	@# Spawn-channel unlink gate (epic #175): when a process dies, spawn-minted
+	@# IPC caps TARGETING it are freed — scoped by origin tag AND resource type,
+	@# so hand-wired pairs and colliding-resource_id caps survive (the self-test
+	@# asserts all three survivors; an over-broad or mis-keyed revoker panics the
+	@# boot before this line).
+	@if ! grep -q "CAPUNLINK: spawn-channel caps die with their target" /tmp/qemu-boot.log 2>/dev/null; then \
+		echo "ERROR: spawn-channel unlink gate missing (CAPUNLINK)"; \
+		echo "Boot log:"; \
+		cat /tmp/qemu-boot.log 2>/dev/null || true; \
+		echo ""; \
+		echo "=== Smoke Test FAILED ==="; \
+		exit 1; \
+	fi
+	@echo "SUCCESS: spawn-channel unlink gate passed (scoped teardown, survivors intact)"
 	@# ELF-loader hardening gate (adversarial bug-hunt of the proc/mem core):
 	@# three malformed spawns (bad magic, p_offset overflow, sub-USER_VBASE
 	@# p_vaddr) must be rejected with zero frame leak. This line is printed only

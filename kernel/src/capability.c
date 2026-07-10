@@ -147,6 +147,7 @@ cap_result_t cap_create(uint32_t owner_pid, cap_resource_type_t resource_type, u
     slot->cap.expiration = expiration;
     slot->cap.is_revocable = 1;
     slot->cap.is_inherited = 0;
+    slot->cap.is_spawn_channel = 0; /* only sys_spawn tags, via cap_mark_spawn_channel */
     slot->cap.parent_cap = CAP_ID_INVALID;
 
     stats.created++;
@@ -195,6 +196,7 @@ cap_result_t cap_derive(uint32_t parent_cap_id, uint32_t requester_pid, uint32_t
     child->cap.expiration = expiration;
     child->cap.is_revocable = 1;
     child->cap.is_inherited = 1;
+    child->cap.is_spawn_channel = 0; /* derivation never inherits the spawn-channel tag */
     child->cap.parent_cap = parent_cap_id;
 
     stats.derived++;
@@ -435,6 +437,46 @@ void cap_revoke_all_for_process(uint32_t pid) {
     }
 }
 
+cap_result_t cap_mark_spawn_channel(uint32_t cap_id) {
+    cap_slot_t *slot = resolve(cap_id);
+    if (!slot) {
+        return CAP_ERROR_INVALID_ID;
+    }
+    slot->cap.is_spawn_channel = 1;
+    return CAP_SUCCESS;
+}
+
+void cap_revoke_spawn_channels(uint32_t dead_pid) {
+    for (uint32_t i = 0; i < MAX_CAPABILITIES; i++) {
+        /* Scoped THREE ways: origin tag (hand-minted pairs survive a peer's
+         * restart), resource type (a FIELD/PROC cap whose resource_id happens
+         * to equal a small pid survives — pids are slot indices and collide
+         * with region/device ids), and the dead target itself. */
+        if (cap_table[i].in_use && cap_table[i].cap.is_spawn_channel &&
+            cap_table[i].cap.resource_type == CAP_RESOURCE_IPC &&
+            cap_table[i].cap.resource_id == dead_pid) {
+            uint32_t id = cap_table[i].cap.cap_id;
+            /* Defensive: channel caps carry no CAP_GRANT so nothing derives
+             * from them today; if a future deriver appears, its children die
+             * with the channel rather than dangling. */
+            revoke_children_of(id, AUDIT_UNLINK);
+            /* Capture-before-free (the capability.c:245 discipline): this runs
+             * at IF=1 from process_destroy's callers, and the audit must be
+             * emitted from the captured copy, never the freed slot. The record
+             * lands under the SURVIVING owner — the peer whose channel half
+             * became meaningless — with kind UNLINK, never REAP: the owner did
+             * NOT die, and REAP must keep meaning "owner died" for verifiers. */
+            uint32_t owner = cap_table[i].cap.owner_id;
+            uint32_t rtype = cap_table[i].cap.resource_type;
+            uint32_t rid = cap_table[i].cap.resource_id;
+            uint32_t perms = cap_table[i].cap.permissions;
+            free_slot(&cap_table[i]);
+            stats.revoked++;
+            audit_unlink(owner, rtype, rid, perms);
+        }
+    }
+}
+
 void cap_get_stats(cap_stats_t *out) {
     if (out) {
         *out = stats;
@@ -526,6 +568,57 @@ cap_result_t cap_selftest(void) {
                   "ephemeral valid pre-tick");
     }
     cap_revoke(ephemeral, 1);
+
+    /* Spawn-channel unlink gate (epic #175). ORDERING CONSTRAINT: this leg
+     * creates-and-frees caps, so it must stay AFTER the CAPHWM block above —
+     * that gate requires a packed hole-free table, and a hole punched before
+     * it would first-fit its probe cap below the mark and panic the boot.
+     * Anti-vacuous by survivor asserts: the revoker must be scoped by origin
+     * tag AND resource type AND target — each survivor below defeats one
+     * over-broad implementation that a lone "target cap died" assert would
+     * let ship green. Fake pids: 900 = surviving peer, 901 = dead child,
+     * 902 = unrelated. */
+    {
+        uint32_t ch = 0, other = 0, field = 0, hand = 0;
+        ST_ASSERT(cap_create(900, CAP_RESOURCE_IPC, 901, CAP_READ | CAP_WRITE, 0, &ch) ==
+                      CAP_SUCCESS,
+                  "unlink-gate channel create");
+        ST_ASSERT(cap_mark_spawn_channel(ch) == CAP_SUCCESS, "unlink-gate tag");
+        ST_ASSERT(cap_create(900, CAP_RESOURCE_IPC, 902, CAP_READ | CAP_WRITE, 0, &other) ==
+                      CAP_SUCCESS,
+                  "unlink-gate other-target create");
+        ST_ASSERT(cap_mark_spawn_channel(other) == CAP_SUCCESS, "unlink-gate other tag");
+        ST_ASSERT(cap_create(900, CAP_RESOURCE_FIELD, 901, CAP_READ, 0, &field) == CAP_SUCCESS,
+                  "unlink-gate field create"); /* resource_id COLLIDES with the dead pid */
+        /* TAG the field cap too: no tagged non-IPC cap exists in practice (only
+         * sys_spawn tags, and only on IPC caps), so this deliberately constructs
+         * the adversarial case where ONLY the type filter protects the survivor —
+         * without it, dropping the filter would pass vacuously (the untagged
+         * field cap would survive on the origin filter alone). */
+        ST_ASSERT(cap_mark_spawn_channel(field) == CAP_SUCCESS, "unlink-gate field tag");
+        ST_ASSERT(cap_create(900, CAP_RESOURCE_IPC, 901, CAP_READ | CAP_WRITE, 0, &hand) ==
+                      CAP_SUCCESS,
+                  "unlink-gate hand-minted create"); /* same target, NO tag */
+
+        cap_revoke_spawn_channels(901);
+
+        ST_ASSERT(cap_check(ch, 900, CAP_RESOURCE_IPC, 901, CAP_READ) == CAP_ERROR_INVALID_ID,
+                  "tagged channel to dead pid freed");
+        ST_ASSERT(cap_check(other, 900, CAP_RESOURCE_IPC, 902, CAP_READ) == CAP_SUCCESS,
+                  "tagged channel to a LIVE pid survives");
+        ST_ASSERT(cap_check(field, 900, CAP_RESOURCE_FIELD, 901, CAP_READ) == CAP_SUCCESS,
+                  "non-IPC cap with colliding resource_id survives (type filter)");
+        ST_ASSERT(cap_check(hand, 900, CAP_RESOURCE_IPC, 901, CAP_READ) == CAP_SUCCESS,
+                  "untagged hand-minted pair survives (origin filter)");
+        ST_ASSERT(audit_ring_has_kind(AUDIT_UNLINK), "UNLINK recorded in the ledger");
+
+        /* Leave the table as found (later self-tests and the packed-boot
+         * mints must see no unexpected live caps). */
+        cap_revoke(other, 900);
+        cap_revoke(field, 900);
+        cap_revoke(hand, 900);
+        boot_log("CAPUNLINK: spawn-channel caps die with their target (scoped by tag+type)");
+    }
 
     boot_log("capability self-test: PASS");
     return CAP_SUCCESS;

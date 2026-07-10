@@ -11,8 +11,10 @@
  * It records GRANT (a capability minted for a pid), DENY (a capability-gated
  * syscall refused because the caller lacked the right), SPAWN (a process
  * created), REVOKE (a capability explicitly withdrawn via cap_revoke, incl.
- * its cascade), and REAP (slots freed because their owner died — the reaper's
- * cap_revoke_all_for_process + its cascade). It does NOT record successful
+ * its cascade), REAP (slots freed because their owner died — the reaper's
+ * cap_revoke_all_for_process + its cascade), and UNLINK (a spawn-channel cap
+ * freed under its SURVIVING owner because the channel's TARGET died — epic
+ * #175; never conflated with REAP). It does NOT record successful
  * exercise of already-held authority (two exceptions, both quota-bounded and
  * coalescible: SPAWN, and QSUBMIT — a quantum job queued, the QPU WRITE right
  * exercised, parallel to SPAWN). EXPIRE is still not recorded: expired
@@ -62,6 +64,11 @@
 #define AUDIT_REVOKE 7  /* a capability was EXPLICITLY withdrawn (cap_revoke + its cascade) */
 #define AUDIT_REAP 8    /* slots freed because their OWNER DIED (reaper cleanup + cascade) */
 #define AUDIT_QSUBMIT 9 /* a quantum job was queued (QPU WRITE authority exercised, #148) */
+#define AUDIT_UNLINK                                                                               \
+    10 /* a spawn-channel cap freed because its TARGET pid died (epic #175).
+                         * Recorded under the SURVIVING owner — never REAP, which must keep
+                         * meaning "owner died"; resource_id (== the dead pid) carries the
+                         * death linkage for verifiers. */
 
 /* Verdicts — 1-based likewise. */
 #define AUDIT_V_OK 1
@@ -99,6 +106,7 @@ void audit_deny(uint32_t pid, uint32_t resource_type, uint32_t resource_id, uint
 void audit_spawn(uint32_t parent_pid, uint32_t child_pid);
 void audit_revoke(uint32_t pid, uint32_t resource_type, uint32_t resource_id, uint32_t permissions);
 void audit_reap(uint32_t pid, uint32_t resource_type, uint32_t resource_id, uint32_t permissions);
+void audit_unlink(uint32_t pid, uint32_t resource_type, uint32_t resource_id, uint32_t permissions);
 
 /* Format all live entries oldest->newest as "AUDIT: ..." text lines into buf
  * (bounded, NUL-terminated). Returns bytes written (excluding the NUL). */
