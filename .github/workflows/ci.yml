@@ -499,6 +499,28 @@ jobs:
     - name: Build + boot with the resonant scheduler and print the comparison
       run: make ci-smoke-resonant
 
+  qseed-handoff:
+    name: qseed Handoff + errno-collision gate (SYS_QSEED provenance)
+    runs-on: ubuntu-latest
+    needs: [build]
+    # Single-sourced `make ci-smoke-qseed` (mirrors the mcp-gate/society-gate
+    # convention). Boots with the seed FFFFFFFFFFFFFFFC — deliberately the value
+    # that collides with the EPERM (-4) errno sentinel — and proves end to end:
+    # (1) the kernel accepts the qseed handoff and ghostd traces its noise to it,
+    # (2) paradoxd still resolves under a qseed, and (3) the qsh `qseed` command
+    # reports the real seed instead of misreading it as a denial (#167). The
+    # Integration job's inline Test 1d only ever booted DEADBEEF, so none of the
+    # -4 collision path was enforced in CI before.
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+    - name: Install dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y build-essential qemu-system-x86 nasm
+    - name: Boot a qseed handoff and assert provenance + the errno-collision gate
+      run: make ci-smoke-qseed
+
   quiet-boot:
     name: Quiet-Boot Test (clean interactive console)
     runs-on: ubuntu-latest
