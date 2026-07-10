@@ -143,6 +143,27 @@ holdings that changed), proven every boot by the delegation demo: the
 exited delegator's own FIELD cap REAPs under its pid, and subagentd's
 derived READ cap REAPs under subagentd's.
 
+**qsv — exact integer quantum computation (epic #148, quantum-stack
+Phase 1).** A ring-3 citizen holding a 12-qubit state vector whose
+amplitudes are exact Gaussian integers (int32 re/im) under ONE implicit
+global scale `2^(-h/2)`, `h` = running Hadamard count. H on a pair is
+`(a,b) → (a+b, a−b)` — pure integer, zero rounding *ever* (no rounded
+binary fixed point can be exact: no nontrivial 2×2 real unitary has
+dyadic entries — so exactness comes from not normalizing at all).
+X/Z/CNOT/CZ are permutations/sign flips; S multiplies the |1⟩ half by i;
+T is excluded from v1 (irrational over Z[i]). Probabilities are exact
+rationals `|v|²/2^h`, and unitarity is an integer identity checked in
+`unsigned __int128`: `Σ|v|² == 2^h` exactly. Every boot it runs Bell,
+GHZ, Grover-3q (2 iters → p = **121/128 exactly**) and Grover-4q
+(3 iters → amp −16064 at h=28, p = **63001/65536 exactly**), then prints
+a sha256 of the final state that CI re-derives with an independent host
+Python mirror (`scripts/qsv_mirror.py`) — two implementations must agree
+bit-for-bit, and a deliberately corrupted mirror circuit must NOT match.
+No capabilities at all (its authority is the null set). This is the
+native tier of the quantum stack (#148–#150): air-gapped, boot-verifiable
+quantum computation; simulation beyond 12 qubits and real QPUs arrive via
+the capability-gated host gateway (Phases 2–3).
+
 **The kernel holographic field (epic #95).** `SYS_IMPRINT` stores a
 byte pattern (≤ 64 bytes, with a Q15 importance) into one of the
 kernel's fixed field REGIONS; `SYS_RECALL` scores every live slot in a

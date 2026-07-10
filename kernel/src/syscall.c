@@ -58,6 +58,7 @@ extern const uint8_t _binary_quota_test_elf_start[], _binary_quota_test_elf_end[
 extern const uint8_t _binary_delegation_test_elf_start[], _binary_delegation_test_elf_end[];
 extern const uint8_t _binary_subagentd_elf_start[], _binary_subagentd_elf_end[];
 extern const uint8_t _binary_cpu_hog_elf_start[], _binary_cpu_hog_elf_end[];
+extern const uint8_t _binary_qsv_elf_start[], _binary_qsv_elf_end[];
 
 /* Argument vector ABI (epic #62). MUST stay byte-identical to user_args_t
  * in user/usys.h — there is no shared header across the ring boundary. The
@@ -87,6 +88,7 @@ void user_kannaka_demo_init(void);
 void user_quota_test_init(void);
 void user_delegation_demo_init(void);
 void user_cpu_hog_init(void);
+void user_qsv_init(void);
 
 /* int 0x80 stub (kernel/src/interrupts.S) */
 extern void isr128(void);
@@ -1878,6 +1880,7 @@ void user_init(void) {
     user_ghost_demo_init();
     user_quantum_demo_init();
     user_kannaka_demo_init();
+    user_qsv_init();
 }
 
 /* Bring up quantumd — a quantum-pool service (kannaka-quantum, a fourth
@@ -2441,5 +2444,30 @@ void user_cpu_hog_init(void) {
         boot_log("cpu-hog: CPU-quota enforcement proof (ring 3, finite budget)");
     } else {
         boot_log("Warning: cpu-hog service failed to start");
+    }
+}
+
+/* Bring up qsv — the EXACT integer quantum state-vector citizen (epic #148,
+ * the native tier of the quantum stack). Pure computation + console output:
+ * no grant flags at all (its authority is the null set — the proof needs no
+ * capabilities, and its manifest stays empty). Runs its Bell/GHZ/Grover
+ * proofs to integer equality, prints a state digest that CI cross-checks
+ * against an independent host-side mirror, and exits (reaped; NOT
+ * monitored — a one-shot proof, like ghost_test). */
+void user_qsv_init(void) {
+    service_definition_t qsv_def = {
+        .name = "qsv",
+        .entry = NULL, /* user-process service */
+        .user_elf_start = _binary_qsv_elf_start,
+        .user_elf_end = _binary_qsv_elf_end,
+        .dependencies = {NULL},
+        .max_restarts = 1,
+    };
+    uint32_t sid = 0;
+    if (service_register(&qsv_def, &sid) == SVC_SUCCESS &&
+        service_start("qsv", NULL) == SVC_SUCCESS) {
+        boot_log("qsv: exact integer quantum state-vector proof (ring 3, zero rounding)");
+    } else {
+        boot_log("Warning: qsv service failed to start");
     }
 }
