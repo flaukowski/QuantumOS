@@ -407,6 +407,19 @@ typedef enum {
 } monitor_msg_t;
 ```
 
+The health-monitor thread scans monitored services and, when one misses its
+heartbeat, `service_restart`s it up to `max_restarts` times. On the **give-up
+edge** — the budget is exhausted — it must still `service_stop` the offender.
+A service that merely *crashed* is already `TERMINATED` and gets reaped, but a
+**hung** one (alive yet silent — the exact condition the watchdog exists to
+catch) would otherwise be left `RUNNING` forever: never re-scanned (state ≠
+`RUNNING`), never reaped (not `TERMINATED`), never stopped, holding its PCB slot
+and a scheduler slice. So the restart-limit branch reclaims the process (via the
+generation-guarded, idempotent `service_stop`) rather than abandoning it. The
+service self-test drives a `max_restarts=1` service to give-up and asserts the
+process is destroyed, gating on `SVCGIVEUP: restart budget exhausted reclaims
+the process`.
+
 ### Performance Metrics
 - **Message Latency**: Time from request to response
 - **Throughput**: Messages per second

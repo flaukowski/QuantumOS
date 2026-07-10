@@ -619,20 +619,30 @@ static int copy_user_path(uint64_t user_ptr, char *dst, size_t max) {
 }
 
 /* Grab a free fd slot in `cur` and fill it. Returns the fd or EIO. */
-static uint64_t install_fd(process_t *cur, const uint8_t *data, uint32_t size, bool writable,
-                           int16_t ram_idx) {
+/* Lowest free fd slot in cur's table, or -1 if the table is full. Lets the
+ * write path RESERVE-check the fd before mutating the overlay (see sys_open). */
+static int find_free_fd(process_t *cur) {
     for (uint32_t fd = 0; fd < PROCESS_MAX_FDS; fd++) {
         if (!cur->fds[fd].used) {
-            cur->fds[fd].data = data;
-            cur->fds[fd].size = size;
-            cur->fds[fd].offset = 0;
-            cur->fds[fd].used = true;
-            cur->fds[fd].writable = writable;
-            cur->fds[fd].ram_idx = ram_idx;
-            return fd;
+            return (int)fd;
         }
     }
-    return SYSCALL_EIO; /* fd table full */
+    return -1;
+}
+
+static uint64_t install_fd(process_t *cur, const uint8_t *data, uint32_t size, bool writable,
+                           int16_t ram_idx) {
+    int fd = find_free_fd(cur);
+    if (fd < 0) {
+        return SYSCALL_EIO; /* fd table full */
+    }
+    cur->fds[fd].data = data;
+    cur->fds[fd].size = size;
+    cur->fds[fd].offset = 0;
+    cur->fds[fd].used = true;
+    cur->fds[fd].writable = writable;
+    cur->fds[fd].ram_idx = ram_idx;
+    return (uint64_t)fd;
 }
 
 /* Does the caller hold the volume-level filesystem-write authority?
@@ -667,6 +677,15 @@ static uint64_t sys_open(uint32_t pid, uint64_t path_ptr, uint64_t flags) {
         }
         if (!has_fs_write_cap(pid)) {
             return SYSCALL_EPERM;
+        }
+        /* Reserve an fd BEFORE mutating the overlay: a full fd table must fail
+         * up front, never AFTER ramfs_create has truncated an existing file to
+         * zero (data loss) or created+marked a new slot (a phantom file that
+         * persists to disk) — a half-failure the caller reads as "open failed,
+         * file untouched". Single-CPU cli'd, so the slot stays free until the
+         * install_fd below claims it. */
+        if (find_free_fd(cur) < 0) {
+            return SYSCALL_EIO;
         }
 
         int idx;

@@ -63,6 +63,13 @@ boot (`FSW: capless caller denied (EPERM)`).
 - fd entries carry `writable` + `ram_idx`; every open path sets *all*
   fields and `close` resets them, so a read-only reopen of a slot can
   never inherit a stale write capability.
+- A write-intent open **reserves a free fd before touching the overlay**.
+  `ramfs_create` either truncates an existing file to zero or creates a new
+  slot, so doing it before the fd install would, on a full fd table, leave the
+  overlay half-mutated while returning `EIO` — silent data loss, or a phantom
+  file that persists to disk — a failure the caller reads as "open failed, file
+  untouched". Reserving the fd up front makes a failed open side-effect-free
+  (POSIX `EMFILE`-before-`O_TRUNC` semantics).
 - `SYS_UNLINK` refuses (with EIO) while any *live* process holds the file
   open — a terminated process's stale fds don't count, and
   `process_destroy` clears fds so they can't pin a file forever.
