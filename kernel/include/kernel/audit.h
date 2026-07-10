@@ -85,4 +85,35 @@ size_t audit_format(char *buf, size_t max);
  * (0 while total <= capacity; total-capacity once the ring has wrapped). */
 size_t audit_format_stats(char *buf, size_t max);
 
+/* ---- durable persistence (across reboot; reuses the epic-#71 disk layer) ----
+ *
+ * The ledger is serialized to a FIXED disk home as a small LE header + the raw
+ * 128-slot ring, so a restore reconstructs the exact modular ring state and
+ * `seq` (total) CONTINUES across reboots — a genuine append-history, not a
+ * per-boot scratchpad. `tick` is boot-relative and is zeroed on restore; `seq`
+ * is the sole durable ordering key. */
+#define AUDIT_BLOB_MAGIC 0x31445541u /* 'AUD1' little-endian */
+#define AUDIT_BLOB_VERSION 1u
+#define AUDIT_BLOB_HDR 32u /* header bytes preceding the ring image */
+#define AUDIT_BLOB_BYTES (AUDIT_BLOB_HDR + AUDIT_LOG_ENTRIES * sizeof(audit_entry_t)) /* 5152 */
+#define AUDIT_BLOB_SECTORS ((AUDIT_BLOB_BYTES + 511u) / 512u)                         /* 11 */
+#define AUDIT_BLOB_BUFSZ (AUDIT_BLOB_SECTORS * 512u)                                  /* 5632 */
+
+/* Serialize the whole ledger (header + ring) into buf. buf must be at least
+ * AUDIT_BLOB_BUFSZ bytes; the WHOLE sector-rounded buffer is zeroed first so no
+ * kernel tail-padding leaks to disk. Returns AUDIT_BLOB_BYTES, or 0 if too small.
+ * Snapshots the ring under irqsave (audit_record can fire from the timer IRQ). */
+uint32_t audit_serialize(uint8_t *buf, uint32_t buf_len);
+
+/* Load a serialized ledger: validate magic/version/geometry (mismatch -> -1,
+ * caller cold-starts), then restore the ring + total and seal the coalesce
+ * boundary so the first post-restore append cannot fold into a prior-boot
+ * entry. tick is zeroed (boot-relative). Returns 0 on success, -1 on mismatch. */
+int audit_load(const uint8_t *buf, uint32_t len);
+
+/* True if any live ring slot carries `kind`. Used at restore time to prove a
+ * specific prior-boot event survived (the restore runs before this boot emits
+ * any audit entry, so a hit can only have come from disk). */
+bool audit_ring_has_kind(uint16_t kind);
+
 #endif /* KERNEL_AUDIT_H */

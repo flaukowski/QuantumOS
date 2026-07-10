@@ -19,6 +19,13 @@ _Static_assert(AUDIT_LOG_ENTRIES *AUDIT_LINE_MAX == AUDIT_MAX_BYTES, "audit buff
 static audit_entry_t ring[AUDIT_LOG_ENTRIES];
 static uint64_t total; /* new records ever accepted; also the next seq */
 
+/* Coalesce floor: the value of `total` at the last restore (0 on a cold boot).
+ * audit_record never coalesces into a slot with seq < coalesce_floor, so the
+ * first append after a restore cannot fold a boot-2 event into a durable
+ * boot-1 tail entry (which would drop a real seq and mutate a persisted
+ * record). Coalescing resumes normally among THIS boot's own entries. */
+static uint64_t coalesce_floor;
+
 /* Self-contained IRQ save/restore: audit_record is called from syscall context
  * AND the IF=1 service health monitor (service.c), so it must not assume a cli'd
  * caller. Single CPU, so disabling interrupts around the ~6-field append is a
@@ -38,8 +45,12 @@ void audit_record(uint16_t kind, uint32_t pid, uint16_t verdict, uint32_t resour
 
     /* Coalesce: an identical record repeated back-to-back (a denial flood) bumps
      * the most-recent entry's count instead of appending, so it cannot evict
-     * older GRANT/DENY evidence. `total`/seq do not advance on a coalesce. */
-    if (total > 0) {
+     * older GRANT/DENY evidence. `total`/seq do not advance on a coalesce.
+     * The `> coalesce_floor` guard (not `> 0`) seals the restore boundary: a
+     * freshly-restored ledger has total == coalesce_floor, so the first
+     * post-restore append force-appends a new seq rather than mutating the
+     * durable prior-boot tail entry. */
+    if (total > coalesce_floor) {
         audit_entry_t *last = &ring[(uint32_t)((total - 1) % AUDIT_LOG_ENTRIES)];
         if (last->kind == kind && last->pid == pid && last->verdict == verdict &&
             last->resource_type == resource_type && last->resource_id == resource_id &&
@@ -215,4 +226,91 @@ size_t audit_format_stats(char *buf, size_t max) {
     o = put_str(buf, o, max, "\r\n");
     buf[o < max ? o : max - 1] = '\0';
     return o;
+}
+
+/* ---- durable persistence (across reboot) ---- */
+
+/* Little-endian binary header helpers (distinct from the decimal put_u64 above,
+ * which formats human-readable text). */
+static void blob_put_u32(uint8_t *p, uint32_t v) {
+    p[0] = (uint8_t)v;
+    p[1] = (uint8_t)(v >> 8);
+    p[2] = (uint8_t)(v >> 16);
+    p[3] = (uint8_t)(v >> 24);
+}
+
+static uint32_t blob_get_u32(const uint8_t *p) {
+    return (uint32_t)p[0] | ((uint32_t)p[1] << 8) | ((uint32_t)p[2] << 16) | ((uint32_t)p[3] << 24);
+}
+
+uint32_t audit_serialize(uint8_t *buf, uint32_t buf_len) {
+    if (!buf || buf_len < AUDIT_BLOB_BUFSZ) {
+        return 0;
+    }
+    /* Zero the WHOLE sector-rounded buffer first: the tail padding lands on
+     * disk and must never carry stale kernel memory (mirrors field_blob_write). */
+    for (uint32_t i = 0; i < AUDIT_BLOB_BUFSZ; i++) {
+        buf[i] = 0;
+    }
+    uint64_t flags = audit_irq_save();
+    blob_put_u32(buf + 0, AUDIT_BLOB_MAGIC);
+    blob_put_u32(buf + 4, AUDIT_BLOB_VERSION);
+    blob_put_u32(buf + 8, AUDIT_LOG_ENTRIES);
+    blob_put_u32(buf + 12, (uint32_t)sizeof(audit_entry_t));
+    blob_put_u32(buf + 16, (uint32_t)(total & 0xFFFFFFFFu));
+    blob_put_u32(buf + 20, (uint32_t)(total >> 32));
+    /* buf+24, buf+28 reserved, already zero. */
+    const uint8_t *src = (const uint8_t *)ring;
+    for (uint32_t i = 0; i < AUDIT_LOG_ENTRIES * sizeof(audit_entry_t); i++) {
+        buf[AUDIT_BLOB_HDR + i] = src[i];
+    }
+    audit_irq_restore(flags);
+    return AUDIT_BLOB_BYTES;
+}
+
+int audit_load(const uint8_t *buf, uint32_t len) {
+    if (!buf || len < AUDIT_BLOB_BYTES) {
+        return -1;
+    }
+    /* Geometry guard: the header must describe EXACTLY this build's ledger
+     * (mirrors field_blob_load) — an older layout or scribbled sector means
+     * nothing here is trustworthy, and nothing has been touched yet. */
+    if (blob_get_u32(buf + 0) != AUDIT_BLOB_MAGIC || blob_get_u32(buf + 4) != AUDIT_BLOB_VERSION ||
+        blob_get_u32(buf + 8) != AUDIT_LOG_ENTRIES ||
+        blob_get_u32(buf + 12) != (uint32_t)sizeof(audit_entry_t)) {
+        return -1;
+    }
+    uint64_t restored_total =
+        (uint64_t)blob_get_u32(buf + 16) | ((uint64_t)blob_get_u32(buf + 20) << 32);
+
+    uint64_t flags = audit_irq_save();
+    uint8_t *dst = (uint8_t *)ring;
+    for (uint32_t i = 0; i < AUDIT_LOG_ENTRIES * sizeof(audit_entry_t); i++) {
+        dst[i] = buf[AUDIT_BLOB_HDR + i];
+    }
+    total = restored_total;
+    /* Seal the restore boundary: the first post-restore append must not
+     * coalesce into (and mutate) the durable prior-boot tail entry. */
+    coalesce_floor = total;
+    /* tick is boot-relative (timer_get_ticks resets to 0 each boot); zero it on
+     * restore so the cross-boot log is not temporally misleading. seq is the
+     * sole durable ordering key (mirrors field.c imprint_tick reset). */
+    for (uint32_t i = 0; i < AUDIT_LOG_ENTRIES; i++) {
+        ring[i].tick = 0;
+    }
+    audit_irq_restore(flags);
+    return 0;
+}
+
+bool audit_ring_has_kind(uint16_t kind) {
+    uint64_t flags = audit_irq_save();
+    bool found = false;
+    for (uint32_t i = 0; i < AUDIT_LOG_ENTRIES; i++) {
+        if (ring[i].kind == kind) {
+            found = true;
+            break;
+        }
+    }
+    audit_irq_restore(flags);
+    return found;
 }

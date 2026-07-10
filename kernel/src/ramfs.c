@@ -16,6 +16,7 @@
 #include <kernel/ata.h>
 #include <kernel/tar.h>
 #include <kernel/field.h>
+#include <kernel/audit.h>
 #include <kernel/boot.h>
 
 typedef struct {
@@ -195,6 +196,14 @@ int ramfs_get(int idx, const char **name_out, const uint8_t **data_out, uint32_t
 #define QDSK_FIELD_LBA_OFF 32   /* u32: blob location (the FIXED home) */
 #define QDSK_FIELD_BYTES_OFF 36 /* u32: blob byte count (exact) */
 #define QDSK_FIELD_CSUM_OFF 40  /* u32: additive checksum over the blob */
+/* Audit-ledger section descriptor (durable authority ledger). Same
+ * "fixed home + independent checksum" discipline as the field section;
+ * bytes 44..55 were reserved-zero on pre-audit QDSK1 disks (the sync path
+ * zeroes the whole sector), so audit_lba == 0 is a reliable "no audit
+ * section" sentinel and old disks cold-start the ledger cleanly. */
+#define QDSK_AUDIT_LBA_OFF 44   /* u32: blob location (the FIXED home) */
+#define QDSK_AUDIT_BYTES_OFF 48 /* u32: blob byte count (exact) */
+#define QDSK_AUDIT_CSUM_OFF 52  /* u32: additive checksum over the blob */
 #define TAR_BLOCK_SZ 512
 
 /* The field blob lives at a FIXED home at the TOP of the disk (just
@@ -207,10 +216,34 @@ static uint32_t field_home_lba(void) {
     return ata_sector_count() - 1 - FIELD_BLOB_SECTORS;
 }
 
+/* The audit-ledger blob lives at a FIXED home just BELOW the field blob
+ * (so both sit above the growing archive and below the RW self-test
+ * scratch). Constant location keeps a torn sync detect-and-cold-start
+ * and makes the corruption CI gate a deterministic dd offset, exactly as
+ * for the field blob. Audit is now the LOWEST fixed home. */
+static uint32_t audit_home_lba(void) {
+    return field_home_lba() - AUDIT_BLOB_SECTORS;
+}
+
+/* Smallest disk that can hold the superblock + a minimal archive + both
+ * fixed homes + the scratch sector. Below this, audit_home_lba() would
+ * unsigned-underflow to a wild LBA; we skip audit persistence entirely
+ * (leaving the descriptors zero so restore cold-starts) rather than
+ * issue a write off the end of a degenerate volume. */
+static int audit_disk_fits(void) {
+    return ata_sector_count() >= 1u + FIELD_BLOB_SECTORS + AUDIT_BLOB_SECTORS + 2u;
+}
+
 /* Shared bounce for the blob (5 sectors). Boot restore is
  * single-threaded and sync runs cli'd in syscall context, so one static
  * buffer serves both — and unlike a kmalloc, it cannot fail. */
 static uint8_t field_blob_buf[FIELD_BLOB_SECTORS * ATA_SECTOR_SIZE];
+
+/* Shared bounce for the audit-ledger blob (11 sectors). Same rationale as
+ * field_blob_buf: one static buffer serves sync and restore and cannot
+ * fail like a kmalloc; a 5632-byte stack local would risk the guard-page-
+ * less kernel stack. */
+static uint8_t audit_blob_buf[AUDIT_BLOB_SECTORS * ATA_SECTOR_SIZE];
 
 /* Simple additive checksum over the archive. Written into the
  * superblock only after the archive itself is on disk, so a torn sync
@@ -350,9 +383,15 @@ int persist_sync(void) {
     }
 
     uint32_t tar_sectors = tar_bytes / ATA_SECTOR_SIZE;
-    /* Fit check: superblock + archive must end BELOW the field blob's
-     * fixed home (which itself sits below the RW self-test scratch). */
-    if (1 + tar_sectors > field_home_lba()) {
+    /* Fit check: superblock + archive must end BELOW the LOWEST fixed home.
+     * The audit blob now sits just below the field blob, so it (not the
+     * field home) is the floor — otherwise a large overlay could grow over
+     * the audit blob, and since the archive is written FIRST, the later
+     * audit write would then scribble the archive tail and cold-start the
+     * fs section at restore. On a disk too small for the audit blob, fall
+     * back to the field home (audit persistence is skipped there anyway). */
+    uint32_t tar_floor = audit_disk_fits() ? audit_home_lba() : field_home_lba();
+    if (1 + tar_sectors > tar_floor) {
         boot_log("SYNC: archive does not fit on disk — not flushed");
         return -1;
     }
@@ -406,6 +445,24 @@ int persist_sync(void) {
         return -1;
     }
 
+    /* Audit section (durable authority ledger): the whole ledger at its
+     * fixed home. BEST-EFFORT — a write failure or a too-small disk leaves
+     * the descriptors zero (restore cold-starts) and MUST NOT abort the
+     * fs/field commit; durable authority is an addition, never a hostage of
+     * the fs/field snapshot. The serialize snapshots the ring under irqsave;
+     * the ata_write runs here, outside that window. */
+    uint32_t audit_lba = 0, audit_bytes = 0, audit_csum = 0;
+    if (audit_disk_fits() &&
+        audit_serialize(audit_blob_buf, AUDIT_BLOB_BUFSZ) == AUDIT_BLOB_BYTES) {
+        if (ata_write(audit_home_lba(), audit_blob_buf, AUDIT_BLOB_SECTORS) == 0) {
+            audit_lba = audit_home_lba();
+            audit_bytes = AUDIT_BLOB_BYTES;
+            audit_csum = archive_checksum(audit_blob_buf, AUDIT_BLOB_BYTES);
+        } else {
+            boot_log("SYNC: audit ledger write failed — ledger not persisted this sync");
+        }
+    }
+
     uint8_t sb[ATA_SECTOR_SIZE];
     for (int i = 0; i < ATA_SECTOR_SIZE; i++) {
         sb[i] = 0;
@@ -420,6 +477,9 @@ int persist_sync(void) {
     put_u32(sb + QDSK_FIELD_LBA_OFF, field_home_lba());
     put_u32(sb + QDSK_FIELD_BYTES_OFF, FIELD_BLOB_BYTES);
     put_u32(sb + QDSK_FIELD_CSUM_OFF, field_csum);
+    put_u32(sb + QDSK_AUDIT_LBA_OFF, audit_lba);
+    put_u32(sb + QDSK_AUDIT_BYTES_OFF, audit_bytes);
+    put_u32(sb + QDSK_AUDIT_CSUM_OFF, audit_csum);
     if (ata_write(0, sb, 1) != 0) {
         boot_log("SYNC: superblock write failed — not flushed");
         return -1;
@@ -429,6 +489,12 @@ int persist_sync(void) {
     early_console_write_hex(nfiles);
     boot_log("FIELD: synced slots to disk:");
     early_console_write_hex(field_slots);
+    /* Logged only after the superblock commit and only on a real write, so a
+     * skipped/failed audit write is attributable at THIS boot (never surfaces
+     * confusingly as a missing restore next boot). */
+    if (audit_lba != 0) {
+        boot_log("AUDIT: synced ledger to disk");
+    }
     return (int)nfiles;
 }
 
@@ -526,6 +592,55 @@ static void restore_field_section(const uint8_t *sb) {
     early_console_write_hex((uint32_t)restored);
 }
 
+/* Audit section restore (durable authority ledger). Independent of the fs
+ * and field sections: its own checksum + geometry guard, so a torn audit
+ * blob never blocks a valid fs/field restore and vice versa. The blob
+ * crossed a trust boundary (the disk is attacker-writable offline): the
+ * descriptor must name EXACTLY the fixed home and exact size, the whole
+ * blob must checksum, and audit_load revalidates the header geometry.
+ * Anything off -> cold start, honestly logged. */
+static void restore_audit_section(const uint8_t *sb) {
+    uint32_t audit_lba = get_u32(sb + QDSK_AUDIT_LBA_OFF);
+    uint32_t audit_bytes = get_u32(sb + QDSK_AUDIT_BYTES_OFF);
+    uint32_t want_csum = get_u32(sb + QDSK_AUDIT_CSUM_OFF);
+
+    if (audit_lba == 0) {
+        /* Pre-audit disk (bytes past 43 are zero) or a sync that skipped the
+         * ledger (write failure / too-small disk). */
+        boot_log("AUDIT: no persisted ledger on disk (cold start)");
+        return;
+    }
+    if (!audit_disk_fits() || audit_lba != audit_home_lba() || audit_bytes != AUDIT_BLOB_BYTES) {
+        boot_log("AUDIT: superblock names an implausible ledger section - cold start");
+        return;
+    }
+    if (ata_read(audit_lba, audit_blob_buf, AUDIT_BLOB_SECTORS) != 0) {
+        boot_log("AUDIT: ledger read failed - cold start");
+        return;
+    }
+    if (archive_checksum(audit_blob_buf, AUDIT_BLOB_BYTES) != want_csum) {
+        boot_log("AUDIT: persisted ledger checksum mismatch - cold start");
+        return;
+    }
+    if (audit_load(audit_blob_buf, AUDIT_BLOB_BYTES) != 0) {
+        boot_log("AUDIT: ledger header mismatch - cold start");
+        return;
+    }
+    boot_log("AUDIT: restored ledger from disk");
+    /* Content proof: persist_restore runs BEFORE core_services_init/user_init,
+     * so this boot has generated ZERO audit entries — any entry now in the ring
+     * provably came from disk. core_services_init emits GRANT deterministically
+     * every boot (no IRQ, no race), so a restored GRANT is a race-free,
+     * un-fakeable durable-authority artifact. A restored CPUKILL (from a prior
+     * boot's runaway kill) is logged too, informationally. */
+    if (audit_ring_has_kind(AUDIT_GRANT)) {
+        boot_log("AUDIT: restored ledger carries a prior-boot GRANT");
+    }
+    if (audit_ring_has_kind(AUDIT_CPUKILL)) {
+        boot_log("AUDIT: restored ledger carries a prior-boot CPUKILL");
+    }
+}
+
 void persist_restore(void) {
     if (!ata_present()) {
         return;
@@ -547,6 +662,7 @@ void persist_restore(void) {
 
     restore_fs_section(sb);
     restore_field_section(sb);
+    restore_audit_section(sb);
 }
 
 size_t ramfs_format_list(const char *prefix, char *buf, size_t max, size_t o) {
