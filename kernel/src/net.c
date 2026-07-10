@@ -746,10 +746,19 @@ static int dns_parse(const uint8_t *frame, uint16_t len, uint16_t txid, uint8_t 
         if ((frame[off] & 0xC0) == 0xC0) {
             off += 2; /* compressed name */
         } else {
+            /* Labels, possibly terminated by a compression pointer part-way
+             * through (RFC 1035 4.1.4, legal) — mirror the question walk above,
+             * or a mid-name pointer's 0xC0 byte is misread as a label length
+             * and off overshoots the record (a valid A answer is then missed). */
             while (off < len && frame[off] != 0) {
+                if ((frame[off] & 0xC0) == 0xC0) {
+                    off += 2;
+                    goto name_done;
+                }
                 off += frame[off] + 1;
             }
             off += 1;
+        name_done:;
         }
         if (off + 10 > len) {
             return 0;

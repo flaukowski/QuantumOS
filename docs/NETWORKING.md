@@ -488,3 +488,29 @@ couples `ghostd`'s *living* attractor field; the kernel holographic field
 - Static mode is a single flat /24 with no gateway (no off-link routing)
   and no DNS server on the peer segment; it is the two-guest enabler, not
   a general static-networking configuration.
+
+## Robustness hardening (adversarial bug-hunt)
+
+An adversarial sweep of the stack fixed four defects, all against untrusted
+wire input:
+
+- **TCP data loss on a racing ACK.** An incoming ACK cleared `tx_pending`
+  whenever `snd_una == snd_nxt` — but the app can STAGE a response
+  (`tx_pending=1`) before the net thread transmits, at which point
+  `snd_una == snd_nxt` still holds. A second ACK-bearing segment (e.g. a
+  half-closing client's FIN|ACK) landing in that window silently dropped the
+  staged response. The clear is now gated on the ACK actually *advancing*
+  `snd_una`.
+- **Connection leak to a dead pid.** `net_tcp_cleanup`/`net_tcp_close`
+  ignored a pending client `connect_req` (the TCB is still `CLOSED` until the
+  net thread sends the SYN), so a client that died before its SYN went out
+  would have the connect serviced *after* death — a connection owned by a
+  dead/recycled pid. Now retired like the server's pending `listen_req`.
+- **Blind RST injection.** A RST matching only the 4-tuple tore the
+  connection down with no sequence check (RFC 5961). A RST is now accepted
+  only if it ACKs our SYN (SYN_SENT) or sits exactly at `rcv_nxt`
+  (synchronized); anything else is dropped.
+- **DNS answer compression pointer.** The answer name-walk mishandled a NAME
+  ending in a mid-name compression pointer (legal per RFC 1035 §4.1.4),
+  overshooting the record and missing a valid A answer. It now mirrors the
+  question parser's pointer handling.

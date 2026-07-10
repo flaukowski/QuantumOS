@@ -308,6 +308,20 @@ static int tcp_rx_one(tcp_conn_t *c, const eth_hdr_t *eth, const ip_hdr_t *ip, u
     }
 
     if (flags & TCP_RST) {
+        /* RFC 5961: a blind/off-path RST that merely matches the 4-tuple must
+         * NOT tear down the connection — validate the sequence first. In
+         * SYN_SENT the RST must ACK our SYN; in every synchronized state it
+         * must sit exactly at rcv_nxt (this stack accepts in-order only).
+         * An out-of-window RST is dropped. */
+        int rst_ok;
+        if (st == TCPS_SYN_SENT) {
+            rst_ok = (flags & TCP_ACK) && ack == c->snd_nxt;
+        } else {
+            rst_ok = (seq == c->rcv_nxt);
+        }
+        if (!rst_ok) {
+            return 1; /* out-of-window RST — ignore */
+        }
         if (st == TCPS_SYN_RCVD) {
             tcp_rearm_listen(c); /* a failed half-open must not kill the server */
         } else {
@@ -350,11 +364,19 @@ static int tcp_rx_one(tcp_conn_t *c, const eth_hdr_t *eth, const ip_hdr_t *ip, u
 
     /* (1) ACK field — advance snd_una (forward only, wrap-safe). */
     if (flags & TCP_ACK) {
+        int advanced = 0;
         if (SEQ_GT(ack, c->snd_una) && !SEQ_GT(ack, c->snd_nxt)) {
             c->snd_una = ack;
+            advanced = 1;
         }
-        if (c->snd_una == c->snd_nxt) {
-            c->tx_pending = 0; /* data (or FIN) fully acknowledged */
+        /* Clear tx_pending ONLY when this ACK actually advanced snd_una. A
+         * pure/duplicate ACK finds snd_una == snd_nxt whenever the app has
+         * STAGED data that the net thread has not transmitted yet (net_tcp_send
+         * sets tx_pending but leaves snd_nxt until tcp_service sends), so an
+         * unconditional clear here silently drops the staged response — e.g. a
+         * half-closing client's FIN|ACK landing between stage and transmit. */
+        if (advanced && c->snd_una == c->snd_nxt) {
+            c->tx_pending = 0; /* our outstanding data (or FIN) fully acknowledged */
             if (c->fin_sent) {
                 if (c->state == TCPS_FIN_WAIT_1) {
                     c->state = TCPS_FIN_WAIT_2;
@@ -807,11 +829,11 @@ long net_tcp_close(uint32_t pid) {
     if (c == NULL) {
         return 0; /* nothing owned — idempotent */
     }
-    if (c->state == TCPS_CLOSED && !c->listen_req) {
+    if (c->state == TCPS_CLOSED && !c->listen_req && !c->connect_req) {
         return 0;
     }
     if (c->state == TCPS_ERROR || c->state == TCPS_LISTEN || c->state == TCPS_SYN_RCVD ||
-        (c->state == TCPS_CLOSED && c->listen_req)) {
+        (c->state == TCPS_CLOSED && (c->listen_req || c->connect_req))) {
         c->abort_req = 1; /* no graceful close exists for these — retire */
         return 0;
     }
@@ -835,7 +857,12 @@ long net_tcp_status(uint32_t pid) {
 }
 
 void net_tcp_cleanup(uint32_t pid) {
-    if (tcb.state != TCPS_CLOSED && tcb.owner_pid == pid) {
+    /* `|| tcb.connect_req`: a client that requested connect but whose SYN the
+     * net thread has not sent yet is still TCPS_CLOSED — without this its
+     * pending connect_req would be serviced AFTER the owner died, opening a
+     * connection owned by a dead/recycled pid (the leak the server side already
+     * guards with listen_req). */
+    if ((tcb.state != TCPS_CLOSED || tcb.connect_req) && tcb.owner_pid == pid) {
         tcb.abort_req = 1; /* the net thread RSTs (if past SYN) and retires */
     }
     if ((tcb_srv.state != TCPS_CLOSED || tcb_srv.listen_req) && tcb_srv.owner_pid == pid) {
