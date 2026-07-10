@@ -339,23 +339,34 @@ single-basin binary attractor that relaxes onto one pattern, the kernel
 field kannakad speaks to is the ranked, importance-weighted cousin. A
 ci-smoke gate asserts all three behaviours (`RESONANCE VERIFIED`).
 
-`user/agentd.c` (+ its capless sub-agent `user/agentsub.c`) is the **agent-native
-end-to-end demo** — one ring-3 citizen exercising the whole agentic stack in a
-single story, each step with a verifiable outcome (agentd carries no engine, so
-a correct result can only have come back through the kernel's brokers): it
-**submits a Bell circuit** through the `SYS_QPU` broker and checks `qpud`'s exact
-`p(00) = 1/2`; **imprints and recalls** a phrase in holographic field region 3
-from a deliberately corrupted probe; **spawns** `/bin/hello` and waits for it to
-exit (real spawn authority); and **delegates** a strictly-narrowed READ slice of
-its region-3 field cap to `agentsub` via `SYS_CAP_DERIVE` over a
-capability-checked IPC pair, which the sub-agent recalls with (and confirms WRITE
-was withheld). On all four it prints `AGENTD: DEMO OK`; a ci-smoke gate asserts
-it. Being a heavyweight showcase, it is **opt-in** via the `agentdemo` cmdline
-token (off by default) so its extra boot work never perturbs the timing-sensitive
-proofs the other CI gates poll for. The default ci-smoke boot passes `agentdemo`
-(and gates it), and the GRUB ISO's **"QuantumOS (agent-native demo)"** entry
-boots `quiet agentdemo` — the token is deliberately decoupled from `quiet`, so
-the showcase runs on a clean console.
+`user/agentd.c` (the orchestrator) + its capless sub-agent `user/agentsub.c` are
+the **agent-native society demo** — one ring-3 citizen exercising the whole
+agentic stack in a single story, each step with a verifiable outcome (agentd
+carries no engine, so a correct result can only have come back through the
+kernel's brokers): it **submits a Bell circuit** through the `SYS_QPU` broker and
+checks `qpud`'s exact `p(00) = 1/2`; **imprints and recalls** a phrase in
+holographic field region 3 from a deliberately corrupted probe; **spawns**
+`/bin/hello` and waits for it to exit (real spawn authority); and **delegates** a
+strictly-narrowed READ slice of its region-3 field cap to a **society of
+sub-agents** — `AGENT_SUBS` (3) instances of `agentsub`, each addressed by the
+kernel-vouched sender pid of its "ready" and each handed its own derived cap via
+`SYS_CAP_DERIVE` over a capability-checked IPC pair (a one-hop fan-out tree —
+`CAP_GRANT` is never delegated, so no sub can re-delegate). Every sub-agent
+recalls with its cap and confirms WRITE was withheld, then acks "proven"; the
+orchestrator waits for all of them. On all four it prints
+`AGENTD: DEMO OK qpu+field+spawn+society`; a ci-smoke gate asserts it. Being a
+heavyweight showcase, it is **opt-in** via the `agentdemo` cmdline token (off by
+default) so its extra boot work never perturbs the timing-sensitive proofs the
+other CI gates poll for. The default ci-smoke boot passes `agentdemo` (and gates
+it), and the GRUB ISO's **"QuantumOS (agent-native demo)"** entry boots
+`quiet agentdemo` — the token is deliberately decoupled from `quiet`, so the
+showcase runs on a clean console. The kernel wires the society in
+`user_agent_demo_init()`: it registers the orchestrator, then registers +
+starts `AGENT_SOCIETY_SUBS` capless sub-agents under distinct names
+(`agentsub-0`…`agentsub-2`, all the same ELF) and mints a bidirectional
+capability-checked IPC pair between agentd and each (the `SYS_CAP_DERIVE`
+peer requirement + the handshake). `AGENT_SOCIETY_SUBS` must match `AGENT_SUBS`
+in `user/agentd.c`.
 
 `user/quantumd.c` is the essence of `kannaka-quantum`, and — unlike the two
 above — a **kernel-embedded service**, not a `/bin` program. `SYS_QRAND` and
