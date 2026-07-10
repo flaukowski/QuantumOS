@@ -510,6 +510,17 @@ int boot_is_quiet(void) {
     return g_boot_quiet;
 }
 
+// Agent-demo flag (cmdline token `agentdemo`): opt-in for the heavyweight
+// agent-native end-to-end showcase (user/agentd.c). Off by default so it never
+// perturbs the timing-sensitive CI gates or a plain boot; the default ci-smoke
+// and the GRUB "agent-native demo" entry pass the token. Decoupled from `quiet`
+// so the showcase can run on a CLEAN (quiet) console.
+static int g_boot_agent_demo = 0;
+
+int boot_run_agent_demo(void) {
+    return g_boot_agent_demo;
+}
+
 // Is the whole-word token `word` present in `cmd` (space/tab/start bounded on
 // the left, space/tab/NUL bounded on the right)? Avoids matching `quiet` inside
 // a longer token like `disquiet=1`.
@@ -642,6 +653,9 @@ static void parse_boot_cmdline(uint32_t info_addr) {
 
     if (cmdline_has_word(cmd, "quiet")) {
         g_boot_quiet = 1;
+    }
+    if (cmdline_has_word(cmd, "agentdemo")) {
+        g_boot_agent_demo = 1;
     }
 
     /* Static IP + coupling peer (epic #97): `ip=A.B.C.D` configures a

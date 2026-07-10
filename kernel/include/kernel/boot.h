@@ -74,6 +74,12 @@ bool boot_validate_multiboot(uint32_t magic, uint32_t info_addr);
 // Returns 1 if `quiet` was on the Multiboot command line, else 0.
 int boot_is_quiet(void);
 
+// 1 if the `agentdemo` token was on the command line: opt-in for the heavyweight
+// agent-native end-to-end showcase (user/agentd.c). Off by default so it never
+// perturbs the timing-sensitive CI gates; decoupled from `quiet` so it can run
+// on a clean console. The default ci-smoke boot and the GRUB demo entry set it.
+int boot_run_agent_demo(void);
+
 // boot_log for STEADY-STATE / demo chatter: prints exactly like boot_log on a
 // normal boot, but is silenced under `quiet` so it can't bury the interactive
 // console. Use for lines that repeat while the system runs (per-process

@@ -262,6 +262,13 @@ $(BUILD_DIR)/kernel.iso: $(BUILD_DIR)/kernel.elf32 $(BUILD_DIR)/kernel-console.e
 	@echo "    multiboot /boot/kernel-console.elf quiet" >> $(BUILD_DIR)/iso/boot/grub/grub.cfg
 	@echo "    boot" >> $(BUILD_DIR)/iso/boot/grub/grub.cfg
 	@echo "}" >> $(BUILD_DIR)/iso/boot/grub/grub.cfg
+	@# The showcase: a CLEAN console (quiet) that ALSO runs the agent-native
+	@# end-to-end demo (QPU + field + spawn + delegate) at boot. `agentdemo` is
+	@# decoupled from `quiet` precisely so this entry stays clean.
+	@echo "menuentry \"QuantumOS (agent-native demo)\" {" >> $(BUILD_DIR)/iso/boot/grub/grub.cfg
+	@echo "    multiboot /boot/kernel-console.elf quiet agentdemo" >> $(BUILD_DIR)/iso/boot/grub/grub.cfg
+	@echo "    boot" >> $(BUILD_DIR)/iso/boot/grub/grub.cfg
+	@echo "}" >> $(BUILD_DIR)/iso/boot/grub/grub.cfg
 	@echo "menuentry \"QuantumOS (console, verbose kernel log)\" {" >> $(BUILD_DIR)/iso/boot/grub/grub.cfg
 	@echo "    multiboot /boot/kernel-console.elf" >> $(BUILD_DIR)/iso/boot/grub/grub.cfg
 	@echo "    boot" >> $(BUILD_DIR)/iso/boot/grub/grub.cfg
@@ -421,6 +428,7 @@ ci-smoke: kernel
 	@echo "[2/3] Running QEMU boot test (14 second timeout, shell session piped into the console)..."
 	@( printf 'help\nps\nfree\nuptime\ndate\nghost\nqrand\nls\ncat /docs/hello.txt\nrun /bin/hello\nrun /bin/args alpha quantumos\nrun /bin/libqtest\nrun /bin/consciousnessd\nrun /bin/qtop\nrun /bin/life\nimprint the cat sat on the mat\nimprint pure quantum wave dynamics\nimprint hello little world\nrecall the cxt sxt on thx mxt\nfieldtest\nwrite /data/note ramfs-works\nls /data\nrm /data/note\nsync\nexit\n'; sleep 20 ) | \
 		timeout 14s qemu-system-x86_64 -kernel $(BUILD_DIR)/kernel.elf32 \
+		-append agentdemo \
 		-serial stdio -m 128M -display none -no-reboot 2>&1 | tee /tmp/qemu-boot.log || true
 	@echo ""
 	@echo "[3/3] Validating boot output..."
