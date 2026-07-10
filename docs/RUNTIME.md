@@ -133,7 +133,15 @@ intent check refuses nothing today — its value is inspectability
 against; the spawn quota is the non-vacuous enforcement now (proven every
 boot by the `quota-test` citizen). A boot self-test drives the deny path
 live so it cannot ship as dead code. IPC caps stay OUTSIDE the manifest
-(pair-wise runtime wiring, not declarative intent).
+(pair-wise runtime wiring, not declarative intent). The ledger records
+the full **revocation lifecycle** with honest kinds: `AUDIT_REVOKE` for
+an explicit `cap_revoke` (+ its cascade), `AUDIT_REAP` for slots freed
+because their owner died (the reaper's cleanup + cascade) — a verifier
+never mistakes garbage collection for exercised revocation authority.
+Each cascade-freed delegated cap records the *recipient's* pid (the
+holdings that changed), proven every boot by the delegation demo: the
+exited delegator's own FIELD cap REAPs under its pid, and subagentd's
+derived READ cap REAPs under subagentd's.
 
 **The kernel holographic field (epic #95).** `SYS_IMPRINT` stores a
 byte pattern (≤ 64 bytes, with a Q15 importance) into one of the

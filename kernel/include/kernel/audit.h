@@ -9,12 +9,21 @@
  *
  * HONEST SCOPE: this is an AUTHORITY LEDGER, NOT a full syscall/action trace.
  * It records GRANT (a capability minted for a pid), DENY (a capability-gated
- * syscall refused because the caller lacked the right), and SPAWN (a process
- * created). It does NOT record successful exercise of already-held authority,
- * and (v1) does NOT record REVOKE/EXPIRE — so it is an append-only ATTEMPT/GRANT
- * trace, NOT a snapshot of current live holdings. DENY coverage is the set of
- * cap-gated syscalls hooked in syscall.c (quantum, com2, console, field, spawn);
- * IPC and net ownership denials are not yet logged (documented gap).
+ * syscall refused because the caller lacked the right), SPAWN (a process
+ * created), REVOKE (a capability explicitly withdrawn via cap_revoke, incl.
+ * its cascade), and REAP (slots freed because their owner died — the reaper's
+ * cap_revoke_all_for_process + its cascade). It does NOT record successful
+ * exercise of already-held authority. EXPIRE is still not recorded: expired
+ * caps are never freed — they are refused at check/find/derive time and the
+ * slot is reclaimed only by owner death (recorded then as REAP), so the
+ * absence of an EXPIRE entry does not mean the cap was live until revoked.
+ * TRANSFER is not recorded (cap_transfer currently has no caller). GRANT/
+ * REVOKE/REAP record the pid whose HOLDINGS changed, NOT the requester — a
+ * forced ancestor revoke is indistinguishable from a self-revoke; before
+ * SYS_CAP_REVOKE is ever exposed to ring 3, the denied path MUST audit_deny
+ * and the forced path needs an actor-bearing record. DENY coverage is the set
+ * of cap-gated syscalls hooked in syscall.c (quantum, com2, console, field,
+ * spawn); IPC and net ownership denials are not yet logged (documented gap).
  *
  * CONCURRENCY: audit_record is called from BOTH syscall context AND the IF=1
  * service health monitor (a watchdog-reborn citizen re-mints caps from that
@@ -30,8 +39,14 @@
 
 #include <kernel/types.h>
 
-#define AUDIT_LOG_ENTRIES 128 /* ring capacity (evictable, oldest-first) */
-#define AUDIT_LINE_MAX 96     /* max formatted bytes per entry line */
+/* Ring capacity (evictable, oldest-first). REVOKE/REAP symmetry roughly
+ * doubles the steady-state entry rate vs GRANT-only (a qsh watchdog rebirth is
+ * ~20 entries: ~9 REAPs + ~9 re-GRANTs + SPAWN), so the boot sequence alone now
+ * exceeds 128 (~143 measured) — 256 keeps the boot-time MDENY/QUOTA/selftest
+ * evidence inside the window the CI gates read. Geometry is in the durable
+ * blob header, so audit_load honestly cold-starts a 128-era disk. */
+#define AUDIT_LOG_ENTRIES 256
+#define AUDIT_LINE_MAX 96 /* max formatted bytes per entry line */
 #define AUDIT_MAX_BYTES (AUDIT_LOG_ENTRIES * AUDIT_LINE_MAX) /* one-shot text buffer */
 
 /* Record kinds — 1-based so a zeroed .bss slot (kind 0) is never a real entry. */
@@ -42,6 +57,8 @@
 #define AUDIT_MDENY 4   /* a HELD capability exceeded declared intent (manifest deny) */
 #define AUDIT_QUOTA 5   /* a manifest quota refused the operation (e.g. spawn_max) */
 #define AUDIT_CPUKILL 6 /* a process was TERMINATED for exceeding its cpu_limit (epic #144) */
+#define AUDIT_REVOKE 7  /* a capability was EXPLICITLY withdrawn (cap_revoke + its cascade) */
+#define AUDIT_REAP 8    /* slots freed because their OWNER DIED (reaper cleanup + cascade) */
 
 /* Verdicts — 1-based likewise. */
 #define AUDIT_V_OK 1
@@ -72,10 +89,13 @@ typedef struct {
 void audit_record(uint16_t kind, uint32_t pid, uint16_t verdict, uint32_t resource_type,
                   uint32_t resource_id, uint32_t permissions);
 
-/* Convenience wrappers used at the hook sites. */
+/* Convenience wrappers used at the hook sites. Like GRANT, revoke/reap record
+ * the pid whose holdings changed (the cap's OWNER), not the requester. */
 void audit_grant(uint32_t pid, uint32_t resource_type, uint32_t resource_id, uint32_t permissions);
 void audit_deny(uint32_t pid, uint32_t resource_type, uint32_t resource_id, uint32_t permissions);
 void audit_spawn(uint32_t parent_pid, uint32_t child_pid);
+void audit_revoke(uint32_t pid, uint32_t resource_type, uint32_t resource_id, uint32_t permissions);
+void audit_reap(uint32_t pid, uint32_t resource_type, uint32_t resource_id, uint32_t permissions);
 
 /* Format all live entries oldest->newest as "AUDIT: ..." text lines into buf
  * (bounded, NUL-terminated). Returns bytes written (excluding the NUL). */
@@ -87,17 +107,17 @@ size_t audit_format_stats(char *buf, size_t max);
 
 /* ---- durable persistence (across reboot; reuses the epic-#71 disk layer) ----
  *
- * The ledger is serialized to a FIXED disk home as a small LE header + the raw
- * 128-slot ring, so a restore reconstructs the exact modular ring state and
- * `seq` (total) CONTINUES across reboots — a genuine append-history, not a
+ * The ledger is serialized to a FIXED disk home as a small LE header + the
+ * raw whole-ring image, so a restore reconstructs the exact modular ring state
+ * and `seq` (total) CONTINUES across reboots — a genuine append-history, not a
  * per-boot scratchpad. `tick` is boot-relative and is zeroed on restore; `seq`
  * is the sole durable ordering key. */
 #define AUDIT_BLOB_MAGIC 0x31445541u /* 'AUD1' little-endian */
 #define AUDIT_BLOB_VERSION 1u
 #define AUDIT_BLOB_HDR 32u /* header bytes preceding the ring image */
-#define AUDIT_BLOB_BYTES (AUDIT_BLOB_HDR + AUDIT_LOG_ENTRIES * sizeof(audit_entry_t)) /* 5152 */
-#define AUDIT_BLOB_SECTORS ((AUDIT_BLOB_BYTES + 511u) / 512u)                         /* 11 */
-#define AUDIT_BLOB_BUFSZ (AUDIT_BLOB_SECTORS * 512u)                                  /* 5632 */
+#define AUDIT_BLOB_BYTES (AUDIT_BLOB_HDR + AUDIT_LOG_ENTRIES * sizeof(audit_entry_t)) /* 10272 */
+#define AUDIT_BLOB_SECTORS ((AUDIT_BLOB_BYTES + 511u) / 512u)                         /* 21 */
+#define AUDIT_BLOB_BUFSZ (AUDIT_BLOB_SECTORS * 512u)                                  /* 10752 */
 
 /* Serialize the whole ledger (header + ring) into buf. buf must be at least
  * AUDIT_BLOB_BUFSZ bytes; the WHOLE sector-rounded buffer is zeroed first so no

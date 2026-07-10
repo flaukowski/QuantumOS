@@ -158,13 +158,14 @@ filesystem still restores (section isolation).
 
 The capability authority ledger (epic #133, `kernel/src/audit.c`) — the
 kernel-written record of every GRANT, DENY, SPAWN, manifest denial, quota
-refusal, and CPU-quota kill — rides the **same** QDSK volume, so an agent's
-provable-authority history is durable rather than a per-boot scratchpad.
+refusal, CPU-quota kill, explicit REVOKE, and death-cleanup REAP — rides the
+**same** QDSK volume, so an agent's provable-authority history is durable
+rather than a per-boot scratchpad.
 
-`persist_sync` serializes the whole 128-slot ring as a small little-endian
+`persist_sync` serializes the whole ring (256 slots) as a small little-endian
 header (`AUD1` magic, version, geometry, and the 64-bit `total`) followed by
 the **raw ring image**, into a blob at a **fixed home just below the field
-blob** (`ata_sector_count()-1-FIELD_BLOB_SECTORS-AUDIT_BLOB_SECTORS`, 11
+blob** (`ata_sector_count()-1-FIELD_BLOB_SECTORS-AUDIT_BLOB_SECTORS`, 21
 sectors). Persisting the whole ring — empty slots and all — means a restore
 `memcpy`s it back and sets `total`, reconstructing the exact modular ring
 state so the next append lands correctly and coalescing resumes cleanly. The
