@@ -26,6 +26,17 @@ typedef struct {
 
 static cap_slot_t cap_table[MAX_CAPABILITIES];
 
+/* High-water mark: (highest ever-used slot index) + 1. Every gated syscall runs
+ * authorize() -> cap_find_resource, which linear-scanned all MAX_CAPABILITIES
+ * (1024) slots — mostly !in_use skips — on each call. Caps allocate low and the
+ * table is sparse, so the read lookups scan only [0, cap_hwm) instead. It grows
+ * in alloc_slot and NEVER shrinks, so it is always a valid upper bound on every
+ * in-use slot: a lookup can therefore only ever miss a cap (a false deny caught
+ * by the boot's capability gates), never match the wrong one. The revoke/reap
+ * scans keep the full range (strictly safe, and cold). Guarded by the same
+ * cap_irq_save bracket as the table it bounds. */
+static uint32_t cap_hwm;
+
 /* Self-contained IRQ save/restore (the qpu.c/audit.c/manifest.c rule). Syscalls
  * run cli'd (int 0x80 is an interrupt gate), so cap_create/derive/revoke from
  * ring 3 are atomic w.r.t. IRQs — but cap_revoke_all_for_process runs at IF=1
@@ -82,6 +93,9 @@ static cap_slot_t *alloc_slot(uint32_t *cap_id_out) {
             *cap_id_out = make_cap_id(i, cap_table[i].generation);
             cap_table[i].cap.cap_id = *cap_id_out;
             found = &cap_table[i];
+            if (i + 1 > cap_hwm) {
+                cap_hwm = i + 1; /* keep the read-lookup bound covering this slot */
+            }
             break;
         }
     }
@@ -330,7 +344,7 @@ cap_result_t cap_get(uint32_t cap_id, capability_t *out) {
 
 cap_result_t cap_find(uint32_t pid, cap_resource_type_t resource_type, uint32_t required_perms,
                       uint32_t *resource_id_out) {
-    for (uint32_t i = 0; i < MAX_CAPABILITIES; i++) {
+    for (uint32_t i = 0; i < cap_hwm; i++) {
         if (!cap_table[i].in_use) {
             continue;
         }
@@ -354,7 +368,7 @@ cap_result_t cap_find(uint32_t pid, cap_resource_type_t resource_type, uint32_t 
 
 cap_result_t cap_find_resource(uint32_t pid, cap_resource_type_t resource_type,
                                uint32_t required_perms, uint32_t resource_id) {
-    for (uint32_t i = 0; i < MAX_CAPABILITIES; i++) {
+    for (uint32_t i = 0; i < cap_hwm; i++) {
         if (!cap_table[i].in_use) {
             continue;
         }
@@ -376,7 +390,7 @@ cap_result_t cap_find_resource(uint32_t pid, cap_resource_type_t resource_type,
 
 cap_result_t cap_find_id(uint32_t pid, cap_resource_type_t resource_type, uint32_t required_perms,
                          uint32_t resource_id, uint32_t *cap_id_out) {
-    for (uint32_t i = 0; i < MAX_CAPABILITIES; i++) {
+    for (uint32_t i = 0; i < cap_hwm; i++) {
         if (!cap_table[i].in_use) {
             continue;
         }
@@ -441,6 +455,33 @@ void cap_get_stats(cap_stats_t *out) {
 
 cap_result_t cap_selftest(void) {
     uint32_t root = 0, child = 0, grandchild = 0;
+
+    /* High-water-mark lookup gate (hot-path optimization). Runs FIRST, while the
+     * table is still packed from the bottom (no revoked holes yet), so the cap
+     * created here deterministically EXTENDS the hwm — the case the optimization
+     * must get right. Proves the read lookups both (a) find a cap the hwm covers
+     * (so alloc_slot advanced hwm past the allocated slot — an off-by-one would
+     * leave hwm == slot and this find would DENY), and (b) actually honor the
+     * bound: shrinking hwm below the cap's slot must make the same lookup miss it
+     * (if the scan still ran to MAX_CAPABILITIES it would wrongly succeed). */
+    {
+        uint32_t hc = 0;
+        uint32_t before = cap_hwm;
+        ST_ASSERT(cap_create(777, CAP_RESOURCE_MEMORY, 0xABC, CAP_READ, 0, &hc) == CAP_SUCCESS,
+                  "hwm-gate create");
+        uint32_t slot = (hc & 0xFFFF) - 1;
+        ST_ASSERT(slot >= before, "hwm-gate cap extends the mark"); /* packed table -> new top */
+        ST_ASSERT(cap_hwm == slot + 1, "hwm advanced exactly past the allocated slot");
+        ST_ASSERT(cap_find_resource(777, CAP_RESOURCE_MEMORY, CAP_READ, 0xABC) == CAP_SUCCESS,
+                  "cap found within hwm");
+        uint32_t saved = cap_hwm;
+        cap_hwm = slot; /* exclude the cap's slot from the scan */
+        ST_ASSERT(cap_find_resource(777, CAP_RESOURCE_MEMORY, CAP_READ, 0xABC) != CAP_SUCCESS,
+                  "lookup honors the hwm bound");
+        cap_hwm = saved;
+        cap_revoke(hc, 777);
+        boot_log("CAPHWM: capability lookups bounded by high-water-mark");
+    }
 
     /* Create + check */
     ST_ASSERT(cap_create(1, CAP_RESOURCE_MEMORY, 42, CAP_READ | CAP_WRITE | CAP_GRANT | CAP_REVOKE,

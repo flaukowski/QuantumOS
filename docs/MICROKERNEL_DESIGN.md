@@ -161,6 +161,23 @@ bitmap to force the modulo-to-0 case, that the **wrap** hands out only valid
 in-range frames — gating on `PMMROVER: frame allocator distinct + leak-free
 under the search rover`; a hint/wrap bug panics the boot there.
 
+### Capability lookup (high-water mark)
+
+Every capability-gated syscall runs `authorize → cap_find_resource`, which
+linear-scanned all `MAX_CAPABILITIES` (1024) slots — overwhelmingly `!in_use`
+skips — on each call. Capabilities allocate low and the table is sparse, so the
+read lookups (`cap_find`, `cap_find_resource`, `cap_find_id`) now scan only
+`[0, cap_hwm)`, where `cap_hwm` is `(highest ever-used slot) + 1`, maintained in
+`alloc_slot` and **never** decreased. Because it is always a valid upper bound
+on every in-use slot, a bounded lookup can only ever *miss* a capability (a
+false deny, caught by the boot's capability gates) — never match the wrong one,
+and never affect the security predicate. The revoke/reap scans keep the full
+range (strictly safe, and cold). The capability self-test (running first, while
+the table is still packed so the probe cap deterministically extends the mark)
+asserts `cap_hwm` advances exactly past each allocated slot AND that the lookup
+honors the bound (shrinking `cap_hwm` below the cap's slot makes the same lookup
+miss it), gating on `CAPHWM: capability lookups bounded by high-water-mark`.
+
 ### Shared-table atomicity (single-CPU invariant)
 
 QuantumOS is single-CPU, and syscalls enter through an **interrupt gate**, so

@@ -446,6 +446,19 @@ ci-smoke: kernel
 		exit 1; \
 	fi
 	@echo "SUCCESS: frame-allocator rover gate passed (distinct + leak-free allocation)"
+	@# Capability high-water-mark gate (hot-path optimization): the per-gated-
+	@# syscall cap lookups scan only [0, cap_hwm) not all 1024 slots. The self-test
+	@# proves the hwm covers every allocated slot AND that the lookup honors the
+	@# bound; a hint/off-by-one panics the boot before this line.
+	@if ! grep -q "CAPHWM: capability lookups bounded by high-water-mark" /tmp/qemu-boot.log 2>/dev/null; then \
+		echo "ERROR: capability high-water-mark gate missing (CAPHWM)"; \
+		echo "Boot log:"; \
+		cat /tmp/qemu-boot.log 2>/dev/null || true; \
+		echo ""; \
+		echo "=== Smoke Test FAILED ==="; \
+		exit 1; \
+	fi
+	@echo "SUCCESS: capability high-water-mark gate passed (bounded lookups, correct coverage)"
 	@# ELF-loader hardening gate (adversarial bug-hunt of the proc/mem core):
 	@# three malformed spawns (bad magic, p_offset overflow, sub-USER_VBASE
 	@# p_vaddr) must be rejected with zero frame leak. This line is printed only
