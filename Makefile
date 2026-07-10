@@ -87,7 +87,7 @@ ASSEMBLY_SOURCES = $(wildcard $(KERNEL_DIR)/src/*.S)
 # objects (symbols _binary_<name>_elf_start/_end)
 USER_DIR = user
 USER_BUILD = $(BUILD_DIR)/user
-USER_PROGS = init echo client hbsvc ghostd ghost_test paradoxd paradox_test swarm_svc qsh quantumd kannakad fieldsyncd httpd quota_test delegation_test subagentd cpu_hog
+USER_PROGS = init echo client hbsvc ghostd ghost_test paradoxd paradox_test swarm_svc qsh quantumd kannakad fieldsyncd httpd quota_test delegation_test subagentd cpu_hog qsv
 USER_ELF_OBJS = $(USER_PROGS:%=$(USER_BUILD)/%_elf.o)
 
 # libq: the freestanding ring-3 runtime, built as a static archive and linked
@@ -830,6 +830,52 @@ ci-smoke: kernel
 		echo ""; echo "=== Smoke Test FAILED ==="; exit 1; \
 	fi
 	@echo "SUCCESS: CPU quota ENFORCED (cpu-hog terminated over budget; CPUKILL recorded)"
+	@# epic #148 (A1): qsv — EXACT integer quantum state vector in ring 3.
+	@# CI asserts INTEGER EQUALITY, never sampled counts: Grover-3q must hit
+	@# exactly 121/128 and Grover-4q exactly 63001/65536 (amp -16064 at h=28),
+	@# with the norm identity sum|v|^2 == 2^h checked in-citizen (any failure
+	@# prints QSV BROKEN, which must be ABSENT). Then the digest cross-check:
+	@# the in-OS engine's sha256 of the final Grover-4q state must equal the
+	@# INDEPENDENT host Python mirror's digest (two implementations agree
+	@# bit-for-bit), and must NOT equal the mirror's --corrupt digest (so the
+	@# comparison cannot pass vacuously — a broken extractor/mirror pair that
+	@# "always matches" fails the inequality leg).
+	@if grep -q "QSV BROKEN" /tmp/qemu-boot.log 2>/dev/null; then \
+		echo "ERROR: qsv engine self-check failed (QSV BROKEN)"; \
+		grep "QSV" /tmp/qemu-boot.log 2>/dev/null || true; \
+		echo ""; echo "=== Smoke Test FAILED ==="; exit 1; \
+	fi
+	@if ! grep -q "QSV: grover3 h=15 amp=176 p=121/128 norm=OK" /tmp/qemu-boot.log 2>/dev/null; then \
+		echo "ERROR: qsv Grover-3q did not hit exactly 121/128"; \
+		grep "QSV" /tmp/qemu-boot.log 2>/dev/null || true; \
+		echo ""; echo "=== Smoke Test FAILED ==="; exit 1; \
+	fi
+	@if ! grep -q "QSV: grover4 h=28 amp=-16064 p=63001/65536 norm=OK" /tmp/qemu-boot.log 2>/dev/null; then \
+		echo "ERROR: qsv Grover-4q did not hit exactly 63001/65536"; \
+		grep "QSV" /tmp/qemu-boot.log 2>/dev/null || true; \
+		echo ""; echo "=== Smoke Test FAILED ==="; exit 1; \
+	fi
+	@if ! grep -q "QSV: PROOF COMPLETE" /tmp/qemu-boot.log 2>/dev/null; then \
+		echo "ERROR: qsv proof did not complete"; \
+		grep "QSV" /tmp/qemu-boot.log 2>/dev/null || true; \
+		echo ""; echo "=== Smoke Test FAILED ==="; exit 1; \
+	fi
+	@QSV_OS=$$(grep -o "QSV: state=sha256:[0-9a-f]*" /tmp/qemu-boot.log | head -1 | cut -d: -f3); \
+	QSV_HOST=$$(python3 scripts/qsv_mirror.py); \
+	QSV_BAD=$$(python3 scripts/qsv_mirror.py --corrupt); \
+	if [ -z "$$QSV_OS" ]; then \
+		echo "ERROR: qsv printed no state digest"; \
+		echo ""; echo "=== Smoke Test FAILED ==="; exit 1; \
+	fi; \
+	if [ "$$QSV_OS" != "$$QSV_HOST" ]; then \
+		echo "ERROR: qsv digest mismatch — OS=$$QSV_OS host-mirror=$$QSV_HOST"; \
+		echo ""; echo "=== Smoke Test FAILED ==="; exit 1; \
+	fi; \
+	if [ "$$QSV_OS" = "$$QSV_BAD" ]; then \
+		echo "ERROR: corrupt-circuit digest MATCHED (vacuous comparison)"; \
+		echo ""; echo "=== Smoke Test FAILED ==="; exit 1; \
+	fi
+	@echo "SUCCESS: qsv EXACT integer quantum computation (Grover 121/128 + 63001/65536; digest matches independent mirror, corrupt differs)"
 	@# epic #137: cross-ring capability delegation. The delegator hands a
 	@# NARROWED READ-only field cap to the sub-agent; the sub-agent proves the
 	@# narrowing ({recall ok, imprint EPERM}) -> DELEG ENFORCED, then proves
