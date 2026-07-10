@@ -63,6 +63,12 @@ int net_ready(void);
  * failure) from "lease still coming up" (transient — keep polling). */
 int net_nic_present(void);
 
+/* Pure in-memory DNS-parser self-test: proves dns_parse binds an answer to the
+ * query on source IP + destination port (not just a txid), so an on-link node
+ * can't spoof ring-3 hostname resolution. Needs no NIC — runs on every boot as
+ * a synchronous boot gate. Returns 0 on success, negative on the first failure. */
+int net_dns_guard_selftest(void);
+
 /* Post a hostname to resolve (from SYS_RESOLVE). 0 accepted, -1 if the
  * network isn't ready or a request is already in flight. */
 int net_request_resolve(const char *host);

@@ -18,6 +18,7 @@
 #include <kernel/rtl8139.h>
 #include <kernel/boot.h>
 #include <kernel/net_internal.h>
+#include <kernel/quantum.h> /* quantum_kernel_rand — unpredictable DNS txid/sport */
 
 /* QEMU user-net (SLIRP): gateway 10.0.2.2, DHCP hands out 10.0.2.15.
  * IP_ZERO/IP_BCAST are also read by the transport TUs, so they have
@@ -635,9 +636,12 @@ static int icmp_is_reply(const uint8_t *frame, uint16_t len, const uint8_t *src,
     return icmp[0] == ICMP_ECHO_REPLY && rid == ident && rseq == seq;
 }
 
-/* Build a DNS A-query for `name` to the resolver. UDP over IPv4. Returns
- * the frame length, or 0 if the name doesn't fit. */
-static uint16_t dns_build(uint8_t *frame, const uint8_t *dns_mac, const char *name, uint16_t txid) {
+/* Build a DNS A-query for `name` to the resolver. UDP over IPv4. `sport` is the
+ * per-query ephemeral source port the reply must be addressed back to (checked
+ * in dns_parse — response-port binding). Returns the frame length, or 0 if the
+ * name doesn't fit. */
+static uint16_t dns_build(uint8_t *frame, const uint8_t *dns_mac, const char *name, uint16_t txid,
+                          uint16_t sport) {
     eth_hdr_t *eth = (eth_hdr_t *)frame;
     ip_hdr_t *ip = (ip_hdr_t *)(frame + sizeof(eth_hdr_t));
     udp_hdr_t *udp = (udp_hdr_t *)((uint8_t *)ip + sizeof(ip_hdr_t));
@@ -684,7 +688,7 @@ static uint16_t dns_build(uint8_t *frame, const uint8_t *dns_mac, const char *na
 
     uint16_t dns_len = (uint16_t)p;
     uint16_t udp_len = (uint16_t)(sizeof(udp_hdr_t) + dns_len);
-    udp->sport = htons(40000);
+    udp->sport = htons(sport);
     udp->dport = htons(DNS_PORT);
     udp->len = htons(udp_len);
     udp->checksum = 0;
@@ -694,8 +698,18 @@ static uint16_t dns_build(uint8_t *frame, const uint8_t *dns_mac, const char *na
 }
 
 /* Parse a DNS response; on a matching txid with at least one A record,
- * copy the first A address into out_ip and return 1. */
-static int dns_parse(const uint8_t *frame, uint16_t len, uint16_t txid, uint8_t *out_ip) {
+ * copy the first A address into out_ip and return 1.
+ *
+ * The answer is bound to the query the kernel actually issued on FOUR axes, so
+ * an on-link node cannot inject a spoofed answer to poison ring-3 resolution
+ * (SYS_RESOLVE trusts this result): it must come FROM the resolver (ip->src ==
+ * IP_DNS), be addressed back TO our ephemeral query port (udp->dport == sport),
+ * FROM the DNS port (udp->sport == 53), and carry our transaction id. `sport`
+ * and `txid` are drawn per-query from the qseed-mixed PRNG, so a blind attacker
+ * cannot predict the {sport, txid} pair it must match. (A sniffing on-link
+ * attacker is out of scope for plain DNS-over-UDP — that is DNSSEC's job.) */
+static int dns_parse(const uint8_t *frame, uint16_t len, uint16_t txid, uint16_t sport,
+                     uint8_t *out_ip) {
     uint32_t base = sizeof(eth_hdr_t) + sizeof(ip_hdr_t) + sizeof(udp_hdr_t);
     if (len < base + 12) {
         return 0;
@@ -705,12 +719,12 @@ static int dns_parse(const uint8_t *frame, uint16_t len, uint16_t txid, uint8_t 
         return 0;
     }
     const ip_hdr_t *ip = (const ip_hdr_t *)(frame + sizeof(eth_hdr_t));
-    if (ip->ver_ihl != 0x45 || ip->proto != IP_PROTO_UDP) {
-        return 0;
+    if (ip->ver_ihl != 0x45 || ip->proto != IP_PROTO_UDP || !ip_eq(ip->src, IP_DNS)) {
+        return 0; /* must be FROM the resolver we queried (mirrors icmp_is_reply) */
     }
     const udp_hdr_t *udp = (const udp_hdr_t *)((const uint8_t *)ip + sizeof(ip_hdr_t));
-    if (ntohs(udp->sport) != DNS_PORT) {
-        return 0;
+    if (ntohs(udp->sport) != DNS_PORT || ntohs(udp->dport) != sport) {
+        return 0; /* must be from :53 and addressed back to our ephemeral port */
     }
     const uint8_t *dns = frame + base;
     uint16_t rid = (uint16_t)((dns[0] << 8) | dns[1]);
@@ -777,11 +791,112 @@ static int dns_parse(const uint8_t *frame, uint16_t len, uint16_t txid, uint8_t 
     return 0;
 }
 
+/* Assemble a minimal well-formed DNS A-response frame into buf (eth+ip+udp+dns,
+ * one compressed-name A answer) with caller-chosen source IP, dest (ephemeral)
+ * port, transaction id, and answer address — so the guard self-test can forge
+ * both legitimate and spoofed replies deterministically. Returns the length.
+ * Uses no netif state (fixed L2/MAC/dst), so it is safe to run before net_init. */
+static uint16_t dns_build_response(uint8_t *buf, const uint8_t *src_ip, uint16_t dport,
+                                   uint16_t txid, const uint8_t *answer_ip) {
+    eth_hdr_t *eth = (eth_hdr_t *)buf;
+    ip_hdr_t *ip = (ip_hdr_t *)(buf + sizeof(eth_hdr_t));
+    udp_hdr_t *udp = (udp_hdr_t *)((uint8_t *)ip + sizeof(ip_hdr_t));
+    uint8_t *dns = (uint8_t *)udp + sizeof(udp_hdr_t);
+
+    for (int i = 0; i < ETH_ADDR_LEN; i++) {
+        eth->dst[i] = 0;
+        eth->src[i] = 0;
+    }
+    eth->type = htons(ETH_TYPE_IP);
+
+    dns[0] = (uint8_t)(txid >> 8);
+    dns[1] = (uint8_t)txid;
+    dns[2] = 0x81; /* response, recursion available */
+    dns[3] = 0x80;
+    dns[4] = dns[5] = 0; /* qdcount 0 */
+    dns[6] = 0;
+    dns[7] = 1;                              /* ancount 1 */
+    dns[8] = dns[9] = dns[10] = dns[11] = 0; /* ns/ar counts 0 */
+    int p = 12;
+    dns[p++] = 0xC0; /* compressed name -> header offset 12 */
+    dns[p++] = 0x0C;
+    dns[p++] = 0x00; /* type A */
+    dns[p++] = 0x01;
+    dns[p++] = 0x00; /* class IN */
+    dns[p++] = 0x01;
+    dns[p++] = 0x00; /* ttl 60 */
+    dns[p++] = 0x00;
+    dns[p++] = 0x00;
+    dns[p++] = 0x3C;
+    dns[p++] = 0x00; /* rdlen 4 */
+    dns[p++] = 0x04;
+    dns[p++] = answer_ip[0];
+    dns[p++] = answer_ip[1];
+    dns[p++] = answer_ip[2];
+    dns[p++] = answer_ip[3];
+
+    uint16_t dns_len = (uint16_t)p;
+    uint16_t udp_len = (uint16_t)(sizeof(udp_hdr_t) + dns_len);
+    udp->sport = htons(DNS_PORT);
+    udp->dport = htons(dport);
+    udp->len = htons(udp_len);
+    udp->checksum = 0;
+
+    /* Fill the IP header directly (ip_fill would force src=my_ip; a response
+     * must carry the sender's src). dns_parse checks ver_ihl/proto/src only. */
+    ip->ver_ihl = 0x45;
+    ip->tos = 0;
+    ip->total_len = htons((uint16_t)(sizeof(ip_hdr_t) + udp_len));
+    ip->id = 0;
+    ip->frag = 0;
+    ip->ttl = 64;
+    ip->proto = IP_PROTO_UDP;
+    ip->checksum = 0;
+    for (int i = 0; i < 4; i++) {
+        ip->src[i] = src_ip[i];
+        ip->dst[i] = 0;
+    }
+    return (uint16_t)(sizeof(eth_hdr_t) + sizeof(ip_hdr_t) + udp_len);
+}
+
+/* Boot self-test for the DNS answer-binding fix (adversarial bug-hunt of the
+ * untrusted-input surface). Proves dns_parse binds a response to the query on
+ * source IP and destination port, not just a (formerly constant) txid:
+ *   1. a legitimate answer (from IP_DNS, to our port, our txid) is ACCEPTED;
+ *   2. a spoofed SOURCE (attacker IP) is REJECTED;
+ *   3. a wrong DEST PORT (blind attacker guessed wrong) is REJECTED.
+ * Pure in-memory parser test (no NIC), so it runs on every boot. Returns 0 on
+ * success. Anti-vacuous: without the binding checks, cases 2 and 3 are accepted
+ * (return 1), the self-test fails, and the boot never prints its gate line. */
+int net_dns_guard_selftest(void) {
+    static const uint8_t good_src[4] = {10, 0, 2, 3}; /* == IP_DNS (the resolver) */
+    static const uint8_t evil_src[4] = {6, 6, 6, 6};
+    static const uint8_t answer[4] = {1, 2, 3, 4};
+    const uint16_t txid = 0x1234;
+    const uint16_t sport = 0xC117; /* our query's ephemeral source port */
+    uint8_t buf[sizeof(eth_hdr_t) + sizeof(ip_hdr_t) + sizeof(udp_hdr_t) + 32];
+    uint8_t out[4];
+
+    uint16_t n = dns_build_response(buf, good_src, sport, txid, answer);
+    if (dns_parse(buf, n, txid, sport, out) != 1 || !ip_eq(out, answer)) {
+        return -1; /* a legitimate answer must be accepted */
+    }
+    n = dns_build_response(buf, evil_src, sport, txid, answer);
+    if (dns_parse(buf, n, txid, sport, out) != 0) {
+        return -2; /* spoofed source IP must be rejected */
+    }
+    n = dns_build_response(buf, good_src, (uint16_t)(sport ^ 1u), txid, answer);
+    if (dns_parse(buf, n, txid, sport, out) != 0) {
+        return -3; /* wrong destination port must be rejected */
+    }
+    return 0;
+}
+
 /* Resolve `host` to an IPv4 A record via SLIRP's DNS proxy. Bounded,
  * pumps the RX queue (must run in the IF=1 net thread, not a cli'd
  * syscall). Returns 0 and fills out_ip on success, -1 on failure.
  * Requires a NIC and a DHCP lease (for the unicast source address). */
-static int dns_resolve(const char *host, uint16_t txid, uint8_t *out_ip) {
+static int dns_resolve(const char *host, uint16_t txid, uint16_t sport, uint8_t *out_ip) {
     if (!rtl8139_present() || !net_has_addr()) {
         return -1;
     }
@@ -790,7 +905,7 @@ static int dns_resolve(const char *host, uint16_t txid, uint8_t *out_ip) {
         return -1;
     }
     uint8_t out[sizeof(eth_hdr_t) + sizeof(ip_hdr_t) + sizeof(udp_hdr_t) + 256];
-    uint16_t n = dns_build(out, dns_mac, host, txid);
+    uint16_t n = dns_build(out, dns_mac, host, txid, sport);
     if (n == 0) {
         return -1;
     }
@@ -799,7 +914,7 @@ static int dns_resolve(const char *host, uint16_t txid, uint8_t *out_ip) {
     uint8_t frame[RTL_FRAME_MAX];
     for (int tries = 0; tries < 400; tries++) {
         uint16_t m = net_rx(frame, sizeof(frame));
-        if (m > 0 && dns_parse(frame, m, txid, out_ip)) {
+        if (m > 0 && dns_parse(frame, m, txid, sport, out_ip)) {
             return 0;
         }
         if (m == 0) {
@@ -844,7 +959,18 @@ const uint8_t *net_next_hop(const uint8_t *dip) {
 static volatile int resolve_state;
 static char resolve_host[RESOLVE_HOST_MAX];
 static uint8_t resolve_ip[4];
-static uint16_t resolve_txid = 0x2000;
+
+/* Per-query DNS transaction id + ephemeral source port, drawn from the
+ * qseed-mixed kernel PRNG. Source-port + txid randomization is the barrier a
+ * blind on-link spoofer must clear (it cannot see the query), replacing the old
+ * constant txid 0x2000 / sport 40000 that made every lookup trivially forgeable.
+ * The ephemeral port stays in the IANA 49152..65535 range and is never 0. */
+static uint16_t dns_rand_txid(void) {
+    return (uint16_t)quantum_kernel_rand();
+}
+static uint16_t dns_rand_sport(void) {
+    return (uint16_t)(0xC000u | (quantum_kernel_rand() & 0x3FFFu));
+}
 
 int net_ready(void) {
     return rtl8139_present() && net_has_addr();
@@ -906,7 +1032,7 @@ void net_service_loop(void) {
         tcp_service();
         if (resolve_state == RESOLVE_PENDING) {
             uint8_t ip[4];
-            if (dns_resolve(resolve_host, resolve_txid++, ip) == 0) {
+            if (dns_resolve(resolve_host, dns_rand_txid(), dns_rand_sport(), ip) == 0) {
                 for (int i = 0; i < 4; i++) {
                     resolve_ip[i] = ip[i];
                 }
@@ -1061,7 +1187,7 @@ void net_selftest(void) {
      * back is the capstone: ARP -> IPv4 -> UDP -> DNS, both directions. */
     {
         uint8_t resolved[4];
-        if (dns_resolve("example.com", 0x1D15, resolved) == 0) {
+        if (dns_resolve("example.com", dns_rand_txid(), dns_rand_sport(), resolved) == 0) {
             log_ip("NET: DNS example.com -> ", resolved);
         } else {
             boot_log("NET: DNS example.com timed out (no answer)");
