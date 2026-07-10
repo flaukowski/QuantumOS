@@ -329,6 +329,16 @@ static void core_services_init(void) {
     // Initialize process management system
     process_subsystem_init();
 
+    // Frame-allocator rover gate (hot-path optimization): the O(1)-amortized
+    // search rover must still hand out only distinct, genuinely-free frames and
+    // never lose one. A hint/wrap bug would corrupt memory or exhaust the pmm;
+    // this self-test asserts the alloc/free invariants before the boot leans on
+    // the allocator for every page table and spawn.
+    if (pmm_alloc_selftest() != 0) {
+        boot_panic("frame-allocator rover self-test failed");
+    }
+    boot_log("PMMROVER: frame allocator distinct + leak-free under the search rover");
+
     // ELF-loader hardening gate (adversarial bug-hunt of the proc/mem core):
     // three malformed spawns must be REJECTED with zero frame leak. Runs before
     // the scheduler starts (all paths return before finalize_user_process). A

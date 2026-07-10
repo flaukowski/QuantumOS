@@ -433,6 +433,19 @@ ci-smoke: kernel
 		exit 1; \
 	fi
 	@echo "SUCCESS: Kernel booted to idle loop (QuantumOS ready)"
+	@# Frame-allocator rover gate (hot-path optimization): the amortized-O(1)
+	@# search rover must hand out only distinct, genuinely-free frames and lose
+	@# none. Printed only after the self-test's alloc/free invariants pass; a
+	@# hint/wrap bug panics the boot here (and would also corrupt later gates).
+	@if ! grep -q "PMMROVER: frame allocator distinct + leak-free under the search rover" /tmp/qemu-boot.log 2>/dev/null; then \
+		echo "ERROR: frame-allocator rover gate missing (PMMROVER)"; \
+		echo "Boot log:"; \
+		cat /tmp/qemu-boot.log 2>/dev/null || true; \
+		echo ""; \
+		echo "=== Smoke Test FAILED ==="; \
+		exit 1; \
+	fi
+	@echo "SUCCESS: frame-allocator rover gate passed (distinct + leak-free allocation)"
 	@# ELF-loader hardening gate (adversarial bug-hunt of the proc/mem core):
 	@# three malformed spawns (bad magic, p_offset overflow, sub-USER_VBASE
 	@# p_vaddr) must be rejected with zero frame leak. This line is printed only

@@ -144,6 +144,23 @@ mem_result_t memory_protect(void *virt_addr, size_t size, uint32_t perms);
 mem_result_t memory_alloc(void **addr, size_t size, uint32_t perms);
 ```
 
+### Frame allocator (search rover)
+
+`pmm_alloc_frame` used to linear-scan the frame bitmap from frame 0 on every
+call — O(total frames), and the low frames are permanently reserved (kernel
+image + bitmap), so it always paid to skip them first. It now keeps a **search
+rover** (`pmm_alloc_hint`): the scan starts where the last allocation left off
+and wraps once, so a run of sequential allocations (page tables, a spawn's
+segments + stack) is amortized O(1) while still examining every frame at most
+once — it returns a free frame iff one exists. `pmm_free_frame` rewinds the
+rover to a freed frame below it, so holes are refilled before the rover marches
+on. The rover is part of the bitmap's shared state, so it is read/written inside
+the same `irq_save` bracket. A boot self-test (`pmm_alloc_selftest`) asserts the
+alloc/free contract — distinct frames, no leak, and, by occupying the top of the
+bitmap to force the modulo-to-0 case, that the **wrap** hands out only valid
+in-range frames — gating on `PMMROVER: frame allocator distinct + leak-free
+under the search rover`; a hint/wrap bug panics the boot there.
+
 ### Shared-table atomicity (single-CPU invariant)
 
 QuantumOS is single-CPU, and syscalls enter through an **interrupt gate**, so
