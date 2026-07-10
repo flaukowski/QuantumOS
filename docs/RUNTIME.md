@@ -350,10 +350,12 @@ exit (real spawn authority); and **delegates** a strictly-narrowed READ slice of
 its region-3 field cap to `agentsub` via `SYS_CAP_DERIVE` over a
 capability-checked IPC pair, which the sub-agent recalls with (and confirms WRITE
 was withheld). On all four it prints `AGENTD: DEMO OK`; a ci-smoke gate asserts
-it. Being a heavyweight showcase, it runs only on an interactive/non-`quiet`
-boot (the default ci-smoke and the non-quiet ISO entry) — under `quiet` (the
-minimal-boot flag the MCP/society CI gates use) it is skipped so its extra boot
-work never perturbs their timing-sensitive proofs.
+it. Being a heavyweight showcase, it is **opt-in** via the `agentdemo` cmdline
+token (off by default) so its extra boot work never perturbs the timing-sensitive
+proofs the other CI gates poll for. The default ci-smoke boot passes `agentdemo`
+(and gates it), and the GRUB ISO's **"QuantumOS (agent-native demo)"** entry
+boots `quiet agentdemo` — the token is deliberately decoupled from `quiet`, so
+the showcase runs on a clean console.
 
 `user/quantumd.c` is the essence of `kannaka-quantum`, and — unlike the two
 above — a **kernel-embedded service**, not a `/bin` program. `SYS_QRAND` and

@@ -2801,14 +2801,14 @@ void user_qpu_test_init(void) {
  * timer starts after user_init, so the IPC caps exist before either sends. */
 void user_agent_demo_init(void) {
     /* The demo is a heavyweight SHOWCASE (an extra QPU job, a spawn, a field
-     * imprint/recall, and a delegation handshake). Run it only on an interactive/
-     * showcase boot, NOT under `quiet` — the minimal-boot flag the specialized CI
-     * gates (MCP, society, quiet) use. There its added boot work would delay
-     * other timing-sensitive proofs (e.g. the delegation-reap the MCP gate polls
-     * for) without those gates ever checking the demo. The default ci-smoke boot
-     * (no `quiet`) and the non-quiet ISO entry still run + gate it. */
-    if (boot_is_quiet()) {
-        boot_log("agentd: end-to-end demo skipped (quiet boot)");
+     * imprint/recall, and a delegation handshake), so it is OPT-IN via the
+     * `agentdemo` cmdline token — off by default so its added boot work never
+     * delays the timing-sensitive proofs other CI gates poll for (e.g. the MCP
+     * gate's delegation-reap) without those gates ever checking the demo. The
+     * default ci-smoke boot and the GRUB "agent-native demo" entry pass the
+     * token; the token is decoupled from `quiet`, so the showcase runs on a
+     * CLEAN console. */
+    if (!boot_run_agent_demo()) {
         return;
     }
     service_definition_t agentsub_def = {
