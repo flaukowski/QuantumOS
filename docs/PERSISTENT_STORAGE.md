@@ -154,6 +154,54 @@ region 0, and recalls the exact text from a corrupted probe; boot 3
 `FIELD: persisted field checksum mismatch - cold start` while the
 filesystem still restores (section isolation).
 
+## The audit section: the authority ledger survives reboot
+
+The capability authority ledger (epic #133, `kernel/src/audit.c`) — the
+kernel-written record of every GRANT, DENY, SPAWN, manifest denial, quota
+refusal, and CPU-quota kill — rides the **same** QDSK volume, so an agent's
+provable-authority history is durable rather than a per-boot scratchpad.
+
+`persist_sync` serializes the whole 128-slot ring as a small little-endian
+header (`AUD1` magic, version, geometry, and the 64-bit `total`) followed by
+the **raw ring image**, into a blob at a **fixed home just below the field
+blob** (`ata_sector_count()-1-FIELD_BLOB_SECTORS-AUDIT_BLOB_SECTORS`, 11
+sectors). Persisting the whole ring — empty slots and all — means a restore
+`memcpy`s it back and sets `total`, reconstructing the exact modular ring
+state so the next append lands correctly and coalescing resumes cleanly. The
+superblock gains an audit descriptor at offset 44 (`audit_lba`/`audit_bytes`/
+`audit_checksum`), written LAST as part of the same single commit. Pre-audit
+disks read `audit_lba == 0` → honest cold start.
+
+Because audit is now the **lowest** fixed home, the archive-fit check floors
+on `audit_home_lba()` (not the field home) — otherwise a large overlay could
+grow over the audit blob, and since the archive is written first the later
+audit write would scribble its tail and cold-start the *fs* section. On a disk
+too small for the audit blob, audit persistence is skipped (descriptors left
+zero) rather than writing off the end of a degenerate volume.
+
+Two semantics are worth pinning down:
+
+- **`seq` continues across reboots.** `total` is restored, so sequence numbers
+  are monotonic across power cycles — a genuine append-history. `seq` is the
+  **sole** durable ordering key.
+- **`tick` is boot-relative and is zeroed on restore** (the timer resets to 0
+  each boot, exactly as the field blob zeroes `imprint_tick`), so a restored
+  entry never masquerades as "newer" than a post-restore one.
+- **The restore boundary is sealed.** A `coalesce_floor` set at restore stops
+  the first post-restore append from coalescing into (and mutating) the durable
+  prior-boot tail entry — coalescing resumes only among this boot's own records.
+
+`make ci-smoke-disk` proves it with no new typed commands: boot 1's existing
+`sync` now persists the ledger (gated in boot 1's log on `AUDIT: synced ledger
+to disk`), and boot 2's restore runs at `persist_restore` — **before** this
+boot emits a single audit entry — so any entry then in the ring can only have
+come from disk. The gate asserts boot 2 logs `AUDIT: restored ledger carries a
+prior-boot GRANT` (a GRANT `core_services_init` emits deterministically every
+boot — race-free, unlike a timing-driven kill, and un-fakeable). A fourth boot
+`dd`s garbage over the audit blob's fixed LBA and must report an `AUDIT: ...
+cold start` while the **fs and field sections both still restore** (section
+isolation, mirroring the field-corruption boot).
+
 ## Known limits / follow-ups
 
 - Single primary-master drive, polled PIO (no DMA, no second disk).

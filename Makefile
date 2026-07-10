@@ -950,6 +950,15 @@ ci-smoke-disk: kernel
 		echo ""; echo "=== Persistence Test FAILED ==="; exit 1; \
 	fi
 	@echo "SUCCESS: boot 1 serialized the kernel field to disk"
+	@# durable authority ledger: the sync must also have persisted the audit
+	@# ledger. Gated at boot 1 so a failed/skipped audit write is attributed
+	@# HERE, not surfaced confusingly as boot 2's "content missing".
+	@if ! grep -q "AUDIT: synced ledger to disk" /tmp/qemu-disk-boot1.log 2>/dev/null; then \
+		echo "ERROR: boot 1 sync did not persist the audit ledger"; \
+		echo "Boot log:"; cat /tmp/qemu-disk-boot1.log 2>/dev/null || true; \
+		echo ""; echo "=== Persistence Test FAILED ==="; exit 1; \
+	fi
+	@echo "SUCCESS: boot 1 persisted the authority ledger to disk"
 	@echo "[boot 2] cat /data/note off the SAME disk (fresh boot, no write)..."
 	@( printf 'cat /data/note\nrecall the tjde remembers x9j\n'; sleep 8 ) | \
 		timeout 10s qemu-system-x86_64 -kernel $(BUILD_DIR)/kernel.elf32 \
@@ -988,6 +997,49 @@ ci-smoke-disk: kernel
 		echo ""; echo "=== Persistence Test FAILED ==="; exit 1; \
 	fi
 	@echo "SUCCESS: field memory imprinted in boot 1 recalled in boot 2 — FIELD PERSISTENCE PROVEN"
+	@# durable authority ledger: boot 2 restored the ledger, and the restore-
+	@# time ring scan (main.c:169, BEFORE this boot emits any audit entry) found
+	@# a GRANT — which can only have come from boot 1's persisted ledger, and
+	@# which boot 2 never typed. Race-free (GRANT is emitted deterministically by
+	@# core_services_init every boot, not by a timing-driven IRQ).
+	@if ! grep -q "AUDIT: restored ledger from disk" /tmp/qemu-disk-boot2.log 2>/dev/null; then \
+		echo "ERROR: boot 2 did not restore the audit ledger from disk"; \
+		echo "Boot log:"; cat /tmp/qemu-disk-boot2.log 2>/dev/null || true; \
+		echo ""; echo "=== Persistence Test FAILED ==="; exit 1; \
+	fi
+	@if ! grep -q "AUDIT: restored ledger carries a prior-boot GRANT" /tmp/qemu-disk-boot2.log 2>/dev/null; then \
+		echo "ERROR: boot 2 restored ledger lacks a prior-boot GRANT (authority not durable)"; \
+		echo "Boot log:"; cat /tmp/qemu-disk-boot2.log 2>/dev/null || true; \
+		echo ""; echo "=== Persistence Test FAILED ==="; exit 1; \
+	fi
+	@echo "SUCCESS: authority ledger written in boot 1 restored in boot 2 — AUDIT PERSISTENCE PROVEN"
+	@echo "[boot A] corrupt the audit blob at its fixed home; fs + field must survive, audit must cold-start..."
+	@# audit at LBA 4079 (field 4090 - AUDIT_BLOB_SECTORS 11); one random sector
+	@# there breaks the audit checksum but touches neither fs (low sectors) nor
+	@# field (4090+). Proves the audit section is crash-isolated like the field.
+	@dd if=/dev/urandom of=$(DISK_IMG) bs=512 seek=4079 count=1 conv=notrunc 2>/dev/null
+	@( printf 'help\n'; sleep 8 ) | \
+		timeout 10s qemu-system-x86_64 -kernel $(BUILD_DIR)/kernel.elf32 \
+		-drive file=$(DISK_IMG),format=raw,if=ide -serial stdio -m 128M \
+		-display none -no-reboot 2>&1 | tee /tmp/qemu-disk-bootA.log || true
+	@if ! grep -q "AUDIT:.*cold start" /tmp/qemu-disk-bootA.log 2>/dev/null; then \
+		echo "ERROR: boot A did not detect the corrupted audit blob"; \
+		echo "Boot log:"; cat /tmp/qemu-disk-bootA.log 2>/dev/null || true; \
+		echo ""; echo "=== Persistence Test FAILED ==="; exit 1; \
+	fi
+	@if grep -q "AUDIT: restored ledger from disk" /tmp/qemu-disk-bootA.log 2>/dev/null; then \
+		echo "ERROR: boot A restored a CORRUPTED audit blob as truth"; \
+		echo ""; echo "=== Persistence Test FAILED ==="; exit 1; \
+	fi
+	@if ! grep -q "FS: restored persisted files from disk" /tmp/qemu-disk-bootA.log 2>/dev/null; then \
+		echo "ERROR: audit corruption bled into the fs section (isolation broken)"; \
+		echo ""; echo "=== Persistence Test FAILED ==="; exit 1; \
+	fi
+	@if ! grep -q "FIELD: restored slots from disk" /tmp/qemu-disk-bootA.log 2>/dev/null; then \
+		echo "ERROR: audit corruption bled into the field section (isolation broken)"; \
+		echo ""; echo "=== Persistence Test FAILED ==="; exit 1; \
+	fi
+	@echo "SUCCESS: corrupted audit detected, cold-started honestly, fs + field unaffected — AUDIT ISOLATION PROVEN"
 	@echo "[boot 3] corrupt the field blob at its fixed home; fs must survive, field must cold-start..."
 	@dd if=/dev/urandom of=$(DISK_IMG) bs=512 seek=4090 count=1 conv=notrunc 2>/dev/null
 	@( printf 'help\n'; sleep 8 ) | \
