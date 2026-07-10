@@ -136,6 +136,14 @@ silent, and the service watchdog restarts it (~2 s); the reborn shell
 introduces itself with `QSH: reborn (restart=N)`. That banner is the
 merge-gate proof that the operator surface survives its own crash.
 
+`qseed` probes the quantum-pool capability **out of band** (via
+`qrand_seed_present()`, whose success space is only `{0,1}`) before reading
+the seed. `SYS_QSEED` returns an unconstrained 64-bit value, so testing the
+returned value directly against the `-4` (EPERM) errno sentinel — as it once
+did — misreported the single valid boot seed `0xFFFFFFFFFFFFFFFC` as a denial.
+The `ci-smoke-qseed` boot pins that exact collision seed and asserts `qseed`
+prints it rather than `denied (EPERM)`.
+
 ## CI gates (all in `make ci-smoke` and the Integration job)
 
 The smoke test pipes `help ps free uptime ghost qrand exit` into QEMU's
