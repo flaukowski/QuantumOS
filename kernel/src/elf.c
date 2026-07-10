@@ -7,6 +7,7 @@
 #include <kernel/elf.h>
 #include <kernel/memory.h>
 #include <kernel/boot.h>
+#include <kernel/vmspace.h> /* USER_VBASE — confine segments to the user half */
 
 static uint64_t align_down_page(uint64_t v) {
     return v & ~((uint64_t)PAGE_SIZE - 1);
@@ -42,6 +43,7 @@ static elf_result_t load_segment(address_space_t *as, const uint8_t *img, const 
         }
 
         if (!vmspace_map_page(as, page, (uint64_t)frame, writable)) {
+            pmm_free_frame(frame); /* not mapped -> vmspace_destroy can't reclaim it */
             return ELF_ERR_NOMEM;
         }
     }
@@ -64,7 +66,9 @@ elf_result_t elf_load(address_space_t *as, const uint8_t *img, size_t size, uint
     if (eh->e_type != 2 /* ET_EXEC */) {
         return ELF_ERR_TYPE;
     }
-    if (eh->e_phoff + (uint64_t)eh->e_phnum * eh->e_phentsize > size) {
+    /* Program-header table bounds, overflow-safe (e_phoff is attacker-shaped):
+     * a large e_phoff must not wrap the sum below `size` and pass. */
+    if (eh->e_phoff > size || (uint64_t)eh->e_phnum * eh->e_phentsize > size - eh->e_phoff) {
         return ELF_ERR_RANGE;
     }
 
@@ -74,7 +78,23 @@ elf_result_t elf_load(address_space_t *as, const uint8_t *img, size_t size, uint
         if (ph->p_type != ELF_PT_LOAD || ph->p_memsz == 0) {
             continue;
         }
-        if (ph->p_offset + ph->p_filesz > size) {
+        /* File-extent bounds, overflow-safe: reject before load_segment forms
+         * img + p_offset. The old `p_offset + p_filesz > size` add wrapped for a
+         * huge p_offset, passing the check, then read kernel memory far outside
+         * the image into a user-mapped page (info leak) or faulted the cli'd
+         * syscall (panic). */
+        if (ph->p_offset > size || ph->p_filesz > size - ph->p_offset) {
+            return ELF_ERR_RANGE;
+        }
+        /* Confine every segment to the private user half [USER_VBASE,0x80000000)
+         * (PDPT[1], 4 KB pages). A p_vaddr below USER_VBASE would map through the
+         * SHARED boot page directory's 2 MB PS pages: vmspace_map_page misreads a
+         * 2 MB frame as a page table and corrupts arbitrary physical memory. The
+         * upper-bound + wrap check also kills a p_vaddr+p_memsz overflow, and
+         * p_filesz<=p_memsz keeps the file copy inside the segment. */
+        uint64_t seg_end = ph->p_vaddr + ph->p_memsz; /* p_memsz != 0 (checked above) */
+        if (ph->p_filesz > ph->p_memsz || ph->p_vaddr < USER_VBASE || seg_end > 0x80000000UL ||
+            seg_end <= ph->p_vaddr) {
             return ELF_ERR_RANGE;
         }
         elf_result_t r = load_segment(as, img, ph);

@@ -2000,6 +2000,12 @@ static status_t spawn_elf_args(const char *name, const void *elf_start, const vo
 
     uint64_t entry = 0;
     if (elf_load(&as, (const uint8_t *)elf_start, elf_size, &entry) != ELF_OK) {
+        /* vmspace_create allocated a PML4+PDPT (and elf_load may have mapped
+         * some segment frames before failing); reclaim them all, or a malformed
+         * spawn — e.g. spawning any non-ELF initrd file from qsh — leaks ~2+
+         * frames per attempt until the pmm is exhausted (a ring-3-reachable DoS).
+         * vmspace_destroy frees the private user half AND the page tables. */
+        vmspace_destroy(as.pml4);
         return STATUS_ERROR;
     }
 

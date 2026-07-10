@@ -14,6 +14,24 @@ static physical_memory_t pmm;
 static virtual_memory_t vmm;
 static memory_allocator_t kernel_heap;
 
+// Interrupt save/restore (single CPU). The PMM bitmap+counters and the heap
+// free-list are shared tables that the IF=1 process-teardown path mutates
+// (health_monitor_thread -> process_destroy -> vmspace_destroy -> pmm_free_frame,
+// and kfree of the kernel stack) while a cli'd SYS_SPAWN concurrently runs
+// pmm_alloc_frame / kmalloc. A non-atomic load-modify-store of a bitmap byte or
+// counter, timer-preempted mid-update, loses the interleaved write and marks an
+// in-use frame free -> it is re-handed-out, aliasing one physical frame across
+// two address spaces. Bracket every such mutation cli'd, exactly as kmalloc/
+// kfree already do.
+static inline uint64_t irq_save(void) {
+    uint64_t f;
+    __asm__ volatile("pushfq; pop %0; cli" : "=r"(f)::"memory");
+    return f;
+}
+static inline void irq_restore(uint64_t f) {
+    __asm__ volatile("push %0; popfq" ::"r"(f) : "memory", "cc");
+}
+
 // Physical memory management
 mem_result_t pmm_init(uint64_t total_memory) {
     boot_log("Initializing physical memory manager...");
@@ -55,6 +73,10 @@ mem_result_t pmm_init(uint64_t total_memory) {
 }
 
 void *pmm_alloc_frame(void) {
+    // Atomic vs the IF=1 teardown path (see irq_save note): the scan+mark of the
+    // bitmap byte and the counter updates must not be split by a timer IRQ that
+    // preempts into pmm_free_frame on the same byte.
+    uint64_t flags = irq_save();
     // Find first free frame
     for (uint32_t i = 0; i < pmm.total_frames; i++) {
         uint32_t byte_index = i / 8;
@@ -67,10 +89,12 @@ void *pmm_alloc_frame(void) {
             pmm.used_frames++;
 
             void *frame_addr = (void *)(uintptr_t)(i * PAGE_SIZE);
+            irq_restore(flags);
             return frame_addr;
         }
     }
 
+    irq_restore(flags);
     return NULL; // Out of memory
 }
 
@@ -84,7 +108,10 @@ mem_result_t pmm_free_frame(void *frame_addr) {
     uint32_t byte_index = frame_num / 8;
     uint8_t bit_index = frame_num % 8;
 
+    // Atomic check-then-clear of the bitmap byte + counters (see irq_save note).
+    uint64_t flags = irq_save();
     if (!(pmm.frame_bitmap[byte_index] & (1 << bit_index))) {
+        irq_restore(flags);
         return MEM_ERROR_INVALID_ADDRESS; // Already free
     }
 
@@ -93,6 +120,7 @@ mem_result_t pmm_free_frame(void *frame_addr) {
     pmm.free_frames++;
     pmm.used_frames--;
 
+    irq_restore(flags);
     return MEM_SUCCESS;
 }
 
@@ -274,15 +302,6 @@ static kblock_t *heap_head = NULL;
 /* Save RFLAGS + disable interrupts (nestable), and restore. The heap is
  * touched from concurrent kernel contexts (idle-loop reaper, health
  * monitor spawning threads), so allocations are made atomic. */
-static inline uint64_t irq_save(void) {
-    uint64_t f;
-    __asm__ volatile("pushfq; pop %0; cli" : "=r"(f)::"memory");
-    return f;
-}
-static inline void irq_restore(uint64_t f) {
-    __asm__ volatile("push %0; popfq" ::"r"(f) : "memory", "cc");
-}
-
 mem_result_t kheap_init(void) {
     boot_log("Initializing kernel heap...");
 

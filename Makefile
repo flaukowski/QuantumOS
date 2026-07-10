@@ -433,6 +433,21 @@ ci-smoke: kernel
 		exit 1; \
 	fi
 	@echo "SUCCESS: Kernel booted to idle loop (QuantumOS ready)"
+	@# ELF-loader hardening gate (adversarial bug-hunt of the proc/mem core):
+	@# three malformed spawns (bad magic, p_offset overflow, sub-USER_VBASE
+	@# p_vaddr) must be rejected with zero frame leak. This line is printed only
+	@# after elf_spawn_selftest() passes; without the loader fixes the self-test
+	@# panics the boot (leak / OOB-read spawn / kernel-half corruption) and the
+	@# boot never reaches here.
+	@if ! grep -q "ELFGUARD: malformed spawn rejected, no frame leak" /tmp/qemu-boot.log 2>/dev/null; then \
+		echo "ERROR: ELF-loader hardening gate missing (ELFGUARD)"; \
+		echo "Boot log:"; \
+		cat /tmp/qemu-boot.log 2>/dev/null || true; \
+		echo ""; \
+		echo "=== Smoke Test FAILED ==="; \
+		exit 1; \
+	fi
+	@echo "SUCCESS: ELF-loader hardening gate passed (malformed spawns rejected, no leak)"
 	@# ghostOS phase-1 merge gate: the ring-3 ghostd service must recall
 	@# all three noisy probes to their stored patterns (issue #48).
 	@if ! grep -q "GHOSTD: 3/3 RECALL OK" /tmp/qemu-boot.log 2>/dev/null; then \
