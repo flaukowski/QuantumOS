@@ -400,8 +400,8 @@ def _exercise_audit(vm):
     a = vm.audit()
     if not a["entries"] or (a["total"] or 0) <= 0:
         _fail(f"audit ledger empty: {a}")
-    if a["capacity"] != 128:
-        _fail(f"audit capacity != 128: {a['capacity']}")
+    if a["capacity"] != 256:
+        _fail(f"audit capacity != 256: {a['capacity']}")
     # dropped-underflow guard: while total <= capacity, dropped MUST be 0 (a u64
     # total-capacity would underflow to ~1.8e19).
     if a["total"] <= a["capacity"] and a["dropped"] != 0:
@@ -426,6 +426,47 @@ def _exercise_audit(vm):
     print(f"OK: audit ledger — {a['total']} events, {len(grants)} GRANT, {len(denies)} DENY "
           f"(pid {denies[0]['pid']} denied {denies[0]['resource_type']}:"
           f"{denies[0]['resource_id']} perms=0x{denies[0]['perms']:x})")
+
+    # Revocation lifecycle (REVOKE vs REAP split). Site-specific signatures, NOT
+    # bare kind presence — cap_selftest/quantum_selftest mint REVOKE every boot
+    # through the explicit path alone, so kind presence would stay green with
+    # the reaper hooks completely dead. The delegation demo is the un-fakeable
+    # probe: only it ever derives a FIELD cap, so a REAP for FIELD:2 perms=0xB
+    # can only be the reaper freeing the exited delegator's own R|W|GRANT cap,
+    # and FIELD:2 perms=0x1 only the cascade freeing subagentd's derived READ
+    # cap (which must record the CHILD's owner — a different pid). tick>0
+    # excludes pre-timer selftest events AND restored prior-boot entries
+    # (audit_load zeroes ticks), future-proofing against a disk on the MCP
+    # boot. Polled: the delegator must exit and be reaped by the idle loop.
+    deadline = time.time() + 20.0
+    g1 = g2 = g3 = None
+    entries = a["entries"]
+    while time.time() < deadline:
+        entries = vm.audit()["entries"]
+        g1 = next((e for e in entries if e["kind"] == "REVOKE"
+                   and e["resource_type"] == "MEM" and e["resource_id"] == "42"), None)
+        g2 = next((e for e in entries if e["kind"] == "REAP"
+                   and e["resource_type"] == "FIELD" and e["resource_id"] == "2"
+                   and e["perms"] == 0x0B and e["tick"] > 0), None)
+        g3 = next((e for e in entries if e["kind"] == "REAP"
+                   and e["resource_type"] == "FIELD" and e["resource_id"] == "2"
+                   and e["perms"] == 0x1 and e["tick"] > 0), None)
+        if g1 and g2 and g3:
+            break
+        time.sleep(0.4)
+    if not g1:
+        _fail("no explicit REVOKE (MEM:42, cap_selftest root) — the cap_revoke hook is dead")
+    if not g2 or not g3:
+        _fail("no death REAP (FIELD:2 perms=0xB/0x1) — the delegator never exited/was never "
+              "reaped OR the reap hooks are dead; check DELEG ISSUED/PROVEN on COM1")
+    if g2["pid"] == g3["pid"]:
+        _fail(f"cascade REAP records the revoker's pid, not the child owner's: "
+              f"delegator pid {g2['pid']} == derived-cap pid {g3['pid']}")
+    if any(e["kind"] in ("EMPTY", "?") for e in entries):
+        _fail("a live audit entry formats as EMPTY/? — half-added kind")
+    print(f"OK: revocation lifecycle — explicit REVOKE (MEM:42) + reaper REAP of the dead "
+          f"delegator's cap (pid {g2['pid']}) + cascade REAP of subagentd's derived cap "
+          f"(pid {g3['pid']}, child owner recorded)")
 
     # Reading the ledger records nothing (SYS_AUDIT is uncapped — no cap_create,
     # no cap check), so a second read never goes backwards.

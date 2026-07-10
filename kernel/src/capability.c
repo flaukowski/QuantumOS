@@ -165,6 +165,9 @@ cap_result_t cap_derive(uint32_t parent_cap_id, uint32_t requester_pid, uint32_t
     return CAP_SUCCESS;
 }
 
+/* NOT audited (currently has no caller anywhere in the kernel). Before the
+ * first caller ships, this MUST emit REVOKE(from) + GRANT(to) — a silent
+ * ownership move would be an invisible authority change in the ledger. */
 cap_result_t cap_transfer(uint32_t cap_id, uint32_t from_pid, uint32_t to_pid) {
     cap_slot_t *slot = resolve(cap_id);
     if (!slot) {
@@ -185,14 +188,36 @@ cap_result_t cap_transfer(uint32_t cap_id, uint32_t from_pid, uint32_t to_pid) {
     return CAP_SUCCESS;
 }
 
-/* Recursively revoke every capability derived from parent_id */
-static void revoke_children_of(uint32_t parent_id) {
+/* Recursively revoke every capability derived from parent_id. `kind` is the
+ * ledger kind recorded for each freed child (AUDIT_REVOKE when reached from
+ * an explicit cap_revoke, AUDIT_REAP from the reaper's
+ * cap_revoke_all_for_process) — this helper is shared by BOTH paths and
+ * cannot otherwise know which semantic event it is recording. Each child
+ * records its OWN owner (a cascade-freed delegated cap belongs to the
+ * recipient, not the revoker).
+ *
+ * Recursion depth is bounded by the one-hop rule (SYS_CAP_DERIVE refuses
+ * CAP_GRANT/CAP_REVOKE in derived perms, so a derived cap cannot parent
+ * another); revisit if a kernel-internal deep-chain deriver ever appears. */
+static void revoke_children_of(uint32_t parent_id, uint16_t kind) {
     for (uint32_t i = 0; i < MAX_CAPABILITIES; i++) {
         if (cap_table[i].in_use && cap_table[i].cap.parent_cap == parent_id) {
             uint32_t child_id = cap_table[i].cap.cap_id;
-            revoke_children_of(child_id);
+            revoke_children_of(child_id, kind);
+            /* Capture the record fields BEFORE free_slot. The reaper and the
+             * IF=1 health monitor run with interrupts ON, free_slot leaves
+             * the cap fields intact, and alloc_slot is first-fit — so a
+             * post-free read raced by a timer IRQ + another process's
+             * cap_create would record the NEXT capability's owner/resource/
+             * perms: a misattributed ledger entry no cli'd-syscall test can
+             * ever catch. The order here is load-bearing. */
+            uint32_t owner = cap_table[i].cap.owner_id;
+            uint32_t rtype = cap_table[i].cap.resource_type;
+            uint32_t rid = cap_table[i].cap.resource_id;
+            uint32_t perms = cap_table[i].cap.permissions;
             free_slot(&cap_table[i]);
             stats.revoked++;
+            audit_record(kind, owner, AUDIT_V_OK, rtype, rid, perms);
         }
     }
 }
@@ -228,9 +253,17 @@ cap_result_t cap_revoke(uint32_t cap_id, uint32_t requester_pid) {
         }
     }
 
-    revoke_children_of(cap_id);
-    free_slot(slot);
-    stats.revoked++;
+    revoke_children_of(cap_id, AUDIT_REVOKE);
+    /* Capture-before-free: same load-bearing ordering as revoke_children_of. */
+    {
+        uint32_t owner = slot->cap.owner_id;
+        uint32_t rtype = slot->cap.resource_type;
+        uint32_t rid = slot->cap.resource_id;
+        uint32_t perms = slot->cap.permissions;
+        free_slot(slot);
+        stats.revoked++;
+        audit_revoke(owner, rtype, rid, perms);
+    }
     return CAP_SUCCESS;
 }
 
@@ -346,9 +379,20 @@ void cap_revoke_all_for_process(uint32_t pid) {
     for (uint32_t i = 0; i < MAX_CAPABILITIES; i++) {
         if (cap_table[i].in_use && cap_table[i].cap.owner_id == pid) {
             uint32_t id = cap_table[i].cap.cap_id;
-            revoke_children_of(id);
+            /* Death cleanup, not authority revocation: recorded as REAP so a
+             * verifier reading the durable ledger never mistakes garbage
+             * collection for an exercised revoke. The cascade children are
+             * REAPed too — they died WITH their owner's death, transitively. */
+            revoke_children_of(id, AUDIT_REAP);
+            /* Capture-before-free: this runs from the IF=1 idle-loop reaper
+             * and health monitor — see revoke_children_of for why the order
+             * is load-bearing. */
+            uint32_t rtype = cap_table[i].cap.resource_type;
+            uint32_t rid = cap_table[i].cap.resource_id;
+            uint32_t perms = cap_table[i].cap.permissions;
             free_slot(&cap_table[i]);
             stats.revoked++;
+            audit_reap(pid, rtype, rid, perms);
         }
     }
 }

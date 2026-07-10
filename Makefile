@@ -1014,10 +1014,10 @@ ci-smoke-disk: kernel
 	fi
 	@echo "SUCCESS: authority ledger written in boot 1 restored in boot 2 — AUDIT PERSISTENCE PROVEN"
 	@echo "[boot A] corrupt the audit blob at its fixed home; fs + field must survive, audit must cold-start..."
-	@# audit at LBA 4079 (field 4090 - AUDIT_BLOB_SECTORS 11); one random sector
+	@# audit at LBA 4069 (field 4090 - AUDIT_BLOB_SECTORS 21); one random sector
 	@# there breaks the audit checksum but touches neither fs (low sectors) nor
 	@# field (4090+). Proves the audit section is crash-isolated like the field.
-	@dd if=/dev/urandom of=$(DISK_IMG) bs=512 seek=4079 count=1 conv=notrunc 2>/dev/null
+	@dd if=/dev/urandom of=$(DISK_IMG) bs=512 seek=4069 count=1 conv=notrunc 2>/dev/null
 	@( printf 'help\n'; sleep 8 ) | \
 		timeout 10s qemu-system-x86_64 -kernel $(BUILD_DIR)/kernel.elf32 \
 		-drive file=$(DISK_IMG),format=raw,if=ide -serial stdio -m 128M \
