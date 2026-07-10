@@ -463,6 +463,25 @@ ci-smoke: kernel
 		echo ""; echo "=== Smoke Test FAILED ==="; exit 1; \
 	fi
 	@echo "SUCCESS: SYS_QRAND capability gate proven (capless caller denied EPERM)"
+	@# copy_from_user DoS gate (issue #158): a ring-3 process handing a syscall an
+	@# in-range but UNMAPPED user pointer must get EFAULT, not panic the kernel.
+	@# This gate is anti-vacuous by construction: WITHOUT the page-table-validating
+	@# copy the sysinfo copy-out below faults in ring 0, boot_panic halts the
+	@# machine, and NEITHER this line nor any later gate (incl. GHOSTD, above)
+	@# would appear — so the boot could not have reached here at all.
+	@if ! grep -q "COPYGUARD: unmapped pointer denied (EFAULT)" /tmp/qemu-boot.log 2>/dev/null; then \
+		echo "ERROR: copy_from_user unmapped-pointer guard missing (issue #158)"; \
+		echo "Boot log:"; cat /tmp/qemu-boot.log 2>/dev/null || true; \
+		echo ""; echo "=== Smoke Test FAILED ==="; exit 1; \
+	fi
+	@# Second leg: a copy-OUT to a mapped-but-READ-ONLY page (the code page) must
+	@# also EFAULT on the write-permission check, not fault the kernel.
+	@if ! grep -q "COPYGUARD: RO copy-out denied (EFAULT)" /tmp/qemu-boot.log 2>/dev/null; then \
+		echo "ERROR: copy_from_user read-only copy-out guard missing (issue #158)"; \
+		echo "Boot log:"; cat /tmp/qemu-boot.log 2>/dev/null || true; \
+		echo ""; echo "=== Smoke Test FAILED ==="; exit 1; \
+	fi
+	@echo "SUCCESS: copy_from_user DoS guard proven (unmapped + RO pointers denied EFAULT)"
 	@# ghostd phase-4 device gate (issue #51): the capless ghost-test must be
 	@# denied SYS_COM2 — only swarm_svc holds the COM2 device capability.
 	@if ! grep -q "COM2: capless caller denied (EPERM)" /tmp/qemu-boot.log 2>/dev/null; then \

@@ -102,6 +102,58 @@ bool vmspace_map_page(address_space_t *as, uint64_t uvaddr, uint64_t paddr, bool
     return true;
 }
 
+bool vmspace_user_ok(const uint64_t *pml4, uint64_t uvaddr, uint64_t len, bool need_write) {
+    if (len == 0) {
+        return true; /* nothing accessed (also guards the uvaddr+len-1 underflow) */
+    }
+    if (uvaddr + len < uvaddr) {
+        return false; /* wrap */
+    }
+    /* Confine to the user half (PDPT[1], all 4 KB pages). Below USER_VBASE lies
+     * the shared kernel identity map (boot_pd, supervisor 2 MB PS pages); a walk
+     * there would misread a 2 MB frame as a page table (no PS-bit handling here)
+     * and could falsely PASS — an escalation strictly worse than the DoS. This
+     * also kills any high address that aliases pml4[0]. Restores the exact
+     * [USER_VBASE, 0x80000000) bound the replaced in_user_range enforced. */
+    if (uvaddr < USER_VBASE || uvaddr + len > 0x80000000UL) {
+        return false;
+    }
+    if (!pml4) {
+        return false;
+    }
+
+    uint64_t last = uvaddr + len - 1; /* last BYTE touched, never uvaddr+len */
+    for (uint64_t p = uvaddr & ~0xFFFULL; p <= (last & ~0xFFFULL); p += 0x1000) {
+        /* Present-check BEFORE forming each child pointer: a non-present entry
+         * masks to phys 0, which boot_pd identity-maps, so dereferencing it
+         * would silently read garbage rather than fault. */
+        if (!(pml4[0] & PG_PRESENT)) {
+            return false;
+        }
+        const uint64_t *pdpt = (const uint64_t *)(pml4[0] & PG_ADDR);
+        uint64_t e = pdpt[(p >> 30) & 0x1FF];
+        if (!(e & PG_PRESENT)) {
+            return false;
+        }
+        const uint64_t *pd = (const uint64_t *)(e & PG_ADDR);
+        e = pd[(p >> 21) & 0x1FF];
+        if (!(e & PG_PRESENT)) {
+            return false; /* the range check already excludes the PS 2 MB region */
+        }
+        const uint64_t *pt = (const uint64_t *)(e & PG_ADDR);
+        uint64_t pte = pt[(p >> 12) & 0x1FF];
+        /* User accessibility is enforced at the LEAF only (map_page sets USER on
+         * intermediates so the walker reaches user pages). */
+        if ((pte & (PG_PRESENT | PG_USER)) != (PG_PRESENT | PG_USER)) {
+            return false;
+        }
+        if (need_write && !(pte & PG_RW)) {
+            return false;
+        }
+    }
+    return true;
+}
+
 void vmspace_switch(uint64_t cr3) {
     if (cr3 && cr3 != get_cr3()) {
         set_cr3(cr3);

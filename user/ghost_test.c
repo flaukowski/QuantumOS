@@ -236,6 +236,35 @@ void _start(void) {
         }
     }
 
+    /* And for the copy_from_user guard (issue #158): ANY ring-3 process could
+     * halt the whole OS by handing a syscall an in-range but UNMAPPED — or
+     * mapped-but-READ-ONLY — user pointer. The kernel-context copy faulted, and
+     * because contain_user_fault treats a ring-0 fault as fatal, boot_panic
+     * killed the machine. The fix walks the caller's page tables before every
+     * copy and returns EFAULT instead. These two legs ARE the proof-by-attack:
+     * WITHOUT the fix each call faults in ring 0 and the boot HALTS, so the
+     * GHOSTD gate line below (and every ci-smoke gate) never appears; WITH it
+     * both return EFAULT (-2) EXACTLY and boot continues. sysinfo() is uncapped
+     * copy-out, so this exercises the memory guard itself, not a capability. */
+    {
+        /* Leg 1 — unmapped: 0x40050000 is in the code<->stack gap (above the
+         * 8-page code window, below the data/args pages), in-range yet unmapped. */
+        long um = sysinfo(SYSINFO_PS, (void *)0x40050000UL, 64);
+        if (um == -2) {
+            write_str("COPYGUARD: unmapped pointer denied (EFAULT)");
+        } else {
+            write_str("COPYGUARD: WARNING — unmapped copy was NOT denied");
+        }
+        /* Leg 2 — read-only: 0x40000000 is this program's code page (R-X). A
+         * copy-OUT there must be refused for want of write permission (PG_RW). */
+        long ro = sysinfo(SYSINFO_PS, (void *)0x40000000UL, 64);
+        if (ro == -2) {
+            write_str("COPYGUARD: RO copy-out denied (EFAULT)");
+        } else {
+            write_str("COPYGUARD: WARNING — RO copy-out was NOT denied");
+        }
+    }
+
     const uint32_t seeds[3] = {GHOST_SEED_0, GHOST_SEED_1, GHOST_SEED_2};
     uint32_t pats[3][GHOST_PW];
 

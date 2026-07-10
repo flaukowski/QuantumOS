@@ -40,6 +40,13 @@ address_space_t vmspace_create(void);
  * Returns false on allocation failure. */
 bool vmspace_map_page(address_space_t *as, uint64_t uvaddr, uint64_t paddr, bool writable);
 
+/* Validate that the whole span [uvaddr, uvaddr+len) is mapped USER (and RW if
+ * need_write) in the address space rooted at `pml4` (the kernel-VA of the PML4
+ * table — process_t.virtual_address_space). Used by the syscall layer to reject
+ * an unmapped/read-only user pointer with EFAULT instead of faulting in ring 0
+ * and panicking (issue #158). len==0 is trivially ok. */
+bool vmspace_user_ok(const uint64_t *pml4, uint64_t uvaddr, uint64_t len, bool need_write);
+
 /* Load an address space into CR3 (no-op if already active) */
 void vmspace_switch(uint64_t cr3);
 

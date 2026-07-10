@@ -102,9 +102,46 @@ extern void isr128(void);
  * Helpers
  * ============================================================================ */
 
-/* Is addr inside the calling process's mapped user half (1–2 GB)? */
-static int in_user_range(uint64_t addr) {
-    return addr >= USER_VBASE && addr < 0x80000000UL;
+/* Validate that [uptr, uptr+len) is mapped USER (and writable when write) in the
+ * CALLER's address space, walking its page tables (#158). Returns 0 (caller must
+ * return EFAULT) for any unmapped/read-only/out-of-range span, so a bad user
+ * pointer never faults in ring 0. virtual_address_space is the raw PML4 base
+ * (a uint64_t*, stored as as->pml4), NOT an address_space_t. */
+static int user_ok(uint64_t uptr, uint64_t len, int write) {
+    process_t *cur = process_get_current();
+    if (!cur || !cur->virtual_address_space) {
+        return 0; /* safe EFAULT during the create->finalize window, never a NULL walk */
+    }
+    return vmspace_user_ok((const uint64_t *)cur->virtual_address_space, uptr, len, write != 0);
+}
+
+/* Read a NUL-terminated user string into kbuf (page-incremental): validate the
+ * page about to be touched, copy up to its end scanning for NUL, and only
+ * validate/cross into the NEXT page if no NUL and budget remains. Never
+ * over-reads an unmapped page (each is validated first) and never over-rejects a
+ * short string near a mapped-region boundary (a max-window check would). Returns
+ * the length copied (excluding NUL); over-length TRUNCATES to kmax-1 (the
+ * original per-byte loops' behaviour), and only a genuine page fault returns -1.
+ * kbuf is always NUL-terminated. */
+static long copy_user_string(uint64_t uptr, char *kbuf, uint32_t kmax) {
+    uint32_t n = 0;
+    while (n < kmax - 1) {
+        if (!user_ok(uptr + n, 1, 0)) {
+            return -1; /* unmapped page — genuine fault */
+        }
+        uint64_t page_end = ((uptr + n) | 0xFFFULL); /* last byte of the current page */
+        const char *src = (const char *)(uptr);
+        while (n < kmax - 1 && (uptr + n) <= page_end) {
+            char c = src[n];
+            kbuf[n] = c;
+            n++;
+            if (c == '\0') {
+                return (long)(n - 1);
+            }
+        }
+    }
+    kbuf[kmax - 1] = '\0';
+    return (long)(kmax - 1); /* over-length: truncate (matches the old loops) */
 }
 
 /* Two-layer authority gate for a specific resource (epic #135): the
@@ -177,24 +214,15 @@ static void user_console_write(uint32_t pid, const char *msg) {
  * ============================================================================ */
 
 static uint64_t sys_write(uint32_t pid, uint64_t user_ptr) {
-    if (!in_user_range(user_ptr)) {
+    /* Copy the NUL-terminated string out of the caller's user memory,
+     * page-incrementally validating each page before touching it (#158). */
+    char buf[128];
+    long i = copy_user_string(user_ptr, buf, sizeof(buf));
+    if (i < 0) {
         return SYSCALL_EFAULT;
     }
-
-    /* Copy out of the caller's user memory (current CR3 is the caller's
-     * address space, so the pointer resolves to its private frame),
-     * bounded by buffer and the user half's end. */
-    char buf[128];
-    size_t i = 0;
-    const char *src = (const char *)user_ptr;
-    while (i < sizeof(buf) - 1 && in_user_range(user_ptr + i) && src[i]) {
-        buf[i] = src[i];
-        i++;
-    }
-    buf[i] = '\0';
-
     user_console_write(pid, buf);
-    return i;
+    return (uint64_t)i;
 }
 
 /* Exit ledger (epic #62 phase 3): the idle-loop reaper memsets a
@@ -234,11 +262,11 @@ static void sys_exit(uint32_t pid, uint64_t code, cpu_state_t *state) {
  * destination it holds an IPC send-capability for (capability-as-
  * address). No such capability -> EPERM. */
 static uint64_t sys_send(uint32_t pid, uint64_t user_ptr, uint64_t len) {
-    if (!in_user_range(user_ptr)) {
-        return SYSCALL_EFAULT;
-    }
     if (len == 0 || len > IPC_MAX_MESSAGE_SIZE) {
         return SYSCALL_EINVAL;
+    }
+    if (!user_ok(user_ptr, len, 0)) {
+        return SYSCALL_EFAULT;
     }
 
     uint32_t dest = 0;
@@ -250,7 +278,7 @@ static uint64_t sys_send(uint32_t pid, uint64_t user_ptr, uint64_t len) {
     memset(&msg, 0, sizeof(msg));
     const uint8_t *src = (const uint8_t *)user_ptr;
     uint32_t n = 0;
-    while (n < len && n < IPC_MAX_MESSAGE_SIZE && in_user_range(user_ptr + n)) {
+    while (n < len && n < IPC_MAX_MESSAGE_SIZE) {
         msg.data[n] = src[n];
         n++;
     }
@@ -269,11 +297,11 @@ static uint64_t sys_send(uint32_t pid, uint64_t user_ptr, uint64_t len) {
  * lets a service reply to whichever client sent it a request (the sender pid
  * recv returns) while still only being able to reach peers it was granted. */
 static uint64_t sys_send_to(uint32_t pid, uint64_t dest, uint64_t user_ptr, uint64_t len) {
-    if (!in_user_range(user_ptr)) {
-        return SYSCALL_EFAULT;
-    }
     if (len == 0 || len > IPC_MAX_MESSAGE_SIZE) {
         return SYSCALL_EINVAL;
+    }
+    if (!user_ok(user_ptr, len, 0)) {
+        return SYSCALL_EFAULT;
     }
 
     if (cap_find_resource(pid, CAP_RESOURCE_IPC, CAP_WRITE, (uint32_t)dest) != CAP_SUCCESS) {
@@ -284,7 +312,7 @@ static uint64_t sys_send_to(uint32_t pid, uint64_t dest, uint64_t user_ptr, uint
     memset(&msg, 0, sizeof(msg));
     const uint8_t *src = (const uint8_t *)user_ptr;
     uint32_t n = 0;
-    while (n < len && n < IPC_MAX_MESSAGE_SIZE && in_user_range(user_ptr + n)) {
+    while (n < len && n < IPC_MAX_MESSAGE_SIZE) {
         msg.data[n] = src[n];
         n++;
     }
@@ -305,8 +333,11 @@ static uint64_t sys_recv(uint32_t pid, uint64_t user_ptr, uint64_t len) {
      * silently lose it (the QPU/field validate-before-mutate discipline). The
      * copy writes at most min(len, IPC_MAX_MESSAGE_SIZE) bytes plus a NUL, so
      * both ends of that span must be in the user range. */
+    /* copy-OUT: validate the writable span (+1 for the trailing NUL) as MAPPED
+     * and WRITABLE before ipc_receive dequeues (#158 + the consume-before-lose
+     * guard). */
     uint64_t span = len < (uint64_t)IPC_MAX_MESSAGE_SIZE ? len : (uint64_t)IPC_MAX_MESSAGE_SIZE;
-    if (!in_user_range(user_ptr) || !in_user_range(user_ptr + span)) {
+    if (!user_ok(user_ptr, span + 1, 1)) {
         return SYSCALL_EFAULT;
     }
 
@@ -354,15 +385,14 @@ static uint64_t sys_qrand(uint32_t pid, uint64_t user_ptr, uint64_t len) {
         return seed_present ? 1 : 0;
     }
 
-    if (!in_user_range(user_ptr)) {
-        return SYSCALL_EFAULT;
-    }
     if (len > QRAND_MAX_BYTES) {
         len = QRAND_MAX_BYTES;
     }
+    if (!user_ok(user_ptr, len, 1)) { /* copy-OUT, validated after the clamp */
+        return SYSCALL_EFAULT;
+    }
 
-    /* Draw into a kernel buffer under the capability check, then copy out
-     * only as far as the caller's mapped user half extends. */
+    /* Draw into a kernel buffer under the capability check, then copy out. */
     uint8_t tmp[QRAND_MAX_BYTES];
     if (quantum_user_random(pid, tmp, (uint32_t)len, &seed_present) != QUANTUM_SUCCESS) {
         audit_deny(pid, CAP_RESOURCE_QUANTUM, QUANTUM_POOL_RESOURCE_ID, CAP_QUANTUM | CAP_READ);
@@ -376,12 +406,10 @@ static uint64_t sys_qrand(uint32_t pid, uint64_t user_ptr, uint64_t len) {
     }
 
     uint8_t *dst = (uint8_t *)user_ptr;
-    uint32_t n = 0;
-    while (n < len && in_user_range(user_ptr + n)) {
+    for (uint32_t n = 0; n < len; n++) {
         dst[n] = tmp[n];
-        n++;
     }
-    return n;
+    return len;
 }
 
 /* Capability-gated COM2 serial pipe (backs SYS_COM2). The COM2 swarm-bridge
@@ -398,9 +426,6 @@ static uint64_t sys_com2(uint32_t pid, uint64_t op, uint64_t user_ptr, uint64_t 
     if (len == 0) {
         return 0;
     }
-    if (!in_user_range(user_ptr)) {
-        return SYSCALL_EFAULT;
-    }
     if (len > COM2_MAX_BYTES) {
         len = COM2_MAX_BYTES;
     }
@@ -411,27 +436,31 @@ static uint64_t sys_com2(uint32_t pid, uint64_t op, uint64_t user_ptr, uint64_t 
         if (!authorize(pid, CAP_RESOURCE_DEVICE, CAP_WRITE, DEVICE_ID_COM2)) {
             return SYSCALL_EPERM;
         }
-        const uint8_t *src = (const uint8_t *)user_ptr;
-        uint32_t n = 0;
-        while (n < len && in_user_range(user_ptr + n)) {
-            tmp[n] = src[n];
-            n++;
+        if (!user_ok(user_ptr, len, 0)) { /* copy-IN */
+            return SYSCALL_EFAULT;
         }
-        return com2_write(tmp, n);
+        const uint8_t *src = (const uint8_t *)user_ptr;
+        for (uint32_t n = 0; n < len; n++) {
+            tmp[n] = src[n];
+        }
+        return com2_write(tmp, (uint32_t)len);
     }
 
     /* SYS_COM2_READ */
     if (!authorize(pid, CAP_RESOURCE_DEVICE, CAP_READ, DEVICE_ID_COM2)) {
         return SYSCALL_EPERM;
     }
+    /* copy-OUT: validate the writable span BEFORE draining the UART (a
+     * post-drain fault would lose the drained bytes). */
+    if (!user_ok(user_ptr, len, 1)) {
+        return SYSCALL_EFAULT;
+    }
     uint32_t got = com2_read(tmp, (uint32_t)len);
     uint8_t *dst = (uint8_t *)user_ptr;
-    uint32_t n = 0;
-    while (n < got && in_user_range(user_ptr + n)) {
+    for (uint32_t n = 0; n < got; n++) {
         dst[n] = tmp[n];
-        n++;
     }
-    return n;
+    return got;
 }
 
 /* Capability-gated interactive console (backs SYS_CONS, epic #62 phase 1).
@@ -448,9 +477,6 @@ static uint64_t sys_cons(uint32_t pid, uint64_t op, uint64_t user_ptr, uint64_t 
     if (len == 0) {
         return 0;
     }
-    if (!in_user_range(user_ptr)) {
-        return SYSCALL_EFAULT;
-    }
     if (len > CONS_MAX_BYTES) {
         len = CONS_MAX_BYTES;
     }
@@ -461,27 +487,31 @@ static uint64_t sys_cons(uint32_t pid, uint64_t op, uint64_t user_ptr, uint64_t 
         if (!authorize(pid, CAP_RESOURCE_DEVICE, CAP_WRITE, DEVICE_ID_CONSOLE)) {
             return SYSCALL_EPERM;
         }
-        const uint8_t *src = (const uint8_t *)user_ptr;
-        uint32_t n = 0;
-        while (n < len && in_user_range(user_ptr + n)) {
-            tmp[n] = src[n];
-            n++;
+        if (!user_ok(user_ptr, len, 0)) { /* copy-IN */
+            return SYSCALL_EFAULT;
         }
-        return console_write(tmp, n);
+        const uint8_t *src = (const uint8_t *)user_ptr;
+        for (uint32_t n = 0; n < len; n++) {
+            tmp[n] = src[n];
+        }
+        return console_write(tmp, (uint32_t)len);
     }
 
     /* SYS_CONS_READ */
     if (!authorize(pid, CAP_RESOURCE_DEVICE, CAP_READ, DEVICE_ID_CONSOLE)) {
         return SYSCALL_EPERM;
     }
+    /* copy-OUT: validate before draining the input ring (post-drain fault
+     * would lose the drained bytes). */
+    if (!user_ok(user_ptr, len, 1)) {
+        return SYSCALL_EFAULT;
+    }
     uint32_t got = console_read(tmp, (uint32_t)len);
     uint8_t *dst = (uint8_t *)user_ptr;
-    uint32_t n = 0;
-    while (n < got && in_user_range(user_ptr + n)) {
+    for (uint32_t n = 0; n < got; n++) {
         dst[n] = tmp[n];
-        n++;
     }
-    return n;
+    return got;
 }
 
 /* Append a decimal u64 to buf at offset o (bounded by max). */
@@ -536,9 +566,6 @@ static uint64_t sys_sysinfo(uint32_t pid, uint64_t op, uint64_t user_ptr, uint64
     if (len == 0) {
         return 0;
     }
-    if (!in_user_range(user_ptr)) {
-        return SYSCALL_EFAULT;
-    }
 
     /* Static bounce buffer: syscalls run cli'd on one CPU, so this cannot
      * be re-entered while in use. */
@@ -566,13 +593,14 @@ static uint64_t sys_sysinfo(uint32_t pid, uint64_t op, uint64_t user_ptr, uint64
     if (len > produced) {
         len = produced;
     }
-    char *dst = (char *)user_ptr;
-    uint32_t n = 0;
-    while (n < len && in_user_range(user_ptr + n)) {
-        dst[n] = tmp[n];
-        n++;
+    if (!user_ok(user_ptr, len, 1)) { /* copy-OUT, validated after the clamp */
+        return SYSCALL_EFAULT;
     }
-    return n;
+    char *dst = (char *)user_ptr;
+    for (uint32_t n = 0; n < len; n++) {
+        dst[n] = tmp[n];
+    }
+    return len;
 }
 
 /* ---- Read-only VFS over the embedded initrd (epic #62 phase 2, #64) ----
@@ -585,17 +613,9 @@ static uint64_t sys_sysinfo(uint32_t pid, uint64_t op, uint64_t user_ptr, uint64
 /* Copy a NUL-terminated path out of user memory, bounded. Returns 0 on
  * success, -1 if the pointer or termination is bad. */
 static int copy_user_path(uint64_t user_ptr, char *dst, size_t max) {
-    if (!in_user_range(user_ptr)) {
-        return -1;
-    }
-    const char *src = (const char *)user_ptr;
-    size_t i = 0;
-    while (i < max - 1 && in_user_range(user_ptr + i) && src[i]) {
-        dst[i] = src[i];
-        i++;
-    }
-    dst[i] = '\0';
-    return 0;
+    /* Page-incremental string copy (#158): -1 only on a genuine fault; an
+     * over-length path truncates, exactly as the old loop did. */
+    return copy_user_string(user_ptr, dst, (uint32_t)max) < 0 ? -1 : 0;
 }
 
 /* Grab a free fd slot in `cur` and fill it. Returns the fd or EIO. */
@@ -692,23 +712,21 @@ static uint64_t sys_fwrite(uint32_t pid, uint64_t fd, uint64_t user_ptr, uint64_
     if (len == 0) {
         return 0;
     }
-    if (!in_user_range(user_ptr)) {
-        return SYSCALL_EFAULT;
-    }
 
     /* Bounce through a bounded kernel buffer like every other copy-in. */
     uint8_t tmp[CONS_MAX_BYTES];
     if (len > sizeof(tmp)) {
         len = sizeof(tmp);
     }
+    if (!user_ok(user_ptr, len, 0)) { /* copy-IN, validated after the clamp */
+        return SYSCALL_EFAULT;
+    }
     const uint8_t *src = (const uint8_t *)user_ptr;
-    uint32_t n = 0;
-    while (n < len && in_user_range(user_ptr + n)) {
-        tmp[n] = src[n];
-        n++;
+    for (uint32_t i = 0; i < len; i++) {
+        tmp[i] = src[i];
     }
 
-    int wrote = ramfs_append(cur->fds[fd].ram_idx, tmp, n);
+    int wrote = ramfs_append(cur->fds[fd].ram_idx, tmp, (uint32_t)len);
     if (wrote < 0) {
         return SYSCALL_EINVAL;
     }
@@ -763,7 +781,7 @@ static uint64_t sys_resolve(uint32_t pid, uint64_t host_ptr, uint64_t out_ptr) {
     if (!authorize(pid, CAP_RESOURCE_DEVICE, CAP_READ, DEVICE_ID_NET)) {
         return SYSCALL_EPERM;
     }
-    if (!in_user_range(out_ptr)) {
+    if (!user_ok(out_ptr, 4, 1)) { /* copy-OUT: the 4-byte resolved IP */
         return SYSCALL_EFAULT;
     }
 
@@ -779,9 +797,7 @@ static uint64_t sys_resolve(uint32_t pid, uint64_t host_ptr, uint64_t out_ptr) {
     if (r == 1) {
         uint8_t *dst = (uint8_t *)out_ptr;
         for (int i = 0; i < 4; i++) {
-            if (in_user_range(out_ptr + i)) {
-                dst[i] = ip[i];
-            }
+            dst[i] = ip[i];
         }
         return 0;
     }
@@ -839,10 +855,9 @@ static uint64_t sys_udp(uint32_t pid, uint64_t op, uint64_t req_ptr) {
     if (!authorize(pid, CAP_RESOURCE_DEVICE, CAP_READ, DEVICE_ID_NET)) {
         return SYSCALL_EPERM;
     }
-    /* The WHOLE struct must sit inside the user window — a struct whose
-     * first byte is in range but whose tail straddles the 2 GB boundary
-     * would have the kernel read/write past the user half. */
-    if (!in_user_range(req_ptr) || !in_user_range(req_ptr + sizeof(udp_req_k_t) - 1)) {
+    /* The WHOLE struct must be mapped (copy-IN here; RECVFROM re-validates it
+     * write=1 before writing the sender back). */
+    if (!user_ok(req_ptr, sizeof(udp_req_k_t), 0)) {
         return SYSCALL_EFAULT;
     }
     udp_req_k_t req;
@@ -862,9 +877,8 @@ static uint64_t sys_udp(uint32_t pid, uint64_t op, uint64_t req_ptr) {
         if (!net_udp_dst_ok(req.ip)) {
             return SYSCALL_EINVAL; /* fail fast — never ARP the unARPable */
         }
-        /* req.buf is a second untrusted pointer; the user window is one
-         * contiguous range, so endpoint checks cover every byte. */
-        if (req.len > 0 && (!in_user_range(req.buf) || !in_user_range(req.buf + req.len - 1))) {
+        /* req.buf is a second untrusted pointer (copy-IN, must be mapped). */
+        if (req.len > 0 && !user_ok(req.buf, req.len, 0)) {
             return SYSCALL_EFAULT;
         }
         /* Bounce to kernel memory: syscalls run cli'd on one CPU (the
@@ -880,7 +894,13 @@ static uint64_t sys_udp(uint32_t pid, uint64_t op, uint64_t req_ptr) {
 
     case UDP_OP_RECVFROM: {
         uint16_t want = req.len > UDP_PAYLOAD_MAX ? UDP_PAYLOAD_MAX : req.len;
-        if (want > 0 && (!in_user_range(req.buf) || !in_user_range(req.buf + want - 1))) {
+        /* Both destinations are copy-OUT — validate them WRITABLE up front,
+         * before recvfrom, so neither the payload nor the sender writeback can
+         * fault (or find a read-only page) after the receive commits. */
+        if (want > 0 && !user_ok(req.buf, want, 1)) {
+            return SYSCALL_EFAULT;
+        }
+        if (!user_ok(req_ptr, sizeof(udp_req_k_t), 1)) {
             return SYSCALL_EFAULT;
         }
         static uint8_t bounce[UDP_PAYLOAD_MAX];
@@ -938,7 +958,8 @@ static uint64_t sys_tcp(uint32_t pid, uint64_t op, uint64_t req_ptr) {
     if (!authorize(pid, CAP_RESOURCE_DEVICE, CAP_READ, DEVICE_ID_NET)) {
         return SYSCALL_EPERM;
     }
-    if (!in_user_range(req_ptr) || !in_user_range(req_ptr + sizeof(udp_req_k_t) - 1)) {
+    /* copy-IN only — TCP RECV has no struct writeback (unlike UDP RECVFROM). */
+    if (!user_ok(req_ptr, sizeof(udp_req_k_t), 0)) {
         return SYSCALL_EFAULT;
     }
     udp_req_k_t req;
@@ -958,7 +979,7 @@ static uint64_t sys_tcp(uint32_t pid, uint64_t op, uint64_t req_ptr) {
         if (req.len > TCP_SEND_MAX) {
             return SYSCALL_EINVAL;
         }
-        if (req.len > 0 && (!in_user_range(req.buf) || !in_user_range(req.buf + req.len - 1))) {
+        if (req.len > 0 && !user_ok(req.buf, req.len, 0)) { /* copy-IN */
             return SYSCALL_EFAULT;
         }
         static uint8_t bounce[TCP_SEND_MAX];
@@ -971,7 +992,7 @@ static uint64_t sys_tcp(uint32_t pid, uint64_t op, uint64_t req_ptr) {
 
     case TCP_OP_RECV: {
         uint16_t want = req.len > TCP_SEND_MAX ? TCP_SEND_MAX : req.len;
-        if (want > 0 && (!in_user_range(req.buf) || !in_user_range(req.buf + want - 1))) {
+        if (want > 0 && !user_ok(req.buf, want, 1)) { /* copy-OUT */
             return SYSCALL_EFAULT;
         }
         static uint8_t bounce[TCP_SEND_MAX];
@@ -1011,24 +1032,23 @@ static uint64_t sys_read(uint32_t pid, uint64_t fd, uint64_t user_ptr, uint64_t 
     if (len == 0) {
         return 0;
     }
-    if (!in_user_range(user_ptr)) {
-        return SYSCALL_EFAULT;
-    }
 
     uint32_t remaining = cur->fds[fd].size - cur->fds[fd].offset;
     if (len > remaining) {
         len = remaining;
     }
+    /* copy-OUT: validate the clamped span is mapped WRITABLE user memory. */
+    if (!user_ok(user_ptr, len, 1)) {
+        return SYSCALL_EFAULT;
+    }
 
     const uint8_t *src = cur->fds[fd].data + cur->fds[fd].offset;
     uint8_t *dst = (uint8_t *)user_ptr;
-    uint32_t n = 0;
-    while (n < len && in_user_range(user_ptr + n)) {
+    for (uint32_t n = 0; n < len; n++) {
         dst[n] = src[n];
-        n++;
     }
-    cur->fds[fd].offset += n;
-    return n;
+    cur->fds[fd].offset += (uint32_t)len;
+    return len;
 }
 
 static uint64_t sys_close(uint32_t pid, uint64_t fd) {
@@ -1053,9 +1073,6 @@ static uint64_t sys_readdir(uint32_t pid, uint64_t path_ptr, uint64_t user_ptr, 
     if (len == 0) {
         return 0;
     }
-    if (!in_user_range(user_ptr)) {
-        return SYSCALL_EFAULT;
-    }
 
     char path[VFS_PATH_MAX];
     if (copy_user_path(path_ptr, path, sizeof(path)) != 0) {
@@ -1072,13 +1089,15 @@ static uint64_t sys_readdir(uint32_t pid, uint64_t path_ptr, uint64_t user_ptr, 
     if (len > produced) {
         len = produced;
     }
-    char *dst = (char *)user_ptr;
-    uint32_t n = 0;
-    while (n < len && in_user_range(user_ptr + n)) {
-        dst[n] = tmp[n];
-        n++;
+    /* copy-OUT: validate the clamped span is mapped WRITABLE user memory. */
+    if (!user_ok(user_ptr, len, 1)) {
+        return SYSCALL_EFAULT;
     }
-    return n;
+    char *dst = (char *)user_ptr;
+    for (uint32_t n = 0; n < len; n++) {
+        dst[n] = tmp[n];
+    }
+    return len;
 }
 
 /* ---- Program execution off the filesystem (epic #62 phase 3, #65) ----
@@ -1144,19 +1163,13 @@ static uint64_t sys_spawn(uint32_t pid, uint64_t cmd_ptr) {
         return SYSCALL_EPERM;
     }
 
-    /* Copy the whole command line (path + args) out of user memory. */
+    /* Copy the whole command line (path + args) out of user memory.
+     * copy_user_string validates each page (present|user) before touching it,
+     * so an in-range but unmapped cmd_ptr returns EFAULT instead of faulting
+     * the kernel (issue #158). */
     char cmd[SPAWN_CMDLINE_MAX];
-    if (!in_user_range(cmd_ptr)) {
+    if (copy_user_string(cmd_ptr, cmd, sizeof(cmd)) < 0) {
         return SYSCALL_EFAULT;
-    }
-    {
-        const char *src = (const char *)cmd_ptr;
-        size_t i = 0;
-        while (i < sizeof(cmd) - 1 && in_user_range(cmd_ptr + i) && src[i]) {
-            cmd[i] = src[i];
-            i++;
-        }
-        cmd[i] = '\0';
     }
 
     /* Parse into an argv (argv[0] = the initrd path to load). */
@@ -1246,21 +1259,20 @@ static uint64_t sys_field_snapshot(uint32_t pid, uint64_t user_ptr, uint64_t len
     if (len == 0) {
         return 0;
     }
-    if (!in_user_range(user_ptr)) {
-        return SYSCALL_EFAULT;
-    }
     if (len > FIELD_SNAP_BYTES) {
         len = FIELD_SNAP_BYTES;
     }
-    const int8_t *src = (const int8_t *)user_ptr;
-    uint32_t n = 0;
-    while (n < len && in_user_range(user_ptr + n)) {
-        g_field_snap[n] = src[n];
-        n++;
+    /* copy-IN: validate the clamped span is mapped user memory. */
+    if (!user_ok(user_ptr, len, 0)) {
+        return SYSCALL_EFAULT;
     }
-    g_field_n = (int)n;
+    const int8_t *src = (const int8_t *)user_ptr;
+    for (uint32_t n = 0; n < len; n++) {
+        g_field_snap[n] = src[n];
+    }
+    g_field_n = (int)len;
     g_field_dirty = true;
-    return n;
+    return len;
 }
 
 bool field_snapshot_take(int8_t *dst, int *out_n) {
@@ -1294,8 +1306,8 @@ static uint64_t sys_imprint(uint32_t pid, uint64_t req_ptr) {
         audit_deny(pid, CAP_RESOURCE_FIELD, AUDIT_RESOURCE_ANY, CAP_WRITE);
         return SYSCALL_EPERM;
     }
-    /* Whole-struct endpoint validation (the sys_udp precedent). */
-    if (!in_user_range(req_ptr) || !in_user_range(req_ptr + sizeof(field_imprint_req_k_t) - 1)) {
+    /* Whole-struct mapping+range validation (copy-IN, the sys_udp precedent). */
+    if (!user_ok(req_ptr, sizeof(field_imprint_req_k_t), 0)) {
         return SYSCALL_EFAULT;
     }
     field_imprint_req_k_t req;
@@ -1328,8 +1340,9 @@ static uint64_t sys_recall(uint32_t pid, uint64_t req_ptr, uint64_t out_ptr) {
         audit_deny(pid, CAP_RESOURCE_FIELD, AUDIT_RESOURCE_ANY, CAP_READ);
         return SYSCALL_EPERM;
     }
-    if (!in_user_range(req_ptr) || !in_user_range(req_ptr + sizeof(field_recall_req_k_t) - 1) ||
-        !in_user_range(out_ptr) || !in_user_range(out_ptr + sizeof(field_recall_out_k_t) - 1)) {
+    /* copy-IN the request now; the output span is validated WRITABLE just
+     * before the copy-out (both mappings are stable — syscalls run cli'd). */
+    if (!user_ok(req_ptr, sizeof(field_recall_req_k_t), 0)) {
         return SYSCALL_EFAULT;
     }
     field_recall_req_k_t req;
@@ -1357,6 +1370,9 @@ static uint64_t sys_recall(uint32_t pid, uint64_t req_ptr, uint64_t out_ptr) {
         0) {
         return SYSCALL_EINVAL;
     }
+    if (!user_ok(out_ptr, sizeof(out), 1)) { /* copy-OUT: mapped WRITABLE */
+        return SYSCALL_EFAULT;
+    }
     uint8_t *udst = (uint8_t *)out_ptr;
     for (size_t i = 0; i < sizeof(out); i++) {
         udst[i] = ((const uint8_t *)&out)[i];
@@ -1383,15 +1399,15 @@ static uint64_t sys_field_info(uint32_t pid, uint64_t region_arg, uint64_t out_p
     if (!authorize(pid, CAP_RESOURCE_FIELD, CAP_READ, region)) {
         return SYSCALL_EPERM;
     }
-    if (!in_user_range(out_ptr) || !in_user_range(out_ptr + sizeof(field_info_out_k_t) - 1)) {
-        return SYSCALL_EFAULT;
-    }
     /* Static is safe: syscalls run cli'd on one CPU (the sys_recall precedent).
      * field_region_info zeroes the whole struct before filling, so no residue
      * from a prior call's region survives into the copy-out. */
     static field_info_out_k_t out;
     if (field_region_info(region, &out, timer_get_ticks()) < 0) {
         return SYSCALL_EINVAL;
+    }
+    if (!user_ok(out_ptr, sizeof(out), 1)) { /* copy-OUT: mapped WRITABLE */
+        return SYSCALL_EFAULT;
     }
     uint8_t *udst = (uint8_t *)out_ptr;
     for (size_t i = 0; i < sizeof(out); i++) {
@@ -1407,9 +1423,6 @@ static uint64_t sys_field_info(uint32_t pid, uint64_t region_arg, uint64_t out_p
  * mints and denies nothing, so it never perturbs its own counters. */
 static uint64_t sys_audit(uint32_t pid, uint64_t op, uint64_t user_ptr, uint64_t len) {
     (void)pid;
-    if (!in_user_range(user_ptr)) {
-        return SYSCALL_EFAULT;
-    }
     static char tmp[AUDIT_MAX_BYTES];
     size_t produced;
     if (op == AUDIT_OP_STATS) {
@@ -1422,13 +1435,15 @@ static uint64_t sys_audit(uint32_t pid, uint64_t op, uint64_t user_ptr, uint64_t
     if (len > produced) {
         len = produced;
     }
-    char *dst = (char *)user_ptr;
-    uint32_t n = 0;
-    while (n < len && in_user_range(user_ptr + n)) {
-        dst[n] = tmp[n];
-        n++;
+    /* copy-OUT: validate the clamped span is mapped WRITABLE user memory. */
+    if (!user_ok(user_ptr, len, 1)) {
+        return SYSCALL_EFAULT;
     }
-    return n;
+    char *dst = (char *)user_ptr;
+    for (uint32_t n = 0; n < len; n++) {
+        dst[n] = tmp[n];
+    }
+    return len;
 }
 
 /* SYS_MANIFEST — read the intent manifests (epic #135 Phase D increment 2).
@@ -1438,26 +1453,25 @@ static uint64_t sys_audit(uint32_t pid, uint64_t op, uint64_t user_ptr, uint64_t
  * ledger for grants (already public there), with cpu_ticks the one added,
  * documented timing signal. Reading mutates nothing. Copy-out mirrors
  * sys_audit EXACTLY: format into a static kernel scratch, clamp the user
- * length to what was produced, then a per-byte in_user_range copy — so a
- * user-controlled length can never wrap past the user half into kernel
- * memory (there is deliberately NO up-front whole-range check on raw len). */
+ * length to what was produced, then one user_ok(span, write) mapping check
+ * before the copy — so a user-controlled length can neither wrap past the
+ * user half nor fault the kernel on an unmapped page (#158). */
 static uint64_t sys_manifest(uint32_t pid, uint64_t user_ptr, uint64_t len) {
     (void)pid;
-    if (!in_user_range(user_ptr)) {
-        return SYSCALL_EFAULT;
-    }
     static char tmp[MANIFEST_TEXT_MAX];
     size_t produced = manifest_format(tmp, sizeof(tmp));
     if (len > produced) {
         len = produced;
     }
-    char *dst = (char *)user_ptr;
-    uint32_t n = 0;
-    while (n < len && in_user_range(user_ptr + n)) {
-        dst[n] = tmp[n];
-        n++;
+    /* copy-OUT: validate the clamped span is mapped WRITABLE user memory. */
+    if (!user_ok(user_ptr, len, 1)) {
+        return SYSCALL_EFAULT;
     }
-    return n;
+    char *dst = (char *)user_ptr;
+    for (uint32_t n = 0; n < len; n++) {
+        dst[n] = tmp[n];
+    }
+    return len;
 }
 
 /* SYS_CAP_DERIVE — cross-ring capability delegation (epic #137 Phase D inc. 3).
@@ -1492,8 +1506,8 @@ static uint64_t cap_derive_errno(cap_result_t r) {
 }
 
 static uint64_t sys_cap_derive(uint32_t pid, uint64_t req_ptr) {
-    /* Whole-struct endpoint validation (the sys_udp precedent). */
-    if (!in_user_range(req_ptr) || !in_user_range(req_ptr + sizeof(cap_derive_req_k_t) - 1)) {
+    /* Whole-struct mapping+range validation (copy-IN, the sys_udp precedent). */
+    if (!user_ok(req_ptr, sizeof(cap_derive_req_k_t), 0)) {
         return SYSCALL_EFAULT;
     }
     cap_derive_req_k_t req;
@@ -1615,10 +1629,10 @@ typedef struct {
 } qpu_poll_out_k_t;
 _Static_assert(sizeof(qpu_poll_out_k_t) == 140, "qpu_poll_out ABI drift");
 
-/* Copy a whole struct in from ring 3 (endpoint-validated, the sys_udp/
- * cap_derive precedent). */
+/* Copy a whole struct in from ring 3 (mapping-validated: an in-range but
+ * unmapped pointer returns 0/EFAULT rather than faulting the kernel — #158). */
 static int qpu_copy_in(uint64_t uptr, void *dst, size_t n) {
-    if (!in_user_range(uptr) || !in_user_range(uptr + n - 1)) {
+    if (!user_ok(uptr, n, 0)) {
         return 0;
     }
     const uint8_t *usrc = (const uint8_t *)uptr;
@@ -1629,7 +1643,7 @@ static int qpu_copy_in(uint64_t uptr, void *dst, size_t n) {
 }
 
 static int qpu_copy_out(uint64_t uptr, const void *src, size_t n) {
-    if (!in_user_range(uptr) || !in_user_range(uptr + n - 1)) {
+    if (!user_ok(uptr, n, 1)) { /* copy-OUT: mapped WRITABLE */
         return 0;
     }
     uint8_t *udst = (uint8_t *)uptr;
@@ -1660,9 +1674,9 @@ static uint64_t sys_qpu(uint32_t pid, uint64_t op, uint64_t arg, uint64_t arg2) 
         /* Validate the output pointer BEFORE the broker commits PENDING->RUNNING
          * and stamps the executor: a copy-out failure AFTER that mutation would
          * strand the job RUNNING forever (the executor never learns its
-         * job_id). Single-CPU cli'd, so a range that is valid here stays valid
-         * through the copy below. */
-        if (!in_user_range(arg) || !in_user_range(arg + sizeof(qpu_fetch_out_k_t) - 1)) {
+         * job_id). Single-CPU cli'd, so a mapping valid here stays valid
+         * through the copy below. Copy-OUT → validate WRITABLE. */
+        if (!user_ok(arg, sizeof(qpu_fetch_out_k_t), 1)) {
             return SYSCALL_EFAULT;
         }
         qpu_fetch_out_k_t out;
@@ -1694,8 +1708,8 @@ static uint64_t sys_qpu(uint32_t pid, uint64_t op, uint64_t arg, uint64_t arg2) 
         /* Validate the output pointer BEFORE the broker copies the DONE result
          * and FREES the slot: a copy-out failure after slot_free would destroy
          * the only copy of the result (the slot is gone). Pre-validated, so the
-         * copy below cannot fail. */
-        if (!in_user_range(arg2) || !in_user_range(arg2 + sizeof(qpu_poll_out_k_t) - 1)) {
+         * copy below cannot fail. Copy-OUT → validate WRITABLE. */
+        if (!user_ok(arg2, sizeof(qpu_poll_out_k_t), 1)) {
             return SYSCALL_EFAULT;
         }
         qpu_poll_out_k_t out;
