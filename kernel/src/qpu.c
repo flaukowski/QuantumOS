@@ -33,6 +33,21 @@ typedef struct {
 static qpu_job_t jobs[QPU_MAX_JOBS];
 static uint32_t next_job_id = 1;
 
+/* Self-contained IRQ save/restore (the manifest.c/audit.c rule). The four
+ * SYS_QPU ops run cli'd (int 0x80 is an interrupt gate), so they are atomic
+ * w.r.t. IRQs. qpu_on_process_destroy is the ONE other mutator of jobs[] and
+ * runs with IF=1 (the service health-monitor thread tears down a monitored
+ * qpud), so its multi-field slot_free must be bracketed cli'd or a timer
+ * preemption could let a concurrent SYS_QPU SUBMIT claim a half-freed slot. */
+static inline uint64_t qpu_irq_save(void) {
+    uint64_t flags;
+    __asm__ volatile("pushfq; pop %0; cli" : "=r"(flags) : : "memory");
+    return flags;
+}
+static inline void qpu_irq_restore(uint64_t flags) {
+    __asm__ volatile("push %0; popfq" : : "r"(flags) : "memory");
+}
+
 /* Scrub + free: a recycled slot must never leak a previous owner's circuit
  * or result bytes to the next occupant (pid-reuse info-leak guard). */
 static void slot_free(qpu_job_t *j) {
@@ -207,7 +222,10 @@ void qpu_on_process_destroy(uint32_t pid) {
      * dead process can never release its own (the fd/ipc/cap/manifest
      * precedent in process_destroy). Every pid-reuse path funnels through
      * process_destroy, so slots keyed on this pid belong to the dying
-     * incarnation by construction. */
+     * incarnation by construction. cli'd for the whole sweep: this runs at
+     * IF=1 from the health monitor, and a torn slot_free racing a cli'd
+     * SUBMIT would corrupt/leak a slot (see qpu_irq_save). */
+    uint64_t flags = qpu_irq_save();
     for (uint32_t i = 0; i < QPU_MAX_JOBS; i++) {
         qpu_job_t *j = &jobs[i];
         if (j->state == QPU_JOB_FREE) {
@@ -235,4 +253,5 @@ void qpu_on_process_destroy(uint32_t pid) {
             }
         }
     }
+    qpu_irq_restore(flags);
 }

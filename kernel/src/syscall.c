@@ -1651,13 +1651,21 @@ static uint64_t sys_qpu(uint32_t pid, uint64_t op, uint64_t arg, uint64_t arg2) 
         if (!authorize(pid, CAP_RESOURCE_DEVICE, CAP_EXECUTE, DEVICE_ID_QPU)) {
             return SYSCALL_EPERM;
         }
+        /* Validate the output pointer BEFORE the broker commits PENDING->RUNNING
+         * and stamps the executor: a copy-out failure AFTER that mutation would
+         * strand the job RUNNING forever (the executor never learns its
+         * job_id). Single-CPU cli'd, so a range that is valid here stays valid
+         * through the copy below. */
+        if (!in_user_range(arg) || !in_user_range(arg + sizeof(qpu_fetch_out_k_t) - 1)) {
+            return SYSCALL_EFAULT;
+        }
         qpu_fetch_out_k_t out;
         for (size_t i = 0; i < sizeof(out); i++) {
             ((uint8_t *)&out)[i] = 0;
         }
         uint64_t r = qpu_fetch(pid, (qpu_fetch_out_t *)&out);
-        if (r != 0 && !qpu_copy_out(arg, &out, sizeof(out))) {
-            return SYSCALL_EFAULT;
+        if (r != 0) {
+            qpu_copy_out(arg, &out, sizeof(out)); /* cannot fail — pre-validated */
         }
         return r;
     }
@@ -1677,14 +1685,21 @@ static uint64_t sys_qpu(uint32_t pid, uint64_t op, uint64_t arg, uint64_t arg2) 
         if (!authorize(pid, CAP_RESOURCE_DEVICE, CAP_WRITE, DEVICE_ID_QPU)) {
             return SYSCALL_EPERM;
         }
+        /* Validate the output pointer BEFORE the broker copies the DONE result
+         * and FREES the slot: a copy-out failure after slot_free would destroy
+         * the only copy of the result (the slot is gone). Pre-validated, so the
+         * copy below cannot fail. */
+        if (!in_user_range(arg2) || !in_user_range(arg2 + sizeof(qpu_poll_out_k_t) - 1)) {
+            return SYSCALL_EFAULT;
+        }
         qpu_poll_out_k_t out;
         for (size_t i = 0; i < sizeof(out); i++) {
             ((uint8_t *)&out)[i] = 0;
         }
         uint64_t r = qpu_poll(pid, (uint32_t)arg, (qpu_poll_out_t *)&out);
         /* On a successful poll (state code >= 1) copy the struct out. */
-        if ((int64_t)r > 0 && !qpu_copy_out(arg2, &out, sizeof(out))) {
-            return SYSCALL_EFAULT;
+        if ((int64_t)r > 0) {
+            qpu_copy_out(arg2, &out, sizeof(out)); /* cannot fail — pre-validated */
         }
         return r;
     }
@@ -2346,12 +2361,12 @@ void user_swarm_demo_init(uint32_t ghostd_pid) {
         /* QPU SUBMIT right (epic #149 B1): the bridge forwards a host-framed
          * opaque circuit to the SYS_QPU broker and returns the exact result
          * over COM2. qsub_max bounds wire-driven submissions per incarnation.
-         * 4: the CI gate charges 4 (bell + grover3 + a large circuit + a
-         * malformed one — a submission that reaches the broker consumes quota
-         * even if the executor later rejects the circuit) then proves the 5th
-         * is refused. */
+         * 5: the CI gate charges 5 (bell + grover3 + a large circuit + a
+         * malformed one + an int32-overflowing one — a submission that reaches
+         * the broker consumes quota even if the executor later rejects the
+         * circuit) then proves the 6th is refused. */
         .grant_qpu_submit = 1,
-        .qsub_max = 4,
+        .qsub_max = 5,
     };
 
     uint32_t sid = 0;

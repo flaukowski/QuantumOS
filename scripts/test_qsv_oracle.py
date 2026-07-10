@@ -45,6 +45,12 @@ def main():
         ("h_s_h", qc.h_s_h()),
         ("grover3(t=5,2it)", qc.grover(3, 5, 2)),
         ("grover4(t=11,3it)", qc.grover(4, 11, 3)),
+        # ASYMMETRIC circuits — REQUIRED to catch qubit-ordering/endianness bugs
+        # that symmetric Bell/GHZ and Grover's near-uniform tail hide (a big-
+        # endian gateway readout put H(0)-3q's mass at index 4 instead of 1).
+        ("H(0)-3q asym", qc.build(3, [(qc.QC_OP_H, 0, 0)], 0)),
+        ("H(1)-3q asym", qc.build(3, [(qc.QC_OP_H, 1, 0)], 0)),
+        ("H0-X2-3q asym", qc.build(3, [(qc.QC_OP_H, 0, 0), (qc.QC_OP_X, 2, 0)], 0)),
     ]
     ok = True
     for name, circ in cases:
