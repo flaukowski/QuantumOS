@@ -1,0 +1,67 @@
+name: Quantum Stack Phase 3 (GPU / CUDA-Q / real QPU)
+
+# Phase 3 of the quantum stack (epic #150) is credentialed / hardware-dependent,
+# so it is a MANUAL trigger — not an autonomous push/PR gate. GitHub-hosted
+# runners have no GPU and no QPU credentials; a maintainer dispatches the leg
+# they can back with the right runner/secret. The gateway dispatches the SAME
+# opaque circuit wire format to each backend, so these reuse the Phase-2 tests
+# with a different device string.
+on:
+  workflow_dispatch:
+    inputs:
+      backend:
+        description: which Phase-3 backend to exercise
+        type: choice
+        required: true
+        default: cudaq
+        options: [cudaq, gpu-scale, qbraid]
+      machine:
+        description: "qBraid machine id (only for backend=qbraid)"
+        type: string
+        required: false
+
+jobs:
+  cudaq:
+    name: C3 — CUDA-Q cross-oracle (local CPU target, free)
+    if: ${{ inputs.backend == 'cudaq' }}
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    - uses: actions/setup-python@v5
+      with:
+        python-version: '3.12'
+    - name: Install CUDA-Q + PennyLane
+      run: pip install "cudaq==0.15.0" "pennylane==0.45.1" "numpy>=2.0"
+    - name: CUDA-Q vs the exact integer engine (Bell/GHZ)
+      run: python scripts/test_qsv_cudaq.py
+
+  gpu-scale:
+    name: C1 — lightning.gpu (cuQuantum) scale proof
+    if: ${{ inputs.backend == 'gpu-scale' }}
+    # Needs a self-hosted runner with a CC>=7.0 NVIDIA GPU + CUDA. GitHub-hosted
+    # runners have no GPU; label a self-hosted one 'gpu' to use this leg.
+    runs-on: [self-hosted, gpu]
+    steps:
+    - uses: actions/checkout@v4
+    - name: Install lightning.gpu (cuQuantum) + PennyLane
+      run: pip install "pennylane==0.45.1" "pennylane-lightning==0.45.0" pennylane-lightning-gpu custatevec-cu12 "numpy>=2.0"
+    - name: Exact-engine agreement on GPU + 20+ qubit CPU/GPU parity
+      run: |
+        python scripts/test_qsv_oracle.py lightning.gpu
+        python scripts/test_qsv_gpu_scale.py
+
+  qbraid:
+    name: C2 — real QPU via qBraid (credentialed, metered)
+    if: ${{ inputs.backend == 'qbraid' }}
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    - uses: actions/setup-python@v5
+      with:
+        python-version: '3.12'
+    - name: Install qBraid + PennyLane
+      run: pip install qbraid "pennylane==0.45.1"
+    - name: Submit to a real QPU (spends credits) and reconcile the job id
+      env:
+        QBRAID_API_KEY: ${{ secrets.QBRAID_API_KEY }}
+      run: python scripts/qsv_qbraid_submit.py --machine "${{ inputs.machine }}" --confirm

@@ -205,6 +205,17 @@ polled one step per main-loop pass so a slow circuit can never starve the
 watchdog and kill the sole COM2 bridge). The `ci-smoke-qsubmit` gate proves
 Bell and Grover-3q come back over the wire the host never typed,
 cross-checked against the PennyLane gateway, with the qsub quota enforced.
+The gateway dispatches the SAME opaque circuit to any backend by an opaque
+device string (Phase 3, `#150`): `lightning.gpu` (NVIDIA cuQuantum —
+verified locally on a GTX 1650 at 2²² amplitudes, far beyond the native
+12-qubit engine, agreeing with the CPU reference to machine precision);
+`cudaq` (NVIDIA CUDA-Q, a third independent engine, cross-checked against
+the exact integer engine on its free local CPU target); and
+`qbraid:<machine>` for a real QPU (Rigetti/IonQ/IQM/QuEra — credentialed
+and metered, so a maintainer-invoked `workflow_dispatch`, never an
+autonomous gate). The in-OS `AUDIT_QSUBMIT` ledger entry lets an auditor
+reconcile a real-QPU submission's upstream job id against the OS-side
+authority record — who submitted, under what grant and quota.
 
 **The kernel holographic field (epic #95).** `SYS_IMPRINT` stores a
 byte pattern (≤ 64 bytes, with a Q15 importance) into one of the
