@@ -15,10 +15,13 @@
  *   4. DELEGATE — hands a strictly-NARROWED READ-only slice of its region-3 field
  *                 cap to a SOCIETY of AGENT_SUBS sub-agents (agentsub) via
  *                 SYS_CAP_DERIVE, each over its own capability-checked IPC pair;
- *                 every sub-agent recalls with its cap and acks. This is "an
- *                 orchestrator hands a narrowed intent to each of several
- *                 sub-agents" — a one-hop fan-out tree (CAP_GRANT never handed
- *                 over, so no sub can re-delegate).
+ *                 every sub-agent recalls the phrase from its OWN pid-salted
+ *                 noisy probe and acks the DIGEST of what it recalled; the
+ *                 orchestrator requires a matching digest from each distinct
+ *                 delegate (content consensus, deduped by vouched sender pid).
+ *                 This is "an orchestrator hands a narrowed intent to each of
+ *                 several sub-agents" — a one-hop fan-out tree (CAP_GRANT never
+ *                 handed over, so no sub can re-delegate).
  *
  * On all four it prints the single CI merge-gate line
  *   AGENTD: DEMO OK qpu+field+spawn+society
@@ -40,6 +43,36 @@ static const unsigned char AGENT_PHRASE[] = "agentd end to end field phrase";
 static unsigned int get_u32(const unsigned char *p) {
     return (unsigned int)p[0] | ((unsigned int)p[1] << 8) | ((unsigned int)p[2] << 16) |
            ((unsigned int)p[3] << 24);
+}
+
+/* FNV-1a — MUST mirror fnv1a() in agentsub.c: each sub digests the winner it
+ * actually recalled; the orchestrator digests the phrase it imprinted and
+ * requires every ack to match (content consensus, not a bare "proven"). */
+static unsigned int fnv1a(const unsigned char *p, unsigned len) {
+    unsigned int h = 2166136261u;
+    for (unsigned i = 0; i < len; i++) {
+        h = (h ^ p[i]) * 16777619u;
+    }
+    return h;
+}
+
+/* Parse the 8 lowercase-hex digits of a sub's "p<digest>" ack. Malformed input
+ * returns a sentinel that cannot match the phrase digest in practice. */
+static unsigned int hex32(const char *p) {
+    unsigned int v = 0;
+    for (int i = 0; i < 8; i++) {
+        char c = p[i];
+        unsigned int d;
+        if (c >= '0' && c <= '9') {
+            d = (unsigned int)(c - '0');
+        } else if (c >= 'a' && c <= 'f') {
+            d = (unsigned int)(c - 'a') + 10u;
+        } else {
+            return 0xffffffffu;
+        }
+        v = (v << 4) | d;
+    }
+    return v;
 }
 
 /* Submit an opaque circuit and poll it to completion (the qpu_test pattern).
@@ -160,13 +193,13 @@ static int do_spawn(void) {
     return 0;
 }
 
-/* Step 4 — delegate a narrowed READ cap over region 3 to agentsub. */
 /* Step 4 — the SOCIETY: delegate a narrowed READ slice of region 3 to EACH of a
  * society of AGENT_SUBS sub-agents (a one-hop fan-out tree — CAP_GRANT is never
- * handed over, so no sub can re-delegate), then collect every one's "proven" ack.
- * Each sub-agent announced itself with a "ready" whose kernel-vouched sender pid
- * is how we address it; cap_derive requires that IPC-peer relationship (the
- * kernel wired one per sub). */
+ * handed over, so no sub can re-delegate), then collect a digest-bearing ack
+ * from every one and check it for content CONSENSUS. Each sub-agent announced
+ * itself with a "ready" whose kernel-vouched sender pid is how we address it;
+ * cap_derive requires that IPC-peer relationship (the kernel wired one per
+ * sub). */
 static int do_delegate(void) {
     char buf[16];
     long subs[AGENT_SUBS];
@@ -213,20 +246,45 @@ static int do_delegate(void) {
         send_to(subs[i], "go", 2);
     }
 
-    /* Collect every sub-agent's "proven" ack (it recalled with the delegated cap). */
+    /* Collect a digest-bearing "p<hex>" ack from EVERY delegated sub-agent —
+     * deduped by the kernel-vouched sender pid (N acks from one sub are NOT a
+     * society) — and check each digest against our own digest of the phrase:
+     * consensus over the CONTENT each sub actually recalled, not a bare ack. */
+    unsigned int want = fnv1a(AGENT_PHRASE, AGENT_PHRASE_LEN);
+    int proven_from[AGENT_SUBS] = {0};
     int proven = 0;
     for (long spins = 0; spins < 60000000L && proven < AGENT_SUBS; spins++) {
-        if (recv_msg(buf, sizeof(buf)) != 0 && buf[0] == 'p') {
-            proven++;
-        } else {
-            yield();
+        for (unsigned b = 0; b < sizeof(buf); b++) {
+            buf[b] = 0;
         }
+        long s = recv_msg(buf, sizeof(buf));
+        if (s == 0 || buf[0] != 'p') {
+            yield();
+            continue;
+        }
+        int idx = -1;
+        for (int i = 0; i < AGENT_SUBS; i++) {
+            if (subs[i] == s) {
+                idx = i;
+            }
+        }
+        if (idx < 0 || proven_from[idx]) {
+            continue; /* not one of our delegates, or a duplicate — never counts */
+        }
+        unsigned int dig = hex32(buf + 1);
+        if (dig != want) {
+            printf("AGENT BROKEN society digest %08x != %08x from pid=%ld\n", dig, want, s);
+            return 0;
+        }
+        proven_from[idx] = 1;
+        proven++;
     }
     if (proven < AGENT_SUBS) {
         printf("AGENT BROKEN society only %d/%d proven\n", proven, AGENT_SUBS);
         return 0;
     }
-    printf("AGENT: delegated region 3 (READ) to a society of %d sub-agents\n", AGENT_SUBS);
+    printf("AGENT: society consensus %d/%d on region 3 (digest %08x, READ-only delegates)\n",
+           proven, AGENT_SUBS, want);
     return 1;
 }
 
