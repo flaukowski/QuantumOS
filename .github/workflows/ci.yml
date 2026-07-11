@@ -671,6 +671,8 @@ jobs:
       run: make ci-smoke-qsubmit-replyauth
     - name: Attestation by default — the agent surface is attested-fresh (ADR-0019)
       run: make ci-smoke-attested
+    - name: COM2 latency — one-hop round-trip bounded + baseline recorded (ADR-0022)
+      run: make ci-smoke-latency
 
   integration:
     name: Integration Tests

@@ -1,7 +1,15 @@
 # 22. COM2 Round-Trip Latency Is Scheduler-Cadence-Bound
 
 Date: 2026-07-11
-Status: Proposed (root cause measured; a fix is DEFERRED pending a latency gate + perf baseline)
+Status: Proposed (root cause measured; a fix is DEFERRED — **prerequisite 1, the latency gate, now shipped**)
+
+> **Update (2026-07-11).** Prerequisite 1 below — a bounded latency assertion — **shipped** as
+> `ci-smoke-latency` (`scripts/test_qos_latency.py`, via the new `QosVM.ping()` one-hop primitive).
+> It asserts a bounded PING/PONG median (the pure transport + scheduler-cadence floor) and records the
+> STATUS baseline; it is revert-confirmed against the real regression source — bumping
+> `SCHED_QUANTUM_TICKS` reddens it. This gives any future latency-reduction work a proven guard and a
+> recorded baseline (~0.45 s PING / ~0.90 s STATUS on the dev box). Prerequisite 2 (a scheduler perf
+> baseline) and the fix itself remain open.
 
 ## Context
 
@@ -82,5 +90,6 @@ gate would also surface that tail, which the functional gates do not.
 - Anchors: `kernel/include/kernel/scheduler.h:21` (`SCHED_QUANTUM_TICKS 5`),
   `kernel/include/kernel/interrupts.h:95` (`TIMER_DEFAULT_HZ 100`),
   `kernel/src/scheduler.c:132` (quantum early-return), `user/swarm_svc.c` (`poll_com2` loop).
-- No CI gate yet — building one is prerequisite (1) above, and is the first increment of any
-  future latency-reduction epic.
+- Latency gate `ci-smoke-latency` (`scripts/test_qos_latency.py`) — asserts the bounded PING median
+  and records the STATUS baseline; revert-confirmed by a `SCHED_QUANTUM_TICKS` bump. It is prerequisite
+  (1) above, now shipped, and the first increment of any future latency-reduction epic.

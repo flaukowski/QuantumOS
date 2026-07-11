@@ -829,6 +829,30 @@ class QosVM:
                     # stray PONG / late attestation frame / other op: ignore
         raise QosTimeout(f"no DATA reply for op {expect_op}")
 
+    def ping(self, deadline_s=5.0):
+        """Round-trip a FRAME_PING and return the reply latency in SECONDS. The
+        guest echoes it as FRAME_PONG directly in swarm_svc (no downstream IPC
+        hop), so this measures the pure COM2 transport + scheduler-cadence
+        latency — the one-hop floor under every tool call (ADR-0022). Raises
+        QosTimeout if no PONG arrives within deadline_s."""
+        self._ensure_verified()
+        with self._io_lock:
+            self._parser.buf.clear()
+            self._drain_com2()
+            t0 = time.time()
+            self._com2.sendall(frame(FRAME_PING, b"\x50\x49"))  # 'PI'
+            deadline = t0 + deadline_s
+            while time.time() < deadline:
+                chunk = self._recv_com2()
+                if chunk is None:
+                    continue
+                if chunk == b"":
+                    raise QosDead("COM2 closed (VM gone)")
+                for ftype, _payload in self._parser.feed(chunk):
+                    if ftype == FRAME_PONG:
+                        return time.time() - t0
+        raise QosTimeout("no PONG reply")
+
     def admit_key(self, key):
         """Admit the swarm-plane group session key (ADR-0019) to this VM over the
         attested COM2 channel: swarm_svc forwards it to fieldsyncd so the

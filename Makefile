@@ -2122,6 +2122,14 @@ ci-smoke-attested: kernel
 	@echo "=== QuantumOS attestation-by-default Test (ADR-0019 Extension) ==="
 	QOS_KERNEL=$(BUILD_DIR)/kernel.elf32 python3 scripts/test_qos_attested.py
 
+# COM2 round-trip latency gate (ADR-0022 prereq 1): asserts a bounded one-hop
+# PING/PONG median (the transport + scheduler-cadence floor under every tool
+# call) and records the STATUS baseline. Gross-regression guard, not a tight
+# perf tracker. Revert-confirmed: bumping SCHED_QUANTUM_TICKS reddens it.
+ci-smoke-latency: kernel
+	@echo "=== QuantumOS COM2 latency Test (ADR-0022) ==="
+	QOS_KERNEL=$(BUILD_DIR)/kernel.elf32 python3 scripts/test_qos_latency.py
+
 # Authenticated FSYN (ADR-0019 increment B-frame-auth): boots two 2-VM societies
 # and proves the per-frame HMAC gates coupling — same key couples, different
 # keys REJECT each other and do not synchronize. Revert-confirmed (neutering the
