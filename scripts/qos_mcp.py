@@ -17,10 +17,13 @@ stdlib-only so the integration CI (no mcp package) can test the bridge.
 
 HONESTY: `identity()` in every result documents that `verified` means the
 boot attestation's frames + Lamport signature + qseed are consistent — NOT
-that the VM is live-now (a captured attestation replays) and NOT that a
-STATUS/RECALL reply is individually authenticated (DATA traffic is unsigned).
-Trust equals control of the VM's serial channel, the same class as holding
-the console. Do not present tool results as cryptographically attested data.
+that the VM is live-now (a captured attestation replays). Individual DATA
+replies are unsigned by default, EXCEPT when a session key is admitted
+(admit_key): the STATUS reply is then nonce+HMAC authenticated per request and
+verified fresh (QosVM.status_authenticated, ADR-0019 Extension) — RECALL/QSUBMIT
+remain unsigned (deferred). Absent that, trust equals control of the VM's serial
+channel, the same class as holding the console — do not present an unauthenticated
+tool result as cryptographically attested data.
 
 Run:  python3 scripts/qos_mcp.py       (stdio transport)
 Dep:  mcp>=1.0  (Python >=3.10)

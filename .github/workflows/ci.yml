@@ -665,6 +665,8 @@ jobs:
       run: make ci-smoke-fieldsync
     - name: Swarm-plane key channel — host admits a session key to fieldsyncd (ADR-0019)
       run: make ci-smoke-keyadmit
+    - name: COM2 reply authentication — tool replies are nonce+HMAC attested (ADR-0019)
+      run: make ci-smoke-replyauth
 
   integration:
     name: Integration Tests

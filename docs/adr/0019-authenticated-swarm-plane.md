@@ -94,6 +94,18 @@ host `hmac.new(key, msg, sha256)`. Gated by the `HMAC256: self-test OK (RFC4231 
 `ci-smoke` (revert-confirmed: a corrupted vector prints `SELF-TEST FAILED` and the gate reddens).
 Increment B (below) wires it onto the frame.
 
+**Extension shipped 2026-07-11 — COM2 reply authentication (STATUS).** The same HMAC + session key
+now attest the COM2 DATA *replies*, not just the FSYN wire: `status_authenticated()` sends a fresh
+16-byte host nonce, and swarm_svc (which now also STORES the admitted key, not just forwards it)
+echoes the nonce and appends `HMAC(key, op||nonce||body)` to the STATUS reply. The host verifies
+the echo (freshness — a replayed genuine reply carries an old nonce whose tag is still valid, so
+only the echo betrays it) then the tag (unforgeability), failing CLOSED (a keyed caller rejects a
+stripped-tag reply). Fail-OPEN when no key / no nonce, so the unkeyed `ci-smoke-mcp` path is
+untouched. Gated by `ci-smoke-replyauth` (positive + replay-reject + forgery-reject + fail-open,
+revert-confirmed). This turns "verified ≠ live" (ADR-0015) into an attested-fresh tool result for
+STATUS. DEFERRED: RECALL (same synchronous shape, trivial follow-up) and QSUBMIT (needs the nonce
+threaded through the async `qsub_jid` deferred-reply state).
+
 **Increment B scope refinement (2026-07-11):** the key cap is **boot-minted** `swarm_svc→fieldsyncd`
 in `citizens.c` (the existing `agentd→fieldsyncd` precedent, `cap_create(swarm_pid,
 CAP_RESOURCE_IPC, fs_pid, CAP_WRITE, ...)` — no kernel change), rather than the generic

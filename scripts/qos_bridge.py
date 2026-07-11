@@ -28,6 +28,7 @@ repeat it.
 import atexit
 import ctypes
 import hashlib
+import hmac
 import json
 import os
 import platform
@@ -543,6 +544,7 @@ class QosVM:
         self._log = bytearray()
         self._log_lock = threading.Lock()
         self._io_lock = threading.RLock()
+        self._session_key = None  # set by admit_key(); enables status_authenticated()
         self._drain = None
         self._atexit_armed = False
 
@@ -813,6 +815,50 @@ class QosVM:
         req = frame(FRAME_DATA, bytes([SWARM_OP_KEY]) + key)
         with self._io_lock:
             self._com2.sendall(req)
+        # Retain the key so status_authenticated() can verify reply tags. The
+        # guest (swarm_svc) keeps the same 32 bytes for the same purpose.
+        self._session_key = key
+
+    def status_authenticated(self, deadline_s=5.0):
+        """STATUS over COM2 with a per-request nonce + HMAC reply tag (ADR-0019
+        Extension): unlike status(), this proves the reply is FRESH (nonce echo)
+        and UNFORGED (tag), not merely that the boot attested. Requires a key
+        admitted via admit_key(). Returns {r, live, authenticated: True,
+        identity}. Raises QosRefused on a replayed (nonce mismatch) or forged
+        (bad MAC) reply, and fails CLOSED — a keyed caller never accepts an
+        unauthenticated (stripped-tag) reply."""
+        self._ensure_verified()
+        if self._session_key is None:
+            raise QosError("no session key admitted — call admit_key() first")
+        nonce = os.urandom(16)
+        payload = self._transact(frame(FRAME_DATA, bytes([SWARM_OP_STATUS]) + nonce),
+                                 SWARM_OP_STATUS, time.time() + deadline_s)
+        return self._verify_status_reply(payload, nonce)
+
+    def _verify_status_reply(self, payload, expect_nonce):
+        """Verify an authenticated STATUS reply against the nonce we sent.
+        Reply layout: op(1) | r_q16(4) | live(1) | nonce_echo(16) | tag(32) = 54.
+        Fails CLOSED (a keyed caller never accepts a stripped-tag reply)."""
+        if self._session_key is None:
+            raise QosError("no session key admitted")
+        if len(payload) < 6 + 16 + 32:
+            raise QosRefused(
+                f"STATUS reply too short to authenticate ({len(payload)} < 54) — "
+                "tag stripped or unkeyed guest")
+        r_q16 = int.from_bytes(payload[1:5], "little")
+        live = payload[5]
+        echo = bytes(payload[6:22])
+        tag = bytes(payload[22:54])
+        # Freshness FIRST: a replayed genuine reply carries an OLD nonce whose
+        # tag is still HMAC-valid, so only echo != the nonce we sent rejects it.
+        if echo != bytes(expect_nonce):
+            raise QosRefused("nonce echo mismatch — replayed or stale STATUS reply")
+        macin = bytes([SWARM_OP_STATUS]) + bytes(expect_nonce) + bytes(payload[1:6])
+        want = hmac.new(self._session_key, macin, hashlib.sha256).digest()
+        if not hmac.compare_digest(want, tag):
+            raise QosRefused("reply MAC failed — forged STATUS reply")
+        return {"r": r_q16 / 65536.0, "live": live, "authenticated": True,
+                "identity": self.identity()}
 
     def status(self, deadline_s=5.0):
         """ghostd field STATUS over COM2: {r, live}. (This is the ghostd

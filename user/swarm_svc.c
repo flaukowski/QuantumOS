@@ -35,6 +35,15 @@ static uint8_t master_seed[LAMPORT_SEED_LEN];
 static uint8_t framebuf[SWARM_HDR_LEN + SWARM_MAX_PAYLOAD + 1];
 static long ghostd_pid = 0;
 
+/* The host-admitted swarm-plane session key (ADR-0019). swarm_svc both FORWARDS
+ * it to fieldsyncd (the field-coupling wire) and KEEPS a copy here to
+ * authenticate COM2 DATA replies (the reply-auth Extension): a keyed STATUS
+ * reply carries a nonce echo + HMAC so an agent's tool result is provably fresh,
+ * not a replay. The same 32 bytes fieldsyncd stores (one SWARM_OP_KEY channel,
+ * two consumers). In memory: a rebirth loses it; the host re-admits. */
+static uint8_t session_key[32];
+static int have_key = 0;
+
 /* COM2 receive accumulator for the inbound frame parser. */
 static uint8_t rxbuf[SWARM_HDR_LEN + SWARM_MAX_PAYLOAD + 1];
 static uint32_t rxlen = 0;
@@ -285,15 +294,40 @@ static void handle_data(const uint8_t *payload, uint32_t len) {
         req.op = GHOST_STATUS;
         if (!ghost_query(&req, &rep))
             return;
-        /* reply: op, r_q16 (LE u32), live (u8) */
-        uint8_t out[6];
+        /* reply body (leading, so legacy 6-byte parsers still work): op,
+         * r_q16 (LE u32), live (u8). */
+        uint8_t out[6 + 16 + 32]; /* body(6) + nonce echo(16) + HMAC tag(32) */
         out[0] = SWARM_OP_STATUS;
         out[1] = (uint8_t)(rep.r_q16);
         out[2] = (uint8_t)(rep.r_q16 >> 8);
         out[3] = (uint8_t)(rep.r_q16 >> 16);
         out[4] = (uint8_t)(rep.r_q16 >> 24);
         out[5] = rep.live;
-        emit_frame(FRAME_DATA, out, sizeof(out));
+        /* Authenticated STATUS (ADR-0019 Extension): when we hold a key AND the
+         * request carried a 16-byte host nonce, echo the nonce and append
+         * HMAC(key, op||nonce||body) so the host can prove the reply is FRESH
+         * (nonce echo) and UNFORGED (tag). No nonce / no key -> the legacy
+         * 6-byte reply, so an unkeyed host (ci-smoke-mcp) is unaffected. */
+        if (have_key && len >= 1 + 16) {
+            for (int i = 0; i < 16; i++) {
+                out[6 + i] = payload[1 + i]; /* nonce echo */
+            }
+            /* MAC input: op(1) || nonce(16) || body(r_q16(4)+live(1)) = 22 bytes. */
+            uint8_t macin[1 + 16 + 5];
+            macin[0] = SWARM_OP_STATUS;
+            for (int i = 0; i < 16; i++) {
+                macin[1 + i] = payload[1 + i];
+            }
+            macin[17] = out[1];
+            macin[18] = out[2];
+            macin[19] = out[3];
+            macin[20] = out[4];
+            macin[21] = out[5];
+            hmac_sha256(session_key, 32, macin, sizeof(macin), &out[6 + 16]);
+            emit_frame(FRAME_DATA, out, 6 + 16 + 32);
+        } else {
+            emit_frame(FRAME_DATA, out, 6);
+        }
     } else if (op == SWARM_OP_RECALL) {
         if (len < 1 + GHOST_PW * 4)
             return;
@@ -353,6 +387,13 @@ static void handle_data(const uint8_t *payload, uint32_t len) {
         if (len < 1 + 32) {
             return;
         }
+        /* Store the key for reply-auth FIRST — independent of the fieldsyncd
+         * forward below, so a lone MCP VM (or one whose fieldsyncd hasn't yet
+         * appeared in SYSINFO_PS) can still authenticate its COM2 replies. */
+        for (int i = 0; i < 32; i++) {
+            session_key[i] = payload[1 + i];
+        }
+        have_key = 1;
         static char ps[2048];
         long pn = sysinfo(SYSINFO_PS, ps, sizeof(ps) - 1);
         ps[(pn > 0) ? pn : 0] = '\0';
