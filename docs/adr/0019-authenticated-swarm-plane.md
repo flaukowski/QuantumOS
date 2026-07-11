@@ -75,6 +75,14 @@ negotiable — the adversarial panel killed the naive version on each:
 
 ## Implementation plan (2026-07-11, panel-reconciled)
 
+**Increment A shipped** (the crypto primitive, verified in isolation before the wiring):
+`hmac_sha256` + a constant-time `hmac_sha256_equal` in `user/sha256.h`, self-tested at boot in
+`swarm_svc` against the RFC 4231 test-case-2 vector so the guest MAC agrees byte-for-byte with the
+host `hmac.new(key, msg, sha256)`. Gated by the `HMAC256: self-test OK (RFC4231 tc2)` marker in
+`ci-smoke` (revert-confirmed: a corrupted vector prints `SELF-TEST FAILED` and the gate reddens).
+Increment B (below) wires it onto the frame.
+
+
 A 3-lens implementation-design panel resolved the wiring against the real code. Key finding:
 `fieldsyncd.c`'s `peer_pk[]` is a **packed IP** array (a review trap — "pk" = packed, not public
 key), and there is **zero** pre-existing key infrastructure. It was renamed `peer_ip` and the

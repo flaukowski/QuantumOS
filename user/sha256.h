@@ -143,4 +143,59 @@ static inline void sha256(const uint8_t *data, uint32_t len, uint8_t out[32]) {
     sha256_final(&c, out);
 }
 
+/* HMAC-SHA256 (RFC 2104), integer-only. Used to authenticate the swarm-plane
+ * field-coupling wire (ADR-0019): a host-admitted session key + this MAC over
+ * each frame closes the source-IP-only admission hole. NOT a bare
+ * sha256(key||msg) — that is length-extension-weak; the standard construction
+ * is HMAC(K,m) = H((K'^opad) || H((K'^ipad) || m)) with K' the block-padded key.
+ * The host verifies byte-identically with Python hmac.new(key, msg, sha256). */
+static inline void hmac_sha256(const uint8_t *key, uint32_t key_len, const uint8_t *msg,
+                               uint32_t msg_len, uint8_t out[32]) {
+    uint8_t k[64];
+    uint8_t pad[64];
+    uint8_t inner[32];
+    sha256_ctx c;
+    uint32_t i;
+
+    /* K' = key zero-padded to the 64-byte block; if longer, hash it first. */
+    for (i = 0; i < 64; i++) {
+        k[i] = 0;
+    }
+    if (key_len > 64) {
+        sha256(key, key_len, k); /* k[0..31]=H(key), k[32..63] stay zero */
+    } else {
+        for (i = 0; i < key_len; i++) {
+            k[i] = key[i];
+        }
+    }
+
+    /* inner = H((K' ^ ipad) || msg) */
+    for (i = 0; i < 64; i++) {
+        pad[i] = (uint8_t)(k[i] ^ 0x36);
+    }
+    sha256_init(&c);
+    sha256_update(&c, pad, 64);
+    sha256_update(&c, msg, msg_len);
+    sha256_final(&c, inner);
+
+    /* out = H((K' ^ opad) || inner) */
+    for (i = 0; i < 64; i++) {
+        pad[i] = (uint8_t)(k[i] ^ 0x5c);
+    }
+    sha256_init(&c);
+    sha256_update(&c, pad, 64);
+    sha256_update(&c, inner, 32);
+    sha256_final(&c, out);
+}
+
+/* Constant-time 32-byte tag compare (no early-out timing leak). Returns 1 if
+ * equal. Use for MAC verification, never memcmp. */
+static inline int hmac_sha256_equal(const uint8_t a[32], const uint8_t b[32]) {
+    uint8_t diff = 0;
+    for (int i = 0; i < 32; i++) {
+        diff |= (uint8_t)(a[i] ^ b[i]);
+    }
+    return diff == 0;
+}
+
 #endif /* SHA256_H */

@@ -496,6 +496,19 @@ ci-smoke: kernel
 		exit 1; \
 	fi
 	@echo "SUCCESS: boot-validation gate passed (multiboot2 magic refused)"
+	@# HMAC-SHA256 gate (ADR-0019): swarm_svc self-tests the integer HMAC against
+	@# RFC 4231 tc2 at boot so the swarm-plane frame MAC agrees byte-for-byte with
+	@# the host verifier. A broken HMAC prints "HMAC256: SELF-TEST FAILED" instead
+	@# of the OK marker (revert-confirmed), so this presence check reddens.
+	@if ! grep -q "HMAC256: self-test OK (RFC4231 tc2)" /tmp/qemu-boot.log 2>/dev/null; then \
+		echo "ERROR: HMAC-SHA256 self-test gate missing/failed (HMAC256)"; \
+		echo "Boot log:"; \
+		cat /tmp/qemu-boot.log 2>/dev/null || true; \
+		echo ""; \
+		echo "=== Smoke Test FAILED ==="; \
+		exit 1; \
+	fi
+	@echo "SUCCESS: HMAC-SHA256 gate passed (RFC 4231 tc2 self-test OK)"
 	@# Capability high-water-mark gate (hot-path optimization): the per-gated-
 	@# syscall cap lookups scan only [0, cap_hwm) not all 1024 slots. The self-test
 	@# proves the hwm covers every allocated slot AND that the lookup honors the
