@@ -667,6 +667,8 @@ jobs:
       run: make ci-smoke-keyadmit
     - name: COM2 reply authentication — tool replies are nonce+HMAC attested (ADR-0019)
       run: make ci-smoke-replyauth
+    - name: COM2 QSUBMIT reply authentication — job results are nonce+HMAC attested (ADR-0019)
+      run: make ci-smoke-qsubmit-replyauth
 
   integration:
     name: Integration Tests

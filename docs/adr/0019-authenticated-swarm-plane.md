@@ -106,6 +106,38 @@ revert-confirmed). This turns "verified ≠ live" (ADR-0015) into an attested-fr
 STATUS. DEFERRED: RECALL (same synchronous shape, trivial follow-up) and QSUBMIT (needs the nonce
 threaded through the async `qsub_jid` deferred-reply state).
 
+**Extension shipped 2026-07-11 — COM2 reply authentication (QSUBMIT).** The async, LIVE path:
+the host submits opaque circuits to the in-OS QPU broker over COM2 and consumes the result, so an
+unauthenticated reply was a forgeable *job result*. Unlike STATUS (fixed-length body → an optional
+nonce), the QSUBMIT circuit is VARIABLE-length, so the nonce cannot be optionally detected — the
+design is **enforce-when-keyed**: a keyed guest always expects `op|nonce(16)|circuit` and a keyed
+host's `qsubmit()` (the SOLE COM2 QSUBMIT emitter — `qpu_run`/the MCP tool delegate to it) always
+prepends the nonce; unkeyed keeps the legacy `op|circuit` wire byte-for-byte. Because the reply is
+deferred to `qsub_poll_step`, the request's nonce is STASHED atomically with `qsub_jid` at accept
+and echoed when the job completes; the emit decision keys off the accept-time `qsub_authed` snapshot
+(not live `have_key`, which a mid-flight key admit could flip), and the stash is scrubbed on
+completion. All five reply sites are authenticated — the three synchronous errors (malformed / busy
+/ broker-EPERM) use the in-hand nonce, the async DONE and poll-error use the stashed one — via one
+`emit_qsubmit_reply(body, len, nonce)` helper whose MAC preimage `op||nonce||body[1..]` is identical
+in shape to STATUS. The host `_verify_qsubmit_reply` fails CLOSED on a `<50`-byte (stripped) reply
+and on `body_len ∉ {2,22}`, checks the echo (freshness) then the tag (unforgeability). A too-short
+keyed request (`len<17`, no extractable nonce) is dropped silently — no OOB read, no plaintext
+downgrade oracle; the host fail-closes on the timeout. COM2 RX is polled in swarm_svc's single
+main loop (no ISR), so the stash needs no interrupt guard — a future move to interrupt-driven RX
+must re-trigger this review. Gated by `ci-smoke-qsubmit-replyauth` (positive DONE + synchronous-error
++ replay-reject + forgery-reject + fail-open, revert-confirmed: forcing the guest emit plain reddens
+the DONE leg on the host's `<50` floor). An adversarial design panel caught four ship-blockers before
+code (host MAC omitting the nonce → dead-on-arrival + echo-rewrite replay; the `len<17` underflow;
+the missing host length floor; a would-be-vacuous gate). This attests the live circuit-submit path,
+completing reply-auth for both COM2 ops with a real host consumer.
+
+**RECALL reply-auth NOT built — no consumer (2026-07-11).** `SWARM_OP_RECALL` is defined and the
+guest handles it, but NO caller emits it: the host recalls via qsh (`recall …`), not COM2, and no
+peer/society issues it (field coupling rides FSYN, not COM2 RECALL). Authenticating a reply nothing
+requests would be speculative crypto for a dead path — deferred until a COM2 RECALL consumer exists,
+at which point it is the trivial synchronous STATUS mirror. This corrects the earlier "trivial
+follow-up" note above: the triviality was never in doubt; the absence of a consumer is the reason.
+
 **Increment B scope refinement (2026-07-11):** the key cap is **boot-minted** `swarm_svc→fieldsyncd`
 in `citizens.c` (the existing `agentd→fieldsyncd` precedent, `cap_create(swarm_pid,
 CAP_RESOURCE_IPC, fs_pid, CAP_WRITE, ...)` — no kernel change), rather than the generic
