@@ -61,9 +61,11 @@ it) and refuses argv that could be misread as flags.
 - The quantum broker is now on the surface: `qos_qpu_submit` (the 22nd tool) lets an
   agent run a capability-gated, quota-metered, ledgered circuit (ADR-0013) — this gap
   is closed.
-- Documented drift: `qos_memory_import`'s docstring claims strength is not carried
-  into slot energy, but the bridge maps similarity → `--energy` and CI asserts it
-  (scripts/qos_mcp.py:211-212 vs qos_bridge.py:1161-1177). A pre-freeze fix (ADR-0020).
+- Fixed (pre-freeze, ADR-0020): the `qos_memory_import` docstring now correctly states
+  that each memory's Kannaka similarity IS carried into its slot energy (mapped to
+  `imprint --energy`, reported as `energy_pct`), matching the bridge and CI; and the
+  society tools use a dedicated `_society_err` instead of borrowing the single-VM
+  `_vm.identity()` (which misattributed a society failure to an unrelated VM).
 - The Kannaka bridge default binary path is Windows-specific
   (scripts/qos_bridge.py:435-437) — portable via env var but a poor default.
 - Verified ≠ liveness: a replayed COM2 DATA reply is not caught by the boot
