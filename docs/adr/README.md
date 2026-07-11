@@ -41,6 +41,7 @@ SMP; defer UEFI, a libagent extraction, and a block filesystem — are recorded 
 | [0019](0019-authenticated-swarm-plane.md) | Proposed | Authenticate the swarm plane |
 | [0020](0020-v1-contract-freeze.md) | Proposed | Freeze the v1 agent-surface contracts |
 | [0021](0021-honest-memory-1gb.md) | Proposed | Honest memory to the 1 GB identity window |
+| [0022](0022-com2-latency-scheduler-bound.md) | Proposed | COM2 round-trip latency is scheduler-cadence-bound |
 
 ## Sequencing of the next phases
 
