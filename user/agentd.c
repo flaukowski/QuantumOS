@@ -241,7 +241,11 @@ static int do_delegate(void) {
         return 0;
     }
 
-    /* Delegate to each sub-agent, then release it with an ADDRESSED "go". */
+    /* Delegate to each specialist — TWO narrowed slices (epic #177): the
+     * shared region 3 READ-only (no WRITE, no GRANT), and its PRIVATE
+     * workspace region 4+i READ|WRITE (still no GRANT — one-hop tree). Both
+     * derives ride the spawn-minted IPC pair (the peer requirement). Only
+     * then release it with an ADDRESSED "g<digit>" naming its workspace. */
     for (int i = 0; i < AGENT_SUBS; i++) {
         cap_derive_req_t req;
         for (unsigned b = 0; b < sizeof(req); b++) {
@@ -257,7 +261,24 @@ static int do_delegate(void) {
             printf("AGENT BROKEN cap_derive[%d]=%ld\n", i, d);
             return 0;
         }
-        send_to(subs[i], "go", 2);
+        for (unsigned b = 0; b < sizeof(req); b++) {
+            ((unsigned char *)&req)[b] = 0;
+        }
+        req.resource_type = CAP_RESOURCE_FIELD;
+        req.resource_id = 4u + (unsigned)i;     /* the specialist's own workspace */
+        req.permissions = CAP_READ | CAP_WRITE; /* it PUBLISHES here; still no GRANT */
+        req.target_pid = (unsigned)subs[i];
+        req.expiration = 0;
+        d = cap_derive_(&req);
+        if (d != 0) {
+            printf("AGENT BROKEN workspace cap_derive[%d]=%ld\n", i, d);
+            return 0;
+        }
+        char go[3];
+        go[0] = 'g';
+        go[1] = (char)('4' + i);
+        go[2] = 0;
+        send_to(subs[i], go, 2);
     }
 
     /* Collect a digest-bearing "p<hex>" ack from EVERY delegated sub-agent —
@@ -299,6 +320,55 @@ static int do_delegate(void) {
     }
     printf("AGENT: society consensus %d/%d on region 3 (digest %08x, READ-only delegates)\n",
            proven, AGENT_SUBS, want);
+
+    /* DIVISION OF LABOR verification (epic #177) — INSIDE do_delegate so the
+     * DEMO OK line stays a conjunction over EVERY step. For each workspace:
+     * (a) field_info must show EXACTLY one live slot (the region was scrubbed
+     * at grant and the specialist imprinted once — live==1 is what makes the
+     * recall below meaningful, since a 1-slot recall always returns that
+     * slot: the byte compare plus this count are the load-bearing checks);
+     * (b) a noisy recall must return the EXACT result this orchestrator
+     * recomputes independently from the shared phrase + workspace digit. */
+    for (int i = 0; i < AGENT_SUBS; i++) {
+        unsigned ws = 4u + (unsigned)i;
+        field_info_out_t fi;
+        for (unsigned b = 0; b < sizeof(fi); b++) {
+            ((unsigned char *)&fi)[b] = 0;
+        }
+        if (field_info_(ws, &fi) != 0 || fi.live != 1) {
+            printf("AGENT BROKEN division region %u live=%u (want 1)\n", ws, fi.live);
+            return 0;
+        }
+        unsigned int rd = fnv1a(AGENT_PHRASE, AGENT_PHRASE_LEN);
+        rd = (rd ^ (unsigned int)('0' + ws)) * 16777619u; /* mirrors agentsub */
+        char expect[12];
+        snprintf(expect, sizeof(expect), "w%08x", rd);
+        field_recall_req_t rreq;
+        field_recall_out_t rout;
+        for (unsigned b = 0; b < sizeof(rreq); b++) {
+            ((unsigned char *)&rreq)[b] = 0;
+        }
+        rreq.region = ws;
+        rreq.len = 9;
+        rreq.k = 1;
+        for (unsigned n = 0; n < 9; n++) {
+            rreq.probe[n] = (unsigned char)expect[n];
+        }
+        rreq.probe[2] ^= 0x01; /* noisy probe — two corrupted hex positions */
+        rreq.probe[6] ^= 0x01;
+        if (recall_(&rreq, &rout) != 0 || rout.winner_len != 9) {
+            printf("AGENT BROKEN division recall region %u len=%u\n", ws, rout.winner_len);
+            return 0;
+        }
+        for (unsigned n = 0; n < 9; n++) {
+            if (rout.winner[n] != (unsigned char)expect[n]) {
+                printf("AGENT BROKEN division region %u content mismatch\n", ws);
+                return 0;
+            }
+        }
+    }
+    printf("AGENT: division of labor %d/%d - every specialist published in its own region\n",
+           AGENT_SUBS, AGENT_SUBS);
     return 1;
 }
 

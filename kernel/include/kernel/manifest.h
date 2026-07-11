@@ -45,10 +45,12 @@
 
 #include <kernel/types.h>
 
-/* Intent rows per process. 9 grant flags exist, but grant_qpu_submit and
- * grant_qpu_execute are mutually exclusive (a QPU cap is never both WRITE and
- * EXECUTE), so any single service maps to at most 8 rows. start_slot guards
- * each append against this bound regardless. */
+/* Intent rows per process. Since epic #177 a field_region_span makes the row
+ * count DEF-DEPENDENT (one row per region in the span), so the old "at most
+ * 8 rows" proof no longer holds by enumeration: start_slot now guards the
+ * span'd field appends AND the QPU appends against this bound, dropping
+ * excess rows fail-closed (boot_log). Defs combining a span with many grants
+ * must budget rows; agentd (the only span user) sits at 6/8. */
 #define MANIFEST_MAX_ENTRIES 8
 
 /* One-shot text dump cap (SYS_MANIFEST). Sized for ~27 fully-loaded bound

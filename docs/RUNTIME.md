@@ -398,6 +398,36 @@ acks are matched against it, and `SYS_CAP_DERIVE`'s peer requirement is
 satisfied by a channel the orchestrator itself created — no kernel
 hand-wiring anywhere in the story.
 
+The society practices **division of labor** (epic #177): field regions 4–6
+are the three specialists' PRIVATE workspaces (`FIELD_REGION_COUNT` is 8; 7
+is spare). agentd holds a **`field_region_span`** grant — a service
+definition may now grant a REGION RANGE `[field_region, field_region+span)`,
+each region getting its own cap + manifest row + scrub-at-mint
+(`field_inherit` consulted per-region); `start_slot` refuses an
+out-of-bounds span whole and drops manifest rows fail-closed past
+`MANIFEST_MAX_ENTRIES` (a span makes the row count def-dependent). Per
+specialist, agentd derives TWO narrowed slices over the spawn-minted
+channel: shared region 3 READ-only, and workspace 4+i READ|WRITE (never
+CAP_GRANT). The `"g<digit>"` go message names the workspace. Each
+specialist recalls the shared phrase from its own noisy probe, proves the
+shared slice still refuses writes (exactly EPERM), **publishes a distinct
+recomputable result** (`w<8-hex FNV-1a(phrase‖digit)>`) in its workspace,
+proves the NEXT sibling workspace (4→5→6→4) refuses its write (exactly
+EPERM, sibling asserted before probing), and acks its consensus digest.
+The orchestrator then verifies each workspace holds EXACTLY one live slot
+(`SYS_FIELD_INFO`) and recalls the exact recomputed result — inside the
+same step, so `AGENTD: DEMO OK` stays a conjunction over every proof; the
+`AGENT: division of labor 3/3` line is ci-smoke-gated.
+
+On disk, the audit-ledger blob home is **frozen** at its legacy absolute
+position (`AUDIT_HOME_TOP_OFFSET` = 27 sectors from the top,
+static-asserted) and the field blob now lives BELOW it inside
+`FIELD_HOME_RESERVE_SECTORS` (16, static-asserted ≥ `FIELD_BLOB_SECTORS`):
+growing the field geometry (as epic #177's 4→8 region bump did) can never
+again relocate the format-unchanged authority ledger's home — existing
+disks keep their durable ledger across the upgrade, and only the field
+section honestly cold-starts at the superblock geometry guard.
+
 `user/quantumd.c` is the essence of `kannaka-quantum`, and — unlike the two
 above — a **kernel-embedded service**, not a `/bin` program. `SYS_QRAND` and
 `SYS_QSEED` are capability-gated (a capless `/bin` caller gets EPERM by

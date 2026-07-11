@@ -311,42 +311,58 @@ static svc_result_t start_slot(service_slot_t *slot) {
             boot_log(slot->info.name);
         }
     }
+    /* Normalized field span (epic #177): 0/1 = the classic single region, so
+     * every zero-initialized existing def keeps its exact behavior. The SAME
+     * normalized range drives the cap-mint/scrub loop here AND the manifest
+     * rows below — intent and authority must never diverge. */
+    uint32_t field_span = slot->def.field_region_span ? slot->def.field_region_span : 1u;
     if (slot->def.grant_field) {
-        if (slot->def.field_region >= FIELD_REGION_COUNT) {
-            boot_log("service: field region out of range — cap NOT granted");
+        if ((uint32_t)slot->def.field_region + field_span > FIELD_REGION_COUNT) {
+            /* Fail the WHOLE grant closed (no caps, no rows): cap_create never
+             * validates FIELD resource ids and field_region_scrub silently
+             * no-ops out of range, so a partial span would burn cap slots on
+             * nonexistent regions with no visible symptom. */
+            boot_log("service: field region span out of range — caps NOT granted");
             boot_log(slot->info.name);
+            field_span = 0; /* the manifest loop below appends no field rows */
         } else {
-            /* Scrub BEFORE minting: a reborn or successor service must
-             * never inherit the region's previous contents (epic #95).
-             * ONE exception (epic #96): a service that opted in via
-             * field_inherit may claim DISK-restored content at the first
-             * grant of a boot — the inherit mark is consumed only after
-             * the cap actually minted (a failed mint leaves it for the
-             * retry), and every later grant scrubs as before. */
-            int inherit =
-                slot->def.field_inherit && field_region_inherit_peek(slot->def.field_region);
-            if (!inherit) {
-                field_region_scrub(slot->def.field_region);
-            }
-            uint32_t fldcap = CAP_ID_INVALID;
-            /* A delegable field cap also carries CAP_GRANT so this citizen may
-             * cap_derive a narrowed slice of the region to a sub-agent (epic
-             * #137). Only the delegator sets grant_field_delegable. */
-            uint32_t fldperms = CAP_READ | CAP_WRITE;
-            if (slot->def.grant_field_delegable) {
-                fldperms |= CAP_GRANT;
-            }
-            if (cap_create(pid, CAP_RESOURCE_FIELD, slot->def.field_region, fldperms, 0, &fldcap) !=
-                CAP_SUCCESS) {
-                boot_log("service: field cap grant failed");
-                boot_log(slot->info.name);
-            } else if (inherit) {
-                field_region_inherit_consume(slot->def.field_region);
-                /* The region digit keeps the audit line unambiguous;
-                 * only single-digit region counts exist. */
-                char iline[64] = "service: field region 0 inherited from disk (scrub skipped)";
-                iline[22] = (char)('0' + slot->def.field_region);
-                boot_log(iline);
+            for (uint32_t r = slot->def.field_region; r < slot->def.field_region + field_span;
+                 r++) {
+                /* Scrub BEFORE minting — for EVERY region in the span: a
+                 * reborn or successor service must never inherit any of its
+                 * regions' previous contents (epic #95). ONE exception (epic
+                 * #96): a service that opted in via field_inherit may claim
+                 * DISK-restored content at the first grant of a boot,
+                 * consulted and consumed PER-REGION — the inherit mark is
+                 * consumed only after the cap actually minted (a failed mint
+                 * leaves it for the retry); every later grant scrubs. */
+                int inherit = slot->def.field_inherit && field_region_inherit_peek(r);
+                if (!inherit) {
+                    field_region_scrub(r);
+                }
+                uint32_t fldcap = CAP_ID_INVALID;
+                /* A delegable field cap also carries CAP_GRANT so this citizen
+                 * may cap_derive a narrowed slice of the region to a sub-agent
+                 * (epic #137). Only the delegator sets grant_field_delegable —
+                 * one auditable delegator, now over its whole span. */
+                uint32_t fldperms = CAP_READ | CAP_WRITE;
+                if (slot->def.grant_field_delegable) {
+                    fldperms |= CAP_GRANT;
+                }
+                if (cap_create(pid, CAP_RESOURCE_FIELD, r, fldperms, 0, &fldcap) != CAP_SUCCESS) {
+                    /* Attributable mid-span failure: name the region. */
+                    char fline[48] = "service: field cap grant failed (region 0)";
+                    fline[41] = (char)('0' + r);
+                    boot_log(fline);
+                    boot_log(slot->info.name);
+                } else if (inherit) {
+                    field_region_inherit_consume(r);
+                    /* The region digit keeps the audit line unambiguous;
+                     * only single-digit region counts exist. */
+                    char iline[64] = "service: field region 0 inherited from disk (scrub skipped)";
+                    iline[22] = (char)('0' + r);
+                    boot_log(iline);
+                }
             }
         }
     }
@@ -400,12 +416,26 @@ static svc_result_t start_slot(service_slot_t *slot) {
             man.entries[man.entry_count].permissions = CAP_DEVICE | CAP_READ;
             man.entry_count++;
         }
-        if (slot->def.grant_field && slot->def.field_region < FIELD_REGION_COUNT) {
-            man.entries[man.entry_count].resource_type = CAP_RESOURCE_FIELD;
-            man.entries[man.entry_count].resource_id = slot->def.field_region;
-            man.entries[man.entry_count].permissions =
-                CAP_READ | CAP_WRITE | (slot->def.grant_field_delegable ? CAP_GRANT : 0);
-            man.entry_count++;
+        /* Field rows: one per region in the SAME normalized span the cap
+         * loop minted (field_span is 0 when the span failed bounds — no rows
+         * then either). Guarded per-append like the QPU rows below: a span
+         * makes the total row count def-dependent, so an unguarded append
+         * could write past entries[] into start_slot's stack frame — the OOB
+         * the manifest_bind clamp cannot undo. Fail closed (drop the row). */
+        if (slot->def.grant_field) {
+            for (uint32_t r = slot->def.field_region;
+                 r < slot->def.field_region + field_span && r < FIELD_REGION_COUNT; r++) {
+                if (man.entry_count >= MANIFEST_MAX_ENTRIES) {
+                    boot_log("service: manifest full — field row dropped (fail closed)");
+                    boot_log(slot->info.name);
+                    break;
+                }
+                man.entries[man.entry_count].resource_type = CAP_RESOURCE_FIELD;
+                man.entries[man.entry_count].resource_id = r;
+                man.entries[man.entry_count].permissions =
+                    CAP_READ | CAP_WRITE | (slot->def.grant_field_delegable ? CAP_GRANT : 0);
+                man.entry_count++;
+            }
         }
         /* The QPU rows are last; guard the append against MANIFEST_MAX_ENTRIES
          * so a future service that adds grant flags past the current 8-row max

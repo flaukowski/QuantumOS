@@ -1117,6 +1117,14 @@ ci-smoke: kernel
 		grep -E "AGENT:|AGENTSUB" /tmp/qemu-boot.log 2>/dev/null || true; \
 		echo ""; echo "=== Smoke Test FAILED ==="; exit 1; \
 	fi
+	@# Division of labor (epic #177): every specialist published its DISTINCT
+	@# result into its OWN workspace region — orchestrator-verified (live==1
+	@# per region + exact recomputed content) — with sibling writes refused.
+	@if ! grep -q "AGENT: division of labor 3/3" /tmp/qemu-boot.log 2>/dev/null; then \
+		echo "ERROR: division of labor not proven (AGENT: division of labor 3/3)"; \
+		grep -E "AGENT|AGENTSUB" /tmp/qemu-boot.log 2>/dev/null || true; \
+		echo ""; echo "=== Smoke Test FAILED ==="; exit 1; \
+	fi
 	@if grep -qE "AGENT BROKEN|AGENTD: DEMO BROKEN|AGENTSUB BROKEN" /tmp/qemu-boot.log 2>/dev/null; then \
 		echo "ERROR: agent demo reported a BROKEN step"; \
 		grep -E "AGENT BROKEN|AGENTD: DEMO BROKEN|AGENTSUB BROKEN" /tmp/qemu-boot.log 2>/dev/null || true; \
@@ -1284,9 +1292,11 @@ ci-smoke-disk: kernel
 	fi
 	@echo "SUCCESS: authority ledger written in boot 1 restored in boot 2 — AUDIT PERSISTENCE PROVEN"
 	@echo "[boot A] corrupt the audit blob at its fixed home; fs + field must survive, audit must cold-start..."
-	@# audit at LBA 4069 (field 4090 - AUDIT_BLOB_SECTORS 21); one random sector
-	@# there breaks the audit checksum but touches neither fs (low sectors) nor
-	@# field (4090+). Proves the audit section is crash-isolated like the field.
+	@# audit home = 4096 - AUDIT_HOME_TOP_OFFSET(27) = 4069 (FROZEN at its
+	@# legacy absolute position, epic #177 — field growth cannot move it); one
+	@# random sector there breaks the audit checksum but touches neither fs
+	@# (low sectors) nor field (4053..4062). Proves the audit section is
+	@# crash-isolated like the field.
 	@dd if=/dev/urandom of=$(DISK_IMG) bs=512 seek=4069 count=1 conv=notrunc 2>/dev/null
 	@( printf 'help\n'; sleep 8 ) | \
 		timeout 10s qemu-system-x86_64 -kernel $(BUILD_DIR)/kernel.elf32 \
@@ -1311,7 +1321,10 @@ ci-smoke-disk: kernel
 	fi
 	@echo "SUCCESS: corrupted audit detected, cold-started honestly, fs + field unaffected — AUDIT ISOLATION PROVEN"
 	@echo "[boot 3] corrupt the field blob at its fixed home; fs must survive, field must cold-start..."
-	@dd if=/dev/urandom of=$(DISK_IMG) bs=512 seek=4090 count=1 conv=notrunc 2>/dev/null
+	@# field home = audit home(4069) - FIELD_HOME_RESERVE_SECTORS(16) = 4053
+	@# (the field blob lives BELOW the frozen audit home since epic #177; the
+	@# home/header sector is the deterministic corruption target).
+	@dd if=/dev/urandom of=$(DISK_IMG) bs=512 seek=4053 count=1 conv=notrunc 2>/dev/null
 	@( printf 'help\n'; sleep 8 ) | \
 		timeout 10s qemu-system-x86_64 -kernel $(BUILD_DIR)/kernel.elf32 \
 		-drive file=$(DISK_IMG),format=raw,if=ide -serial stdio -m 128M \
