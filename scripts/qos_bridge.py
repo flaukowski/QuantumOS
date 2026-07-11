@@ -824,6 +824,44 @@ class QosVM:
         result = bytes(payload[2:]) if len(payload) > 2 else b""
         return {"status": status, "result": result}
 
+    def qpu_run(self, kind="bell", n_qubits=3, target=0, iters=1, probe=0,
+                deadline_s=10.0):
+        """Build a NAMED opaque circuit, submit it to the in-OS QPU broker over
+        the attested bridge (see qsubmit), and decode the exact result. `kind` is
+        'bell' | 'ghz' | 'grover' (grover uses n_qubits/target/iters). This is the
+        agent-facing convenience over the raw-bytes qsubmit: the circuit build and
+        the QC-result decode live here, stdlib-only, so the MCP tool stays a
+        one-line delegation. Returns {kind, status, ok, ..., identity}; status
+        0=OK / 1=quota-refused / 2=broker-or-EINVAL."""
+        import qpu_circuit as qc
+        if kind == "bell":
+            circuit = qc.bell(probe=probe)
+        elif kind == "ghz":
+            circuit = qc.ghz(n_qubits, probe=probe)
+        elif kind == "grover":
+            circuit = qc.grover(n_qubits, target, iters)
+        else:
+            raise QosError(f"unknown circuit kind {kind!r} (want bell|ghz|grover)")
+        res = self.qsubmit(circuit, deadline_s=deadline_s)
+        out = {"kind": kind, "status": res["status"], "identity": self.identity()}
+        if res["status"] == 0 and len(res["result"]) >= qc.QC_RESULT_LEN:
+            d = qc.parse_result(res["result"])
+            out.update({
+                "ok": True,
+                "n_qubits": d["n_qubits"],
+                "probability": (d["num"] / d["den"]) if d["den"] else 0.0,
+                "prob_num": d["num"],
+                "prob_den": d["den"],
+                "amp_re": d["amp_re"],
+                "amp_im": d["amp_im"],
+                "h": d["h"],
+            })
+        else:
+            out["ok"] = False
+            out["detail"] = ("quota refused" if res["status"] == 1
+                             else "broker rejected (malformed circuit / EINVAL)")
+        return out
+
     # -- COM1 scripted qsh --------------------------------------------------
     def _send_line(self, line):
         """Write one command to qsh; return the log offset just before it (so

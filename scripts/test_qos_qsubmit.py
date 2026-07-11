@@ -58,12 +58,22 @@ def main():
     atexit.register(vm.shutdown)
     vm.boot(qseed=QSEED, timeout=45)
 
-    # 1. Bell over the wire → p=1/2 (num=1,den=2,h=1,amp_re=1,n_qubits=2).
-    bell = _decode_ok(vm, qc.bell(), "bell")
-    if not (bell["h"] == 1 and bell["num"] == 1 and bell["den"] == 2
-            and bell["amp_re"] == 1 and bell["amp_im"] == 0 and bell["n_qubits"] == 2):
-        _fail(f"bell wire result wrong: {bell}")
-    print(f"OK: Bell brokered over COM2 → p={bell['num']}/{bell['den']} (n={bell['n_qubits']}, h={bell['h']})")
+    # 1. Bell over the wire → p=1/2 via qpu_run() — the agent-facing convenience
+    #    the qos_qpu_submit MCP tool delegates to (build the named circuit, submit
+    #    it over the same wire path, DECODE the exact result). Exercising it here
+    #    (rather than a raw qsubmit + a separate qpu_run submit) keeps the total
+    #    submit count within swarm_svc's qsub_max so step 5's overflow still tests
+    #    broker rejection, not quota exhaustion.
+    run = vm.qpu_run("bell")
+    if not (run.get("ok") and run["status"] == 0 and run["n_qubits"] == 2
+            and run["prob_num"] == 1 and run["prob_den"] == 2 and run["h"] == 1
+            and run["amp_re"] == 1 and run["amp_im"] == 0
+            and abs(run["probability"] - 0.5) < 1e-12):
+        _fail(f"qpu_run('bell') wire/decode wrong: {run}")
+    print(f"OK: Bell via qpu_run() → p={run['prob_num']}/{run['prob_den']} "
+          f"(n={run['n_qubits']}, h={run['h']}) — the qos_qpu_submit tool path")
+    bell = {"num": run["prob_num"], "den": run["prob_den"], "h": run["h"],
+            "amp_re": run["amp_re"], "amp_im": run["amp_im"], "n_qubits": run["n_qubits"]}
 
     # 2. Grover-3q over the wire → p=121/128 (amp 176, h=15). DISTINCT from Bell,
     #    so a hardcoded/circuit-ignoring bridge cannot produce both.
