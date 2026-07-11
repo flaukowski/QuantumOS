@@ -34,6 +34,10 @@ typedef struct {
     uint32_t magic;
     uint8_t phase[GHOST_N];
 } fsyn_frame_t;
+/* Lock the wire ABI: the receiver accepts on `n >= sizeof(fsyn_frame_t)`, and
+ * the ADR-0019 authenticated variant appends a seq+MAC — both depend on this
+ * size being exactly what both nodes compiled. */
+_Static_assert(sizeof(fsyn_frame_t) == 260, "FSYN wire frame must be 260 bytes");
 
 /* Society-aggregate datagram (epic #178): fixed 16 bytes, sent alongside the
  * phase frame each cycle once the local agentd has handed us its aggregate
@@ -47,6 +51,7 @@ typedef struct {
     uint32_t aggregate;
     uint64_t reserved0;
 } fsyp_frame_t;
+_Static_assert(sizeof(fsyp_frame_t) == 16, "FSYP wire frame must be 16 bytes");
 
 /* The local society's aggregate (from agentd via IPC, "A<8hex>") and the
  * last few DISTINCT peer aggregates already printed (print-once dedup so the
@@ -89,17 +94,19 @@ static void note_aggregate(const char *buf, long got) {
 }
 
 /* The configured peer set (epic #139 N-way society): up to GHOST_MAX_PEERS
- * packed IPs read from SYSINFO_PEER_COUNT / SYSINFO_PEER<index>. A 2-VM boot
- * has exactly one. */
-static uint32_t peer_pk[GHOST_MAX_PEERS];
+ * packed IPv4 addresses read from SYSINFO_PEER_COUNT / SYSINFO_PEER<index>. A
+ * 2-VM boot has exactly one. NOTE: this is the packed IP, not a key — source-IP
+ * is the ONLY admission check today (the ADR-0019 threat surface). */
+static uint32_t peer_ip[GHOST_MAX_PEERS];
 static int peer_count;
 
 /* Is a received frame's source one of our configured peers? Drops forged /
  * stray sources on the shared L2 before they reach ghostd's per-peer slots
- * (closes slot-exhaustion + self-coupling). */
-static int in_peer_set(uint32_t pk) {
+ * (closes slot-exhaustion + self-coupling). Source-IP alone is spoofable on a
+ * shared L2 — a per-frame MAC is the ADR-0019 hardening. */
+static int in_peer_set(uint32_t ip) {
     for (int i = 0; i < peer_count; i++) {
-        if (peer_pk[i] == pk) {
+        if (peer_ip[i] == ip) {
             return 1;
         }
     }
@@ -186,8 +193,8 @@ void _start(void) {
         }
     }
     for (int i = 0; i < peer_count; i++) {
-        peer_pk[i] = (uint32_t)sysinfo(SYSINFO_PEER, (void *)(long)i, 0);
-        log_ip("FIELDSYNC: coupling to peer ", peer_pk[i]);
+        peer_ip[i] = (uint32_t)sysinfo(SYSINFO_PEER, (void *)(long)i, 0);
+        log_ip("FIELDSYNC: coupling to peer ", peer_ip[i]);
     }
 
     udp_req_t bindreq;
@@ -305,7 +312,7 @@ void _start(void) {
                     }
                     s.sock = sock;
                     for (int i = 0; i < 4; i++) {
-                        s.ip[i] = (uint8_t)((peer_pk[pi] >> (8 * i)) & 0xFF);
+                        s.ip[i] = (uint8_t)((peer_ip[pi] >> (8 * i)) & 0xFF);
                     }
                     s.port = FSYN_PORT;
                     s.buf = &pout;
@@ -323,7 +330,7 @@ void _start(void) {
                     }
                     s.sock = sock;
                     for (int i = 0; i < 4; i++) {
-                        s.ip[i] = (uint8_t)((peer_pk[pi] >> (8 * i)) & 0xFF);
+                        s.ip[i] = (uint8_t)((peer_ip[pi] >> (8 * i)) & 0xFF);
                     }
                     s.port = FSYN_PORT;
                     s.buf = &out;
