@@ -437,6 +437,26 @@ static void poll_com2(void) {
     }
 }
 
+/* HMAC-SHA256 self-test (ADR-0019): prove the integer HMAC in sha256.h matches
+ * the standard against RFC 4231 test case 2, so the swarm-plane frame MAC will
+ * agree byte-for-byte with the host verifier (python hmac.new). A broken HMAC
+ * drops the OK marker the gate greps (revert-and-confirm). */
+static void hmac_selftest(void) {
+    static const uint8_t key[4] = {'J', 'e', 'f', 'e'};
+    static const char msg[] = "what do ya want for nothing?"; /* 28 bytes */
+    static const uint8_t expect[32] = {0x5b, 0xdc, 0xc1, 0x46, 0xbf, 0x60, 0x75, 0x4e,
+                                       0x6a, 0x04, 0x24, 0x26, 0x08, 0x95, 0x75, 0xc7,
+                                       0x5a, 0x00, 0x3f, 0x08, 0x9d, 0x27, 0x39, 0x83,
+                                       0x9d, 0xec, 0x58, 0xb9, 0x64, 0xec, 0x38, 0x43};
+    uint8_t out[32];
+    hmac_sha256(key, 4, (const uint8_t *)msg, 28, out);
+    if (hmac_sha256_equal(out, expect)) {
+        logline("HMAC256: self-test OK (RFC4231 tc2) — swarm-plane MAC ready");
+    } else {
+        logline("HMAC256: SELF-TEST FAILED");
+    }
+}
+
 void _start(void) {
     long restarts = svc_restarts();
     if (restarts > 0) {
@@ -444,6 +464,9 @@ void _start(void) {
     } else {
         logline("SWARM: bridge online in ring 3 — COM2 serial swarm bridge");
     }
+
+    /* Verify the HMAC primitive the ADR-0019 swarm-plane auth is built on. */
+    hmac_selftest();
 
     /* Job 1: the Lamport-signed boot attestation, out COM2 + console gate. */
     emit_boot_attestation();
