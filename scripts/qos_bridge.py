@@ -878,13 +878,66 @@ class QosVM:
         0=OK / 1=refused(quota) / 2=broker-or-EINVAL and result is the 20-byte
         QC result (present on status 0). The deadline is generous: swarm_svc
         never self-times-out on a live qpud (it polls to DONE, heartbeating), so
-        a timeout here means the VM is wedged, not a slow circuit."""
+        a timeout here means the VM is wedged, not a slow circuit.
+
+        Reply-auth (ADR-0019 Extension): when a session key has been admitted
+        (admit_key), the request carries a fresh 16-byte nonce (op|nonce|circuit)
+        and the reply is verified (nonce echo + HMAC) — a keyed submit whose
+        reply is stripped, stale, or forged RAISES QosRefused (fail-closed), so
+        an on-serial attacker cannot forge a job result. This is the SOLE COM2
+        QSUBMIT emitter (qpu_run/the MCP tool delegate here), so the guest's
+        enforce-when-keyed framing can never desync from a bypassing caller.
+        Unkeyed submits keep the legacy op|circuit wire and plain reply."""
         self._ensure_verified()
+        if self._session_key is not None:
+            nonce = os.urandom(16)
+            payload = self._transact(
+                frame(FRAME_DATA, bytes([SWARM_OP_QSUBMIT]) + nonce + bytes(circuit)),
+                SWARM_OP_QSUBMIT, time.time() + deadline_s)
+            return self._verify_qsubmit_reply(payload, nonce)
         payload = self._transact(frame(FRAME_DATA, bytes([SWARM_OP_QSUBMIT]) + bytes(circuit)),
                                  SWARM_OP_QSUBMIT, time.time() + deadline_s)
         status = payload[1] if len(payload) >= 2 else 2
         result = bytes(payload[2:]) if len(payload) > 2 else b""
         return {"status": status, "result": result}
+
+    def _verify_qsubmit_reply(self, payload, expect_nonce):
+        """Verify an authenticated QSUBMIT reply against the nonce we sent.
+        Reply layout: body(variable) | nonce_echo(16) | tag(32), where body is
+        op(1)|status(1) for an error or op(1)|status(1)|result(20) for DONE — so
+        body_len is 2 or 22 and total is 50 or 70. Fails CLOSED (a keyed submit
+        never accepts a stripped-tag or forged reply — the whole point of
+        authenticating the live circuit path). Mirrors _verify_status_reply."""
+        if self._session_key is None:
+            raise QosError("no session key admitted")
+        total = len(payload)
+        # Fail-closed length floor (mirror STATUS's <54): min body 2 + nonce 16
+        # + tag 32 = 50. Rejects a truncated/stripped reply here, never silently
+        # mis-slices a negative body_len.
+        if total < 2 + 16 + 32:
+            raise QosRefused(
+                f"QSUBMIT reply too short to authenticate ({total} < 50) — "
+                "tag stripped or unkeyed guest")
+        body_len = total - 16 - 32
+        if body_len not in (2, 22):
+            raise QosRefused(f"QSUBMIT reply body_len {body_len} not in (2, 22) — malformed")
+        body = bytes(payload[:body_len])
+        echo = bytes(payload[body_len:body_len + 16])
+        tag = bytes(payload[body_len + 16:body_len + 48])
+        if body[0] != SWARM_OP_QSUBMIT:
+            raise QosRefused(f"QSUBMIT reply op mismatch (0x{body[0]:02x}) — cross-op frame")
+        # Freshness FIRST: a replayed genuine reply carries an OLD nonce whose
+        # tag is still HMAC-valid, so only echo != the nonce we sent rejects it.
+        if echo != bytes(expect_nonce):
+            raise QosRefused("nonce echo mismatch — replayed or stale QSUBMIT reply")
+        # MAC input: op || nonce || body[1..] — the SAME preimage shape as STATUS.
+        macin = bytes([SWARM_OP_QSUBMIT]) + bytes(expect_nonce) + body[1:]
+        want = hmac.new(self._session_key, macin, hashlib.sha256).digest()
+        if not hmac.compare_digest(want, tag):
+            raise QosRefused("reply MAC failed — forged QSUBMIT reply")
+        status = body[1]
+        result = body[2:] if body_len > 2 else b""
+        return {"status": status, "result": result, "authenticated": True}
 
     def qpu_run(self, kind="bell", n_qubits=3, target=0, iters=1, probe=0,
                 deadline_s=10.0):

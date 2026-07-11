@@ -25,6 +25,7 @@
  * SPDX-License-Identifier: GPL-2.0-only
  */
 
+#include <stddef.h> /* NULL (reply-auth nonce presence flag) */
 #include "swarm.h"
 #include "sha256.h"
 #include "ghost.h"       /* ghost_req_t/ghost_rep_t, GHOST_*, usys.h, string builders */
@@ -56,6 +57,15 @@ static uint32_t rxlen = 0;
  * only a DONE poll frees the broker slot, so abandoning would ratchet the
  * per-owner in-flight cap to a permanent EIO. Serialized to one in flight. */
 static long qsub_jid = 0;
+
+/* Reply-auth context for the outstanding QSUBMIT (ADR-0019 Extension). The
+ * QSUBMIT reply is ASYNC (framed later in qsub_poll_step), so the request's
+ * nonce must be STASHED atomically with qsub_jid at accept-time and echoed +
+ * MAC'd when the job completes. qsub_authed snapshots have_key at accept (NOT
+ * read live at DONE-time) so a key admitted mid-flight cannot desync the reply
+ * framing from what the host is awaiting. Scrubbed on completion. */
+static uint8_t qsub_nonce[16];
+static int qsub_authed = 0;
 
 static void logline(const char *s) {
     write_str(s);
@@ -278,6 +288,40 @@ static int ghost_query(const ghost_req_t *req, ghost_rep_t *rep) {
     return 0;
 }
 
+/* Emit a QSUBMIT reply, optionally authenticated (ADR-0019 Extension). When
+ * `nonce` is non-NULL (a keyed submit) append the 16-byte nonce echo + HMAC-
+ * SHA256(key, op || nonce || body[1..]) so the host proves the reply FRESH
+ * (echo) and UNFORGED (tag) — the SAME preimage shape the STATUS reply-auth
+ * uses (#199), so the two ops share one verify convention. A NULL nonce emits
+ * the legacy plain body, byte-for-byte identical to the pre-auth wire (the
+ * unkeyed ci-smoke path). body[0] is the op; body_len is 2 (error) or
+ * 2 + QC_RESULT_LEN (DONE), so the tag covers the exact status/result bytes and
+ * a truncation is caught by the host's length + MAC checks. */
+static void emit_qsubmit_reply(const uint8_t *body, uint32_t body_len, const uint8_t *nonce) {
+    if (!nonce) {
+        emit_frame(FRAME_DATA, body, body_len);
+        return;
+    }
+    uint8_t out[1 + 1 + QC_RESULT_LEN + 16 + 32]; /* max body(22) + nonce(16) + tag(32) */
+    for (uint32_t i = 0; i < body_len; i++) {
+        out[i] = body[i];
+    }
+    for (int i = 0; i < 16; i++) {
+        out[body_len + i] = nonce[i]; /* nonce echo */
+    }
+    /* MAC input: op(1) || nonce(16) || body[1..] — identical form to STATUS. */
+    uint8_t macin[1 + 16 + 1 + QC_RESULT_LEN];
+    macin[0] = body[0];
+    for (int i = 0; i < 16; i++) {
+        macin[1 + i] = nonce[i];
+    }
+    for (uint32_t i = 1; i < body_len; i++) {
+        macin[17 + (i - 1)] = body[i];
+    }
+    hmac_sha256(session_key, 32, macin, 17 + (body_len - 1), &out[body_len + 16]);
+    emit_frame(FRAME_DATA, out, body_len + 16 + 32);
+}
+
 /* ---- inbound frame dispatch ---- */
 
 static void handle_data(const uint8_t *payload, uint32_t len) {
@@ -351,32 +395,67 @@ static void handle_data(const uint8_t *payload, uint32_t len) {
     } else if (op == SWARM_OP_QSUBMIT) {
         /* Submit-ONLY (non-blocking): copy the opaque circuit into the broker
          * and stash the job id. The main loop polls it a step per pass and
-         * frames the reply on DONE — NEVER poll here (heartbeat starvation). */
-        uint32_t clen = len - 1;
+         * frames the reply on DONE — NEVER poll here (heartbeat starvation).
+         *
+         * Reply-auth (ADR-0019 Extension): ENFORCE-WHEN-KEYED. The circuit is
+         * VARIABLE-length so an optional trailing nonce is unframeable; instead
+         * a keyed guest ALWAYS expects op|nonce(16)|circuit and authenticates
+         * every reply (both a synchronous error AND the async DONE), while an
+         * unkeyed guest keeps the legacy op|circuit wire byte-for-byte. The
+         * host's key-aware qsubmit() is the SOLE emitter, so the two sides never
+         * disagree on whether a nonce is present. */
+        const uint8_t *nonce = NULL;
+        const uint8_t *circuit;
+        uint32_t clen;
+        if (have_key) {
+            /* Too short to carry a nonce -> we could not authenticate any reply,
+             * so drop SILENTLY (no OOB read, no plaintext downgrade oracle); the
+             * keyed host fail-closes on the transaction timeout. */
+            if (len < 1 + 16) {
+                return;
+            }
+            nonce = &payload[1];
+            circuit = &payload[1 + 16];
+            clen = len - 1 - 16;
+        } else {
+            circuit = &payload[1];
+            clen = len - 1;
+        }
         if (clen == 0 || clen > QPU_CIRCUIT_MAX) {
             uint8_t err[2] = {SWARM_OP_QSUBMIT, 2}; /* malformed → broker/EINVAL */
-            emit_frame(FRAME_DATA, err, sizeof(err));
+            emit_qsubmit_reply(err, sizeof(err), nonce);
             return;
         }
         if (qsub_jid != 0) {
             /* A job is already outstanding (unreachable under a synchronous
-             * host that waits for each reply; defensive). Report refused. */
+             * host that waits for each reply; defensive). Report refused with
+             * the IN-HAND nonce — a synchronous error NEVER touches the stash. */
             uint8_t busy[2] = {SWARM_OP_QSUBMIT, 1};
-            emit_frame(FRAME_DATA, busy, sizeof(busy));
+            emit_qsubmit_reply(busy, sizeof(busy), nonce);
             return;
         }
         qpu_submit_req_t sreq;
         sreq.circuit_len = clen;
         for (uint32_t i = 0; i < clen; i++) {
-            sreq.circuit[i] = payload[1 + i];
+            sreq.circuit[i] = circuit[i];
         }
         long r = qpu_submit_(&sreq);
         if (r >= 1) {
             qsub_jid = r; /* reply deferred to the main-loop poll */
+            /* Stash this job's auth context ATOMICALLY with qsub_jid so the
+             * async DONE echoes THIS request's nonce, keyed off the accept-time
+             * snapshot (not live have_key). */
+            qsub_authed = (nonce != NULL);
+            if (nonce) {
+                for (int i = 0; i < 16; i++) {
+                    qsub_nonce[i] = nonce[i];
+                }
+            }
         } else {
-            /* -4 EPERM/quota → refused(1); other broker errors → 2. */
+            /* -4 EPERM/quota → refused(1); other broker errors → 2. Synchronous
+             * error → in-hand nonce, no stash write. */
             uint8_t err[2] = {SWARM_OP_QSUBMIT, (uint8_t)(r == -4 ? 1 : 2)};
-            emit_frame(FRAME_DATA, err, sizeof(err));
+            emit_qsubmit_reply(err, sizeof(err), nonce);
         }
     } else if (op == SWARM_OP_KEY) {
         /* Host admits the swarm-plane group session key (ADR-0019): forward it
@@ -442,6 +521,12 @@ static void qsub_poll_step(void) {
     if (st == QPU_POLL_PENDING || st == QPU_POLL_RUNNING) {
         return; /* keep waiting — next pass */
     }
+    /* Authenticate the async reply with the STASHED accept-time context (this
+     * job's nonce), never live have_key — a mid-flight key admit must not change
+     * the framing of a reply the host is already awaiting. COM2 RX is polled in
+     * this same single-threaded loop (no ISR), so the pointer stays valid until
+     * the scrub below; a future move to interrupt-driven RX re-triggers review. */
+    const uint8_t *nonce = qsub_authed ? qsub_nonce : NULL;
     uint8_t reply[1 + 1 + QC_RESULT_LEN];
     reply[0] = SWARM_OP_QSUBMIT;
     if (st == QPU_POLL_DONE && out.status == QPU_STATUS_OK && out.result_len == QC_RESULT_LEN) {
@@ -451,13 +536,20 @@ static void qsub_poll_step(void) {
         for (uint32_t i = 0; i < QC_RESULT_LEN; i++) {
             reply[2 + i] = out.result[i];
         }
-        emit_frame(FRAME_DATA, reply, sizeof(reply));
+        emit_qsubmit_reply(reply, sizeof(reply), nonce);
     } else {
         /* EXECFAIL, a short/oversized result, or a poll error → broker error. */
         reply[1] = 2;
-        emit_frame(FRAME_DATA, reply, 2);
+        emit_qsubmit_reply(reply, 2, nonce);
     }
+    /* Clear-on-completion: free the broker slot AND scrub the auth context so no
+     * later path can emit with a stale nonce (a replayed DONE re-poll is already
+     * blocked by qsub_jid==0, this is defense-in-depth). */
     qsub_jid = 0;
+    qsub_authed = 0;
+    for (int i = 0; i < 16; i++) {
+        qsub_nonce[i] = 0;
+    }
 }
 
 static void dispatch_frame(uint8_t type, const uint8_t *payload, uint32_t len) {

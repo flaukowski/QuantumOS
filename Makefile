@@ -2103,6 +2103,16 @@ ci-smoke-replyauth: kernel
 	@echo "=== QuantumOS COM2 reply-auth Test (ADR-0019 Extension) ==="
 	QOS_KERNEL=$(BUILD_DIR)/kernel.elf32 python3 scripts/test_qos_replyauth.py
 
+# COM2 QSUBMIT reply-auth (ADR-0019 Extension): the LIVE circuit-submit path.
+# A keyed VM's QSUBMIT reply carries a nonce echo + HMAC across BOTH the async
+# DONE (nonce stashed at accept) and a synchronous error (in-hand nonce), so a
+# forged job result is rejected. Positive DONE + sync-error + replay-reject +
+# forgery-reject + fail-open (unkeyed submit still plain). Revert-confirmed
+# (neutering the guest emit makes the keyed host reject the nonce-less DONE).
+ci-smoke-qsubmit-replyauth: kernel
+	@echo "=== QuantumOS COM2 QSUBMIT reply-auth Test (ADR-0019 Extension) ==="
+	QOS_KERNEL=$(BUILD_DIR)/kernel.elf32 python3 scripts/test_qos_qsubmit_replyauth.py
+
 # Authenticated FSYN (ADR-0019 increment B-frame-auth): boots two 2-VM societies
 # and proves the per-frame HMAC gates coupling — same key couples, different
 # keys REJECT each other and do not synchronize. Revert-confirmed (neutering the
