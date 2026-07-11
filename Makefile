@@ -2094,6 +2094,19 @@ ci-smoke-keyadmit: kernel
 	@echo "=== QuantumOS swarm-plane key-admit Test (ADR-0019) ==="
 	QOS_KERNEL=$(BUILD_DIR)/kernel.elf32 python3 scripts/test_qos_keyadmit.py
 
+# Authenticated FSYN (ADR-0019 increment B-frame-auth): boots two 2-VM societies
+# and proves the per-frame HMAC gates coupling — same key couples, different
+# keys REJECT each other and do not synchronize. Revert-confirmed (neutering the
+# MAC check makes the different-key pair couple, reddening the negative case).
+# Single-sourced timeout so ci.yml never duplicates a `timeout` literal.
+KEYAUTH_GATE_TIMEOUT ?= 420s
+
+ci-smoke-keyauth: kernel ci-smoke-keyauth-gate
+
+ci-smoke-keyauth-gate:
+	@echo "=== QuantumOS authenticated-FSYN Test (ADR-0019 B-frame-auth) ==="
+	timeout -k 5 $(KEYAUTH_GATE_TIMEOUT) python3 scripts/test_qos_keyauth.py
+
 # Agent society (epic #131): boots TWO attested QuantumOS VMs coupled into one
 # holographic field and proves they synchronize (R_x >= 0.80 from a divergent
 # start) under the Python harness — the MCP-driven generalization of

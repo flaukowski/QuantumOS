@@ -1,7 +1,19 @@
 # 19. Authenticate the Swarm Plane
 
 Date: 2026-07-11
-Status: Proposed
+Status: Accepted (core FSYN authentication shipped; FSYP / COM2-reply / insider extensions deferred)
+
+> **Shipped 2026-07-11.** The core is live: the FSYN field-coupling frame now carries an
+> HMAC-SHA256 tag over `magic||seq||phase` under a host-admitted group session key, with a
+> ticks-seeded monotonic transmit sequence for replay protection. The model is
+> **enforce-when-keyed**: a keyed node stamps and verifies the tag and rejects anything without a
+> valid one; an unkeyed node behaves exactly as before (the wire grew 260→296 B but coupling is
+> unchanged until the host admits a key), so the low-level `ci-smoke-fieldsync`/`society3` gates are
+> unaffected. Proven by `ci-smoke-keyauth`: two members with the SAME key couple under the MAC;
+> two with DIFFERENT keys each reject the peer's frames and do NOT synchronize (revert-confirmed —
+> neutering the MAC check makes the different-key pair couple). Still deferred (see below): FSYP
+> society-aggregate auth, COM2 DATA-reply auth, insider hardening (pairwise keys + sender-IP
+> binding), a sliding replay window, and the IPC/net deny-audit ride-alongs.
 
 ## Context
 

@@ -967,6 +967,12 @@ jobs:
         echo "Using kernel: $KERNEL_ELF"
         QOS_KERNEL="$KERNEL_ELF" make ci-smoke-society3-gate
 
+    - name: Authenticated field-coupling wire — HMAC gates coupling (ADR-0019)
+      run: |
+        KERNEL_ELF=$(find build/ -name "kernel.elf32" | head -1)
+        echo "Using kernel: $KERNEL_ELF"
+        QOS_KERNEL="$KERNEL_ELF" make ci-smoke-keyauth-gate
+
     - name: Upload integration test results
       uses: actions/upload-artifact@v4
       with:

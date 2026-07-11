@@ -23,21 +23,28 @@
  * SPDX-License-Identifier: GPL-2.0-only
  */
 
-#include "ghost.h" /* ghost_wide_t, GHOST_SNAPSHOT/COUPLE, string builders */
+#include "ghost.h"  /* ghost_wide_t, GHOST_SNAPSHOT/COUPLE, string builders */
+#include "sha256.h" /* hmac_sha256 + constant-time compare (ADR-0019) */
 
 #define FSYN_PORT 4747
 #define FSYN_MAGIC 0x4E595346u /* 'FSYN' little-endian */
 #define FSYP_MAGIC 0x50595346u /* 'FSYP' little-endian — society aggregate (epic #178) */
 
-/* One UDP datagram: magic + this node's 256 phase bytes. 260 bytes. */
+/* One UDP datagram (ADR-0019 authenticated form): magic + a monotonic transmit
+ * sequence + this node's 256 phase bytes + an HMAC-SHA256 tag over the leading
+ * 264 bytes (magic||seq||phase). 296 bytes. A KEYED node fills seq+tag and a
+ * keyed receiver verifies them; an UNKEYED node sends seq=0 + a zero tag and an
+ * unkeyed receiver ignores them (backward-compatible coupling — see the recv
+ * path). The layout has no padding: 4 + 4 + 256 + 32. */
 typedef struct {
     uint32_t magic;
+    uint32_t seq;
     uint8_t phase[GHOST_N];
+    uint8_t tag[32];
 } fsyn_frame_t;
-/* Lock the wire ABI: the receiver accepts on `n >= sizeof(fsyn_frame_t)`, and
- * the ADR-0019 authenticated variant appends a seq+MAC — both depend on this
- * size being exactly what both nodes compiled. */
-_Static_assert(sizeof(fsyn_frame_t) == 260, "FSYN wire frame must be 260 bytes");
+_Static_assert(sizeof(fsyn_frame_t) == 296, "FSYN wire frame must be 296 bytes");
+/* The HMAC covers everything BEFORE the tag: magic(4)+seq(4)+phase(256). */
+#define FSYN_MAC_COVERED 264
 
 /* Society-aggregate datagram (epic #178): fixed 16 bytes, sent alongside the
  * phase frame each cycle once the local agentd has handed us its aggregate
@@ -100,6 +107,18 @@ static void note_aggregate(const char *buf, long got) {
  * before — increment B-frame-auth makes possession of this key load-bearing. */
 static uint8_t session_key[32];
 static int have_key;
+/* Monotonic per-sender transmit sequence, seeded from the boot tick at _start
+ * (and re-seeded on rebirth) so a reborn node's seq is always above what its
+ * peers last accepted — SYS_TICKS survives ring-3 rebirth and climbs ~100/s.
+ * A TRANSMIT counter, not content-derived: each send cycle bumps it. */
+static uint32_t tx_seq;
+
+/* ADR-0019 replay watermark: the highest FSYN seq accepted from each peer.
+ * Per-peer so one peer's stream can't advance another's; reset on a (re)key. */
+static uint32_t peer_last_seq[GHOST_MAX_PEERS];
+/* Saturating count of frames rejected for a bad MAC or a stale seq — one
+ * console line at the first reject; the counter never wraps or spams. */
+static uint32_t rejects;
 
 /* Capture a "K"+32-byte key handoff from swarm_svc. Dual-sited like
  * note_aggregate — the key can race a snapshot reply. `got` is recv_msg's
@@ -112,6 +131,11 @@ static void note_key(const char *buf, long got) {
     if (got != 0 && buf[0] == 'K') {
         for (int i = 0; i < 32; i++) {
             session_key[i] = (uint8_t)buf[i + 1];
+        }
+        /* A (re)key restarts the sequence space: clear every peer's replay
+         * watermark so the first frame under the new key is accepted. */
+        for (int i = 0; i < GHOST_MAX_PEERS; i++) {
+            peer_last_seq[i] = 0;
         }
         if (!have_key) {
             write_str("FSKEY: swarm-plane session key installed");
@@ -127,17 +151,29 @@ static void note_key(const char *buf, long got) {
 static uint32_t peer_ip[GHOST_MAX_PEERS];
 static int peer_count;
 
-/* Is a received frame's source one of our configured peers? Drops forged /
- * stray sources on the shared L2 before they reach ghostd's per-peer slots
- * (closes slot-exhaustion + self-coupling). Source-IP alone is spoofable on a
- * shared L2 — a per-frame MAC is the ADR-0019 hardening. */
+/* Record a rejected frame: log the reason ONCE (the first reject), then bump a
+ * saturating counter — never a per-frame print (a flood must not spam) and
+ * never a kernel-ledger write (ring 3 cannot forge the authority ledger). */
+static void note_reject(const char *why) {
+    if (rejects == 0) {
+        write_str(why);
+    }
+    if (rejects != 0xffffffffu) {
+        rejects++;
+    }
+}
+
+/* Which configured peer is this source IP? Returns the peer INDEX (so the
+ * caller can select peer_last_seq[i]) or -1 for a forged/stray/self source.
+ * Source-IP alone is spoofable on a shared L2 — the per-frame MAC is the real
+ * ADR-0019 admission check. */
 static int in_peer_set(uint32_t ip) {
     for (int i = 0; i < peer_count; i++) {
         if (peer_ip[i] == ip) {
-            return 1;
+            return i;
         }
     }
-    return 0;
+    return -1;
 }
 
 /* Ask the local ghostd for a phase snapshot (IPC). Fills phase[256].
@@ -242,6 +278,9 @@ void _start(void) {
 
     long last_send = ticks() - 200; /* send on the first iteration */
     int wiring_warned = 0;
+    /* Seed the transmit sequence above any plausible peer watermark (ADR-0019):
+     * boot-relative ticks, so even a reborn node never restarts seq at 0. */
+    tx_seq = (uint32_t)ticks();
 
     for (;;) {
         heartbeat();
@@ -288,11 +327,31 @@ void _start(void) {
             /* Only accept frames from a CONFIGURED peer — a forged/stray
              * source on the shared L2 (or our own echo) never reaches
              * ghostd's slots or the console. */
-            if (!in_peer_set(src)) {
+            int pidx = in_peer_set(src);
+            if (pidx < 0) {
                 continue;
             }
             if (magic == FSYN_MAGIC && n >= (long)sizeof(fsyn_frame_t)) {
                 const fsyn_frame_t *f = (const fsyn_frame_t *)rbuf;
+                /* ADR-0019: once keyed, a frame must carry a valid HMAC over
+                 * magic||seq||phase AND a strictly-newer seq (replay guard). An
+                 * unkeyed node accepts as before — the wire grew, but coupling
+                 * is unchanged until the host admits a key. Source IP already
+                 * passed in_peer_set; the MAC is what a spoofed source cannot
+                 * forge. */
+                if (have_key) {
+                    uint8_t want[32];
+                    hmac_sha256(session_key, 32, rbuf, FSYN_MAC_COVERED, want);
+                    if (!hmac_sha256_equal(want, f->tag)) {
+                        note_reject("FSAUTH: forged FSYN frame rejected (bad MAC)");
+                        continue;
+                    }
+                    if (f->seq <= peer_last_seq[pidx]) {
+                        note_reject("FSAUTH: stale FSYN frame rejected (replay)");
+                        continue;
+                    }
+                    peer_last_seq[pidx] = f->seq;
+                }
                 ghost_couple(f->phase, src);
                 log_ip("FIELDSYNC: frame from ", src);
             } else if (magic == FSYP_MAGIC && n >= (long)sizeof(fsyp_frame_t)) {
@@ -352,8 +411,18 @@ void _start(void) {
                 }
             }
             fsyn_frame_t out;
+            for (unsigned i = 0; i < sizeof(out); i++) {
+                ((uint8_t *)&out)[i] = 0; /* seq=0 + zero tag for the unkeyed path */
+            }
             out.magic = FSYN_MAGIC;
             if (ghost_snapshot(out.phase)) {
+                /* ADR-0019: a keyed node stamps a fresh transmit seq and an HMAC
+                 * over magic||seq||phase; an unkeyed node ships seq=0 + a zero
+                 * tag (which a keyed peer rejects and an unkeyed peer ignores). */
+                if (have_key) {
+                    out.seq = ++tx_seq;
+                    hmac_sha256(session_key, 32, (const uint8_t *)&out, FSYN_MAC_COVERED, out.tag);
+                }
                 for (int pi = 0; pi < peer_count; pi++) {
                     udp_req_t s;
                     for (unsigned i = 0; i < sizeof(s); i++) {
