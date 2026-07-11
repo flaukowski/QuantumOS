@@ -36,7 +36,17 @@ _society = QosSociety()
 
 
 def _err(exc):
+    """Structured error for the single-VM tools, carrying that VM's attested
+    identity (see the module docstring for what 'verified' honestly means)."""
     return {"error": str(exc), "identity": _vm.identity()}
+
+
+def _society_err(exc):
+    """Structured error for the SOCIETY tools. A society has no single attested
+    identity (it is N members), so — unlike _err — this does NOT borrow the
+    standalone _vm's identity, which would misattribute a society failure to an
+    unrelated (often unbooted) single VM."""
+    return {"error": str(exc), "society": True}
 
 
 @mcp.tool()
@@ -231,8 +241,10 @@ def qos_memory_import(query: str, top_k: int = 5) -> dict:
     imprint each into the QuantumOS kernel field — seeding the OS's associative
     memory from the host memory system. Content is truncated to the 64-byte
     field slot (reported) and non-ASCII memories are skipped (the field is
-    ASCII-only); Kannaka strength is NOT carried into slot energy. Requires
-    kannaka.exe (QOS_KANNAKA_BIN). Refuses if the attestation is not verified."""
+    ASCII-only); each memory's Kannaka similarity IS carried into its slot energy
+    (mapped to `imprint --energy` 1..100), and each result reports its
+    `energy_pct`. Requires kannaka.exe (QOS_KANNAKA_BIN). Refuses if the
+    attestation is not verified."""
     try:
         return _vm.memory_import(query, top_k=top_k)
     except QosError as exc:
@@ -284,7 +296,7 @@ def qos_society_boot(qseed_a: str, qseed_b: str) -> dict:
     try:
         return {"booted": True, "status": _society.boot(qseed_a, qseed_b)}
     except QosError as exc:
-        return _err(exc)
+        return _society_err(exc)
 
 
 @mcp.tool()
@@ -311,7 +323,7 @@ def qos_society_boot_n(qseeds: list) -> dict:
     try:
         return {"booted": True, "status": _society.boot_n(list(qseeds))}
     except QosError as exc:
-        return _err(exc)
+        return _society_err(exc)
 
 
 @mcp.tool()
@@ -322,7 +334,7 @@ def qos_society_status() -> dict:
     try:
         return _society.status_n() if _society.members else _society.status()
     except QosError as exc:
-        return _err(exc)
+        return _society_err(exc)
 
 
 @mcp.tool()
@@ -337,7 +349,7 @@ def qos_society_await_sync(threshold: float = 0.80) -> dict:
             return _society.await_sync_n(threshold=threshold)
         return _society.await_sync(threshold=threshold)
     except QosError as exc:
-        return _err(exc)
+        return _society_err(exc)
 
 
 @mcp.tool()
