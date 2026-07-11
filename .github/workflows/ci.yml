@@ -669,6 +669,8 @@ jobs:
       run: make ci-smoke-replyauth
     - name: COM2 QSUBMIT reply authentication — job results are nonce+HMAC attested (ADR-0019)
       run: make ci-smoke-qsubmit-replyauth
+    - name: Attestation by default — the agent surface is attested-fresh (ADR-0019)
+      run: make ci-smoke-attested
 
   integration:
     name: Integration Tests

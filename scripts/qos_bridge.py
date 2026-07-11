@@ -819,6 +819,34 @@ class QosVM:
         # guest (swarm_svc) keeps the same 32 bytes for the same purpose.
         self._session_key = key
 
+    def attest(self, deadline_s=6.0):
+        """Enable reply-auth for THIS session and confirm it is LIVE. Admits a
+        FRESH host-generated 32-byte key, then retries an authenticated STATUS
+        until the guest has consumed the key frame — after which every COM2 reply
+        (STATUS via status_authenticated, QSUBMIT via qsubmit) is nonce+HMAC
+        attested, so a tool RESULT is provably fresh + unforged, not merely that
+        the boot attested (ADR-0015 'verified != live'). The host generating AND
+        holding the key IS the trust model here: control of the serial channel ==
+        control of the VM, so a session-scoped host key binds every reply to the
+        VM this host booted. Returns the confirmed authenticated status dict.
+        Fail-CLOSED: raises if attestation cannot go live in time (it never
+        silently leaves the session on the plain path while claiming attested)."""
+        self._ensure_verified()
+        self.admit_key(os.urandom(32))
+        deadline = time.time() + deadline_s
+        last = None
+        while time.time() < deadline:
+            try:
+                return self.status_authenticated(deadline_s=1.5)
+            except (QosRefused, QosTimeout) as exc:
+                # Not yet live: the guest may not have consumed the key frame yet
+                # (a plain reply -> QosRefused) or not have replied in the window
+                # (-> QosTimeout while it settles). Retry until the deadline; a
+                # genuine VM death (QosDead) is NOT caught here and propagates.
+                last = exc
+                time.sleep(0.3)
+        raise QosError(f"attestation did not go live within {deadline_s:.0f}s (last: {last})")
+
     def status_authenticated(self, deadline_s=5.0):
         """STATUS over COM2 with a per-request nonce + HMAC reply tag (ADR-0019
         Extension): unlike status(), this proves the reply is FRESH (nonce echo)
@@ -958,7 +986,8 @@ class QosVM:
         else:
             raise QosError(f"unknown circuit kind {kind!r} (want bell|ghz|grover)")
         res = self.qsubmit(circuit, deadline_s=deadline_s)
-        out = {"kind": kind, "status": res["status"], "identity": self.identity()}
+        out = {"kind": kind, "status": res["status"], "identity": self.identity(),
+               "attested": bool(res.get("authenticated"))}
         if res["status"] == 0 and len(res["result"]) >= qc.QC_RESULT_LEN:
             d = qc.parse_result(res["result"])
             out.update({
