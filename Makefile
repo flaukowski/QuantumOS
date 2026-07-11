@@ -53,6 +53,13 @@ else
     CFLAGS += $(DEBUG_CFLAGS)
 endif
 
+# Version string single-sourced from the repo-root VERSION file and injected
+# into the kernel banner (kernel/src/main.c). $(strip) drops the trailing
+# newline; the 'v' prefix is added here so VERSION stays a bare PEP 440 string
+# for the Python package (pyproject.toml reads the same file).
+QOS_VERSION := v$(strip $(shell cat VERSION))
+CFLAGS += -DQOS_VERSION='"$(QOS_VERSION)"'
+
 # Optional: quantum-lottery scheduler. Off by default — the default build is
 # byte-identical round-robin. Enable with `make SCHED_LOTTERY=1`, which turns
 # each ready-process pick into a lottery draw from the qseed-mixed generator.

@@ -1,0 +1,154 @@
+name: Release
+
+# Tag-triggered releases: push a tag `vX.Y.Z` (matching the VERSION file) and this
+# workflow builds, BOOT-VERIFIES, and publishes the release artifacts:
+#   - kernel.elf / kernel.elf32 (multiboot images)
+#   - quantumos-<ver>.iso        (4-entry GRUB ISO, USB-flashable, boot-gated)
+#   - quantumos-web-demo-<ver>.tar.gz (self-contained browser demo incl. qemu-wasm)
+#   - quantumos_host_tools sdist + wheel (the MCP server / QosVM bridge package)
+# workflow_dispatch runs everything as a DRY RUN (no release created) so the
+# pipeline is testable before the first tag exists.
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+
+jobs:
+  version-check:
+    name: Tag matches VERSION
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify tag == v$(VERSION) (tag builds only)
+        run: |
+          VER="$(tr -d ' \n' < VERSION)"
+          if [ "${{ github.event_name }}" = "push" ]; then
+            TAG="${GITHUB_REF#refs/tags/}"
+            if [ "$TAG" != "v$VER" ]; then
+              echo "::error::Tag $TAG does not match VERSION file v$VER"; exit 1
+            fi
+          else
+            echo "Dry run against VERSION v$VER"
+          fi
+
+  build-kernel:
+    name: Kernel + ISO (boot-verified)
+    runs-on: ubuntu-latest
+    needs: version-check
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential qemu-system-x86 grub-pc-bin xorriso mtools nasm
+      - name: Build release kernel + ISO
+        run: |
+          make clean
+          # Build both images and the ISO in one release invocation so the ISO's
+          # kernel prerequisites are not silently rebuilt as debug.
+          make BUILD_TYPE=release build/x86_64/kernel.elf32 build/x86_64/kernel.iso
+      - name: Boot-verify the exact ISO (real GRUB handoff)
+        run: make ci-smoke-iso
+      - name: Verify the banner carries the release version
+        run: |
+          VER="$(tr -d ' \n' < VERSION)"
+          timeout 60 qemu-system-x86_64 -kernel build/x86_64/kernel.elf32 -append quiet \
+            -serial stdio -display none -no-reboot > boot.log 2>&1 || true
+          grep -F "QuantumOS v$VER booting" boot.log
+      - name: Stage artifacts
+        run: |
+          VER="$(tr -d ' \n' < VERSION)"
+          mkdir -p dist
+          cp build/x86_64/kernel.elf dist/quantumos-kernel-v$VER.elf
+          cp build/x86_64/kernel.elf32 dist/quantumos-kernel-v$VER.elf32
+          cp build/x86_64/kernel.iso dist/quantumos-v$VER.iso
+          (cd dist && sha256sum * > SHA256SUMS.kernel)
+      - uses: actions/upload-artifact@v4
+        with: { name: kernel-artifacts, path: dist/ }
+
+  build-package:
+    name: Python host-tools package
+    runs-on: ubuntu-latest
+    needs: version-check
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: '3.12' }
+      - name: Build sdist + wheel
+        run: |
+          python -m pip install --upgrade build
+          python -m build
+      - name: Smoke-install the wheel and import the public surface
+        run: |
+          python -m pip install dist/*.whl
+          python -c "import qos_bridge, qos_mcp, qpu_circuit, verify_attestation; print('import ok')"
+          qos-verify-attestation --help >/dev/null
+      - uses: actions/upload-artifact@v4
+        with: { name: package-artifacts, path: dist/ }
+
+  build-web:
+    name: Self-contained browser demo bundle
+    runs-on: ubuntu-latest
+    needs: version-check
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential nasm
+      - name: Build kernel.elf32 and fetch pinned qemu-wasm
+        run: |
+          make BUILD_TYPE=release build/x86_64/kernel.elf32
+          cp build/x86_64/kernel.elf32 web/kernel.elf32
+          bash web/qemu/fetch-wasm.sh
+      - name: Bundle (kills the upstream-CDN single point of failure)
+        run: |
+          VER="$(tr -d ' \n' < VERSION)"
+          tar --exclude='web/node_modules' -czf quantumos-web-demo-v$VER.tar.gz web/
+      - uses: actions/upload-artifact@v4
+        with: { name: web-artifacts, path: 'quantumos-web-demo-*.tar.gz' }
+
+  publish:
+    name: GitHub Release
+    runs-on: ubuntu-latest
+    needs: [build-kernel, build-package, build-web]
+    if: github.event_name == 'push'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with: { path: staged, merge-multiple: true }
+      - name: Extract this version's CHANGELOG section as release notes
+        run: |
+          VER="$(tr -d ' \n' < VERSION)"
+          awk -v ver="[$VER]" 'index($0, "## " ver)==1 {f=1; next} f && /^## \[/ {exit} f' \
+            CHANGELOG.md > notes.md
+          test -s notes.md || { echo "::error::No CHANGELOG section for $VER"; exit 1; }
+      - name: Create the release
+        env: { GH_TOKEN: '${{ github.token }}' }
+        run: |
+          TAG="${GITHUB_REF#refs/tags/}"
+          gh release create "$TAG" staged/* \
+            --title "QuantumOS $TAG" --notes-file notes.md --verify-tag
+
+  pypi:
+    name: PyPI (optional — needs PYPI_API_TOKEN secret)
+    runs-on: ubuntu-latest
+    needs: publish
+    if: github.event_name == 'push'
+    steps:
+      - uses: actions/download-artifact@v4
+        with: { name: package-artifacts, path: dist }
+      - name: Publish if a token is configured, otherwise skip honestly
+        env:
+          PYPI_API_TOKEN: ${{ secrets.PYPI_API_TOKEN }}
+        run: |
+          if [ -z "$PYPI_API_TOKEN" ]; then
+            echo "::notice::PYPI_API_TOKEN not configured — skipping PyPI publish (artifacts are on the GitHub Release)"
+            exit 0
+          fi
+          python -m pip install --upgrade twine
+          python -m twine upload -u __token__ -p "$PYPI_API_TOKEN" dist/*.tar.gz dist/*.whl

@@ -19,3 +19,8 @@ web/node_modules/
 # Epic #100: the multiboot option ROMs are demo assets (override *.bin)
 !web/qemu/multiboot.bin
 !web/qemu/multiboot_dma.bin
+
+# Python host-tools packaging artifacts (pyproject.toml / release.yml build these)
+/dist/
+*.egg-info/
+scripts/*.egg-info/
