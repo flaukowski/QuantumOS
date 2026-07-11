@@ -1,0 +1,86 @@
+# 20. Freeze the v1 Agent-Surface Contracts
+
+Date: 2026-07-11
+Status: Proposed
+
+## Context
+
+Once QuantumOS is packaged and released (ADR-0018), external consumers depend on
+three contracts: the guest **syscall ABI**, the host **MCP tool schemas**, and the
+**COM2 frame + attestation format**. Today none is version-pinned or diff-gated, so a
+refactor can silently break an agent built against a prior release. But freezing too
+early ossifies known mistakes into the published surface. This ADR decides *what* to
+freeze, *when*, and *what to fix first* — and records why the freeze is sequenced
+after ADR-0019 rather than bundled with the release.
+
+## Decision (proposed)
+
+Freeze the v1 contracts as committed golden diffs, but only after the pre-freeze
+fixes land and ADR-0019 finishes changing the wire.
+
+- **Sequencing.** The freeze is **blocked by ADR-0019**: authenticating the swarm
+  plane extends the COM2 frame set and likely the attestation string — exactly the
+  contract this ADR pins. Packaging happens now at 0.x (ADR-0018); the `1.0` freeze
+  waits.
+- **What to freeze.** (a) The 35-syscall table + error-code table + twin-ABI struct
+  sizes, as a **committed golden file** diffed in CI — never regenerated in the same
+  step (the snapshot trap). #167 proved errno collisions are observable behavior, so
+  the error table is part of the contract. (b) The MCP tool schemas as a snapshot
+  test in a **new pip-provisioned CI lane** (the integration job is stdlib-only by
+  contract, so `import mcp` cannot live there). (c) The COM2 frame set + attestation
+  format (hence the ADR-0019 dependency).
+- **Pre-freeze fixes (mandatory — do not freeze mistakes).**
+  - Add the `qos_qpu_submit` MCP tool over the existing `QosVM.qsubmit` bridge method
+    (ADR-0013) — do not freeze a surface that hides the quantum broker.
+  - Fix the `qos_memory_import` energy docstring drift (ADR-0015).
+  - Fix the `_err` identity misattribution and the Windows-only Kannaka default
+    (ADR-0015).
+  - **Delete `cap_transfer`** (kernel/src/capability.c:208-229): implemented, no
+    caller, deliberately unaudited, its `transferred` stat can never move. Wiring it
+    would move delegator authority wholesale, bypassing the one-hop rule (ADR-0010);
+    deletion is ~22 lines under the #180/#181 dead-code precedent. Do not freeze an
+    ABI with a dead ownership-move sibling in it.
+  - Fix the browser-demo path filter that omits `user/**` and `rootfs/**` (a
+    user-only merge silently leaves the flagship demo stale).
+  - **Reserve the actor-bearing audit record shape** now (ADR-0009's named
+    precondition) so the durable ledger format survives a future `SYS_CAP_REVOKE`
+    without a geometry break.
+- **Ship machine-readable agent docs in the package.** The surface's user is an
+  agent; a tool-by-tool contract (args, error shapes, the *verified ≠ live* stance)
+  lets an LLM operate the OS from docs alone.
+
+## Consequences
+
+### Positive
+- Golden-diff gates make an accidental ABI or schema change a red CI, not a silent
+  break for a downstream agent.
+- Fixing the known gaps first means v1 pins a correct surface, not a documented-wrong
+  one.
+- Reserving the actor-bearing audit shape now protects the durable ledger format
+  against the delegation-expansion future (ADR-0009).
+
+### Negative
+- The MCP-schema freeze structurally needs its own pip lane — it cannot reuse the
+  stdlib-only integration job, so the freeze is *two* CI lanes, not one.
+- Golden files are maintenance: every intended ABI change now requires an explicit
+  golden update, which is the point but also friction.
+- Deleting `cap_transfer` removes optionality some future delegation design might
+  have wanted — accepted, because unwired optionality is debt (ADR precedent).
+
+### Residual risks
+- A frozen v1 can still encode a subtler mistake the pre-freeze pass missed; semver
+  makes that a v2 problem, but the golden diff makes it *visible* at least.
+- The actor-bearing record is only *reserved* here, not implemented — a future
+  `SYS_CAP_REVOKE` still has to fill it correctly.
+
+## Evidence (baseline)
+- Contracts today: syscall table verified byte-identical between user/usys.h and the
+  kernel dispatch (ADR-0001 evidence); 21 MCP tools (ADR-0015); COM2/attestation
+  (ADR-0014/0015)
+- Pre-freeze targets: scripts/qos_bridge.py:811 (unexposed qsubmit),
+  qos_mcp.py:211-212 (docstring drift), capability.c:208-229 (cap_transfer),
+  audit.h:25-28 (actor-bearing precondition), browser-demo.yml path filter
+- Gate patterns to extend: `check-api-consistency.sh` (golden ABI), a new pip lane
+  like `quantum-gateway` (MCP schema snapshot)
+- Cross-references: ADR-0018 (package/release), ADR-0019 (blocker — extends the wire),
+  ADR-0009 (actor-bearing record), ADR-0010 (why cap_transfer must die), ADR-0013 (qsubmit)
