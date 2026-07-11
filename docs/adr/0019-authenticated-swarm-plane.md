@@ -138,6 +138,23 @@ requests would be speculative crypto for a dead path — deferred until a COM2 R
 at which point it is the trivial synchronous STATUS mirror. This corrects the earlier "trivial
 follow-up" note above: the triviality was never in doubt; the absence of a consumer is the reason.
 
+**Extension shipped 2026-07-11 — attestation by DEFAULT (the agent surface).** The two reply-auth
+increments above built the mechanism but left it DORMANT: the agent-facing MCP session admitted no
+key, so `qos_status`/`qos_qpu_run` rode the plain path and no agent ever saw the freshness guarantee.
+This turns it ON. `QosVM.attest()` admits a fresh HOST-generated 32-byte session key (host generates
+AND holds it — control of the serial channel == control of the VM, so a session-scoped key binds every
+reply to the VM this host booted) then confirms reply-auth is LIVE by retrying `status_authenticated`
+until the guest has consumed the key frame (it must span a short guest settle — retries on both
+`QosRefused` (plain reply, not yet keyed) and `QosTimeout` (not yet replying), fail-CLOSED if it
+can't go live). `qos_boot` now attests by default (degraded-not-fatal), `qos_status` is adaptive
+(authenticated when keyed, uniform `{r, live, attested, identity}`), and `qos_qpu_run` surfaces
+`attested` (its `qpu_run`→`qsubmit` path authenticates once keyed). Purely ADDITIVE — STATUS keeps
+its optional nonce so a plain `status()` still works, and only an `attested` field is added; no
+breaking change. This makes "faithfulness = observable" concrete: an agent now sees, per result,
+whether it is cryptographically fresh, not merely that the boot attested (ADR-0015). Gated by
+`ci-smoke-attested` (baseline-dormant → attest → attested STATUS + attested `qpu_run`,
+revert-confirmed: a no-op attest reddens the status/qpu legs).
+
 **Increment B scope refinement (2026-07-11):** the key cap is **boot-minted** `swarm_svc→fieldsyncd`
 in `citizens.c` (the existing `agentd→fieldsyncd` precedent, `cap_create(swarm_pid,
 CAP_RESOURCE_IPC, fs_pid, CAP_WRITE, ...)` — no kernel change), rather than the generic

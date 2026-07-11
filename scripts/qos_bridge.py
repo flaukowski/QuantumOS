@@ -676,6 +676,31 @@ class QosVM:
         except OSError:
             return b""
 
+    def _drain_com2(self):
+        """Discard any bytes already waiting unread in the COM2 socket — a stale
+        COMPLETE frame from a PRIOR transact whose reply landed AFTER its deadline
+        (e.g. a slow authenticated STATUS on a loaded runner). Clearing only the
+        parser's reassembly buffer misses such a frame, so the next transact would
+        read it and, because the wire has no request/reply id, mis-attribute it to
+        the new request (a fresh-nonce STATUS then fails on the echo forever).
+        Non-blocking: reads until the socket would block, then restores the normal
+        timeout. Caller holds _io_lock."""
+        if self._com2 is None:
+            return
+        prev = self._com2.gettimeout()
+        try:
+            self._com2.settimeout(0.0)
+            while True:
+                try:
+                    if not self._com2.recv(4096):
+                        break  # EOF
+                except (BlockingIOError, socket.timeout):
+                    break  # nothing more pending
+                except OSError:
+                    break
+        finally:
+            self._com2.settimeout(prev)
+
     def _await_banner(self, deadline):
         while time.time() < deadline:
             if QSH_BANNER in self._log_text():
@@ -786,8 +811,11 @@ class QosVM:
             # Drop any bytes left in the reassembly buffer from a PRIOR transact
             # (e.g. a reply that arrived after that call's deadline). The wire
             # carries no request/reply correlation id, so a stale same-opcode
-            # frame here would be mis-attributed to THIS request — flush first.
+            # frame here would be mis-attributed to THIS request — flush both the
+            # partial-reassembly bytes AND any stale COMPLETE frame still unread
+            # in the socket (the latter bit rapid nonce'd retries on slow runners).
             self._parser.buf.clear()
+            self._drain_com2()
             self._com2.sendall(req_frame)
             while time.time() < deadline:
                 chunk = self._recv_com2()
@@ -818,6 +846,39 @@ class QosVM:
         # Retain the key so status_authenticated() can verify reply tags. The
         # guest (swarm_svc) keeps the same 32 bytes for the same purpose.
         self._session_key = key
+
+    def attest(self, deadline_s=12.0):
+        """Enable reply-auth for THIS session and confirm it is LIVE. Admits a
+        FRESH host-generated 32-byte key, then retries an authenticated STATUS
+        until the guest has consumed the key frame — after which every COM2 reply
+        (STATUS via status_authenticated, QSUBMIT via qsubmit) is nonce+HMAC
+        attested, so a tool RESULT is provably fresh + unforged, not merely that
+        the boot attested (ADR-0015 'verified != live'). The host generating AND
+        holding the key IS the trust model here: control of the serial channel ==
+        control of the VM, so a session-scoped host key binds every reply to the
+        VM this host booted. Returns the confirmed authenticated status dict.
+        Fail-CLOSED: raises if attestation cannot go live in time (it never
+        silently leaves the session on the plain path while claiming attested)."""
+        self._ensure_verified()
+        self.admit_key(os.urandom(32))
+        deadline = time.time() + deadline_s
+        last = None
+        while time.time() < deadline:
+            try:
+                # Per-attempt deadline must comfortably EXCEED the guest's COM2
+                # round-trip (~1.3s+, slower on a loaded runner) — 5s matches the
+                # proven status() default. A tighter window would time out before
+                # the reply lands, leaving it in flight for the NEXT attempt and
+                # offsetting the nonce by one forever (the #201 CI failure).
+                return self.status_authenticated(deadline_s=5.0)
+            except (QosRefused, QosTimeout) as exc:
+                # Not yet live: the guest may not have consumed the key frame yet
+                # (a plain reply -> QosRefused) or not have replied in the window
+                # (-> QosTimeout while it settles). Retry until the deadline; a
+                # genuine VM death (QosDead) is NOT caught here and propagates.
+                last = exc
+                time.sleep(0.3)
+        raise QosError(f"attestation did not go live within {deadline_s:.0f}s (last: {last})")
 
     def status_authenticated(self, deadline_s=5.0):
         """STATUS over COM2 with a per-request nonce + HMAC reply tag (ADR-0019
@@ -958,7 +1019,8 @@ class QosVM:
         else:
             raise QosError(f"unknown circuit kind {kind!r} (want bell|ghz|grover)")
         res = self.qsubmit(circuit, deadline_s=deadline_s)
-        out = {"kind": kind, "status": res["status"], "identity": self.identity()}
+        out = {"kind": kind, "status": res["status"], "identity": self.identity(),
+               "attested": bool(res.get("authenticated"))}
         if res["status"] == 0 and len(res["result"]) >= qc.QC_RESULT_LEN:
             d = qc.parse_result(res["result"])
             out.update({

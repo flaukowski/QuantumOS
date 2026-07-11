@@ -67,18 +67,37 @@ def qos_boot(qseed: str = "", kernel: str = "") -> dict:
                 "identity": _vm.identity()}
     _vm = QosVM(kernel=kernel or None)
     try:
-        return {"booted": True, "identity": _vm.boot(qseed=qseed or None)}
+        ident = _vm.boot(qseed=qseed or None)
     except QosError as exc:
         return _err(exc)
+    # Attest by DEFAULT (ADR-0019 Extension): admit a fresh host session key so
+    # every subsequent tool RESULT is nonce+HMAC fresh, not merely boot-verified.
+    # Degraded (not fatal) if it can't go live — the plain tools still work, but
+    # the flag stays honest rather than claiming attestation we don't have.
+    try:
+        _vm.attest()
+        attested = True
+    except QosError:
+        attested = False
+    return {"booted": True, "identity": ident, "attested": attested}
 
 
 @mcp.tool()
 def qos_status() -> dict:
     """Query ghostd's field over the attested COM2 bridge: the order parameter
-    R and the count of live imprinted patterns. Refuses if the boot
-    attestation is not verified."""
+    R and the count of live imprinted patterns. Refuses if the boot attestation
+    is not verified. When the session is attested (qos_boot admits a key by
+    default), the reply is nonce+HMAC verified FRESH per request (ADR-0019
+    Extension), not merely boot-verified — surfaced as `attested`. Returns a
+    uniform {r, live, attested, identity}."""
     try:
-        return _vm.status()
+        if _vm._session_key is not None:
+            s = _vm.status_authenticated()
+            s["attested"] = s.pop("authenticated", True)
+            return s
+        s = _vm.status()
+        s["attested"] = False
+        return s
     except QosError as exc:
         return _err(exc)
 

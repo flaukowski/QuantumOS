@@ -2113,6 +2113,15 @@ ci-smoke-qsubmit-replyauth: kernel
 	@echo "=== QuantumOS COM2 QSUBMIT reply-auth Test (ADR-0019 Extension) ==="
 	QOS_KERNEL=$(BUILD_DIR)/kernel.elf32 python3 scripts/test_qos_qsubmit_replyauth.py
 
+# Attestation-by-default (ADR-0019 Extension): QosVM.attest() turns the built
+# reply-auth ON for a session, so the agent-facing MCP tools (qos_boot admits a
+# key, qos_status/qos_qpu_run) return attested-fresh results by default — not
+# merely boot-verified. baseline-dormant -> attest -> attested STATUS + attested
+# qpu_run. Revert-confirmed (a no-op attest reddens the status/qpu legs).
+ci-smoke-attested: kernel
+	@echo "=== QuantumOS attestation-by-default Test (ADR-0019 Extension) ==="
+	QOS_KERNEL=$(BUILD_DIR)/kernel.elf32 python3 scripts/test_qos_attested.py
+
 # Authenticated FSYN (ADR-0019 increment B-frame-auth): boots two 2-VM societies
 # and proves the per-frame HMAC gates coupling — same key couples, different
 # keys REJECT each other and do not synchronize. Revert-confirmed (neutering the
