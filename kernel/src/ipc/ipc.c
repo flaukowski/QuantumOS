@@ -2,8 +2,8 @@
  * QuantumOS IPC System Implementation
  *
  * Message-passing IPC system for the QuantumOS microkernel.
- * Implements synchronous and asynchronous message passing with
- * zero-copy shared memory support.
+ * Implements synchronous and asynchronous message passing (the live path is
+ * the capability-checked sys_send/sys_recv over per-process queues).
  *
  * SPDX-License-Identifier: GPL-2.0-only
  */
@@ -20,9 +20,7 @@
 
 #define MAX_PROCESSES 256
 #define MAX_PORTS 128
-#define MAX_SHARED_REGIONS 64
 #define MAX_CHANNELS 64
-#define MAX_GRANTS_PER_REGION 16
 
 /* ============================================================================
  * Internal State
@@ -35,13 +33,6 @@ static uint8_t queue_initialized[MAX_PROCESSES];
 /* Named ports */
 static ipc_port_t ports[MAX_PORTS];
 static uint32_t next_port_id = 1;
-
-/* Shared memory regions */
-static ipc_shared_region_t shared_regions[MAX_SHARED_REGIONS];
-static uint32_t next_region_id = 1;
-
-/* Region grants */
-static ipc_region_grant_t region_grants[MAX_SHARED_REGIONS][MAX_GRANTS_PER_REGION];
 
 /* Channels */
 static ipc_channel_t channels[MAX_CHANNELS];
@@ -72,7 +63,6 @@ static ipc_result_t queue_enqueue(ipc_queue_t *queue, const ipc_message_t *msg);
 static ipc_result_t queue_dequeue(ipc_queue_t *queue, ipc_message_t *msg, uint32_t *filter_sender);
 static ipc_port_t *find_port_by_id(uint32_t port_id);
 static ipc_port_t *find_port_by_name(const char *name);
-static ipc_shared_region_t *find_region(uint32_t region_id);
 static ipc_channel_t *find_channel(uint32_t channel_id);
 
 /* ============================================================================
@@ -298,15 +288,6 @@ static ipc_port_t *find_port_by_name(const char *name) {
     return NULL;
 }
 
-static ipc_shared_region_t *find_region(uint32_t region_id) {
-    for (uint32_t i = 0; i < MAX_SHARED_REGIONS; i++) {
-        if (shared_regions[i].region_id == region_id && shared_regions[i].is_active) {
-            return &shared_regions[i];
-        }
-    }
-    return NULL;
-}
-
 static ipc_channel_t *find_channel(uint32_t channel_id) {
     for (uint32_t i = 0; i < MAX_CHANNELS; i++) {
         if (channels[i].channel_id == channel_id && channels[i].is_active) {
@@ -342,19 +323,6 @@ ipc_result_t ipc_init(void) {
         ports[i].owner_id = 0;
         ports[i].name[0] = '\0';
         ports[i].state = IPC_PORT_CLOSED;
-    }
-
-    /* Initialize shared regions */
-    for (uint32_t i = 0; i < MAX_SHARED_REGIONS; i++) {
-        shared_regions[i].region_id = 0;
-        shared_regions[i].is_active = 0;
-    }
-
-    /* Initialize grants */
-    for (uint32_t i = 0; i < MAX_SHARED_REGIONS; i++) {
-        for (uint32_t j = 0; j < MAX_GRANTS_PER_REGION; j++) {
-            region_grants[i][j].is_active = 0;
-        }
     }
 
     /* Initialize channels */
@@ -420,13 +388,6 @@ ipc_result_t ipc_process_cleanup(uint32_t pid) {
     for (uint32_t i = 0; i < MAX_PORTS; i++) {
         if (ports[i].owner_id == pid && ports[i].state != IPC_PORT_CLOSED) {
             ipc_port_destroy(ports[i].port_id);
-        }
-    }
-
-    /* Cleanup owned shared regions */
-    for (uint32_t i = 0; i < MAX_SHARED_REGIONS; i++) {
-        if (shared_regions[i].owner_id == pid && shared_regions[i].is_active) {
-            ipc_share_destroy(shared_regions[i].region_id);
         }
     }
 
@@ -669,227 +630,6 @@ ipc_result_t ipc_port_receive(uint32_t port_id, ipc_message_t *msg, uint64_t tim
     }
 
     return result;
-}
-
-/* ============================================================================
- * Shared Memory Operations
- * ============================================================================ */
-
-ipc_result_t ipc_share_create(size_t size, ipc_shared_region_t *region) {
-    if (!ipc_initialized) {
-        return IPC_ERROR_NOT_SUPPORTED;
-    }
-
-    if (!region || size == 0) {
-        return IPC_ERROR_INVALID_ARG;
-    }
-
-    /* Find free slot */
-    ipc_shared_region_t *reg = NULL;
-    uint32_t slot = 0;
-    for (uint32_t i = 0; i < MAX_SHARED_REGIONS; i++) {
-        if (!shared_regions[i].is_active) {
-            reg = &shared_regions[i];
-            slot = i;
-            break;
-        }
-    }
-
-    if (!reg) {
-        return IPC_ERROR_OUT_OF_MEMORY;
-    }
-
-    /* Allocate physical memory */
-    /* TODO: Integrate with memory manager */
-    void *phys = NULL; /* pmm_alloc_pages(size / PAGE_SIZE); */
-
-    reg->region_id = next_region_id++;
-    reg->owner_id = get_current_pid();
-    reg->physical_addr = phys;
-    reg->virtual_addr = phys; /* TODO: Map into owner's address space */
-    reg->size = size;
-    reg->permissions = IPC_SHARE_READ | IPC_SHARE_WRITE;
-    reg->ref_count = 1;
-    reg->is_active = 1;
-
-    /* Clear grants for this slot */
-    for (uint32_t i = 0; i < MAX_GRANTS_PER_REGION; i++) {
-        region_grants[slot][i].is_active = 0;
-    }
-
-    memcpy(region, reg, sizeof(ipc_shared_region_t));
-    return IPC_SUCCESS;
-}
-
-ipc_result_t ipc_share_destroy(uint32_t region_id) {
-    ipc_shared_region_t *reg = find_region(region_id);
-    if (!reg) {
-        return IPC_ERROR_NOT_FOUND;
-    }
-
-    /* Check ownership */
-    if (reg->owner_id != get_current_pid() && get_current_pid() != IPC_PID_KERNEL) {
-        return IPC_ERROR_PERMISSION_DENIED;
-    }
-
-    /* Find slot for this region */
-    uint32_t slot = (uint32_t)(reg - shared_regions);
-
-    /* Revoke all grants */
-    for (uint32_t i = 0; i < MAX_GRANTS_PER_REGION; i++) {
-        region_grants[slot][i].is_active = 0;
-    }
-
-    /* Free physical memory */
-    /* TODO: pmm_free_pages(reg->physical_addr, reg->size / PAGE_SIZE); */
-
-    reg->is_active = 0;
-    reg->region_id = 0;
-
-    return IPC_SUCCESS;
-}
-
-ipc_result_t ipc_share_grant(uint32_t region_id, uint32_t grantee_id, uint32_t permissions,
-                             ipc_region_grant_t *grant) {
-    ipc_shared_region_t *reg = find_region(region_id);
-    if (!reg) {
-        return IPC_ERROR_NOT_FOUND;
-    }
-
-    /* Check ownership */
-    if (reg->owner_id != get_current_pid()) {
-        return IPC_ERROR_PERMISSION_DENIED;
-    }
-
-    /* Find slot */
-    uint32_t slot = (uint32_t)(reg - shared_regions);
-
-    /* Scan ALL slots: remember the first free one, but a free slot must NOT
-     * stop the duplicate check — a re-grant to a grantee whose active slot sits
-     * AFTER a hole (from an earlier revoke) would otherwise be created twice,
-     * double-counting ref_count and leaving one grant behind on revoke. */
-    ipc_region_grant_t *g = NULL;
-    for (uint32_t i = 0; i < MAX_GRANTS_PER_REGION; i++) {
-        if (!region_grants[slot][i].is_active) {
-            if (!g) {
-                g = &region_grants[slot][i];
-            }
-            continue;
-        }
-        if (region_grants[slot][i].grantee_id == grantee_id) {
-            return IPC_ERROR_ALREADY_EXISTS;
-        }
-    }
-
-    if (!g) {
-        return IPC_ERROR_OUT_OF_MEMORY;
-    }
-
-    g->region_id = region_id;
-    g->grantee_id = grantee_id;
-    g->permissions = permissions & reg->permissions; /* Can't exceed owner perms */
-    g->mapped_addr = NULL;                           /* Mapped on ipc_share_map */
-    g->is_active = 1;
-
-    reg->ref_count++;
-
-    if (grant) {
-        memcpy(grant, g, sizeof(ipc_region_grant_t));
-    }
-
-    return IPC_SUCCESS;
-}
-
-ipc_result_t ipc_share_revoke(uint32_t region_id, uint32_t grantee_id) {
-    ipc_shared_region_t *reg = find_region(region_id);
-    if (!reg) {
-        return IPC_ERROR_NOT_FOUND;
-    }
-
-    /* Check ownership */
-    if (reg->owner_id != get_current_pid() && get_current_pid() != IPC_PID_KERNEL) {
-        return IPC_ERROR_PERMISSION_DENIED;
-    }
-
-    uint32_t slot = (uint32_t)(reg - shared_regions);
-
-    for (uint32_t i = 0; i < MAX_GRANTS_PER_REGION; i++) {
-        if (region_grants[slot][i].is_active && region_grants[slot][i].grantee_id == grantee_id) {
-
-            /* Unmap from grantee's address space */
-            /* TODO: vmm_unmap(grantee_id, region_grants[slot][i].mapped_addr, reg->size); */
-
-            region_grants[slot][i].is_active = 0;
-            reg->ref_count--;
-            return IPC_SUCCESS;
-        }
-    }
-
-    return IPC_ERROR_NOT_FOUND;
-}
-
-ipc_result_t ipc_share_map(uint32_t region_id, void **addr) {
-    if (!addr) {
-        return IPC_ERROR_INVALID_ARG;
-    }
-
-    ipc_shared_region_t *reg = find_region(region_id);
-    if (!reg) {
-        return IPC_ERROR_NOT_FOUND;
-    }
-
-    uint32_t pid = get_current_pid();
-
-    /* Owner always has access */
-    if (reg->owner_id == pid) {
-        *addr = reg->virtual_addr;
-        return IPC_SUCCESS;
-    }
-
-    /* Check for grant */
-    uint32_t slot = (uint32_t)(reg - shared_regions);
-    for (uint32_t i = 0; i < MAX_GRANTS_PER_REGION; i++) {
-        if (region_grants[slot][i].is_active && region_grants[slot][i].grantee_id == pid) {
-
-            /* Map into grantee's address space */
-            /* TODO: void *mapped = vmm_map(pid, reg->physical_addr, reg->size, perms); */
-            void *mapped = reg->physical_addr; /* Placeholder */
-
-            region_grants[slot][i].mapped_addr = mapped;
-            *addr = mapped;
-            return IPC_SUCCESS;
-        }
-    }
-
-    return IPC_ERROR_PERMISSION_DENIED;
-}
-
-ipc_result_t ipc_share_unmap(uint32_t region_id) {
-    ipc_shared_region_t *reg = find_region(region_id);
-    if (!reg) {
-        return IPC_ERROR_NOT_FOUND;
-    }
-
-    uint32_t pid = get_current_pid();
-
-    /* Owner unmapping */
-    if (reg->owner_id == pid) {
-        /* TODO: vmm_unmap(pid, reg->virtual_addr, reg->size); */
-        return IPC_SUCCESS;
-    }
-
-    /* Grantee unmapping */
-    uint32_t slot = (uint32_t)(reg - shared_regions);
-    for (uint32_t i = 0; i < MAX_GRANTS_PER_REGION; i++) {
-        if (region_grants[slot][i].is_active && region_grants[slot][i].grantee_id == pid) {
-
-            /* TODO: vmm_unmap(pid, region_grants[slot][i].mapped_addr, reg->size); */
-            region_grants[slot][i].mapped_addr = NULL;
-            return IPC_SUCCESS;
-        }
-    }
-
-    return IPC_ERROR_PERMISSION_DENIED;
 }
 
 /* ============================================================================
