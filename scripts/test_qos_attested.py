@@ -26,9 +26,10 @@ Gate: make ci-smoke-attested
 import atexit
 import os
 import sys
+import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from qos_bridge import QosVM, QosError  # noqa: E402
+from qos_bridge import QosVM, QosError, frame, FRAME_DATA, SWARM_OP_STATUS  # noqa: E402
 
 
 def _fail(msg):
@@ -70,6 +71,22 @@ def main():
     if not q.get("attested") or not q.get("ok"):
         _fail(f"qpu_run after attest() not attested/ok: {q}")
     print(f"OK: qpu_run attested end-to-end (bell ok, result verified) attested={q['attested']}")
+
+    # stale-frame drain: reproduce the slow-runner hazard deterministically. Send
+    # an authenticated STATUS and let its reply land in the socket buffer UNREAD
+    # (as a timed-out attempt would). A fresh authenticated STATUS must STILL
+    # verify — _transact drains the stale complete frame before sending, so the
+    # reply nonce can't be offset by one. Without the drain this reproduces the
+    # CI 'nonce echo mismatch' exactly (and is the revert-confirm target).
+    stale_nonce = os.urandom(16)
+    with vm._io_lock:
+        vm._com2.sendall(frame(FRAME_DATA, bytes([SWARM_OP_STATUS]) + stale_nonce))
+    time.sleep(3.0)  # > guest COM2 latency (~1.3s) so the stale reply is fully
+    #                  BUFFERED (not in flight) — the case the drain must clear
+    s2 = vm.status_authenticated()
+    if not s2.get("authenticated"):
+        _fail(f"authed STATUS after a stale buffered reply did not verify (drain broken): {s2}")
+    print("OK: a stale buffered reply is DRAINED — the next authed STATUS still verifies fresh")
 
     print("=== attestation-by-default gate PASSED — the agent surface is attested-fresh ===")
 

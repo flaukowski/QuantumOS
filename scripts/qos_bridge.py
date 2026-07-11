@@ -676,6 +676,31 @@ class QosVM:
         except OSError:
             return b""
 
+    def _drain_com2(self):
+        """Discard any bytes already waiting unread in the COM2 socket — a stale
+        COMPLETE frame from a PRIOR transact whose reply landed AFTER its deadline
+        (e.g. a slow authenticated STATUS on a loaded runner). Clearing only the
+        parser's reassembly buffer misses such a frame, so the next transact would
+        read it and, because the wire has no request/reply id, mis-attribute it to
+        the new request (a fresh-nonce STATUS then fails on the echo forever).
+        Non-blocking: reads until the socket would block, then restores the normal
+        timeout. Caller holds _io_lock."""
+        if self._com2 is None:
+            return
+        prev = self._com2.gettimeout()
+        try:
+            self._com2.settimeout(0.0)
+            while True:
+                try:
+                    if not self._com2.recv(4096):
+                        break  # EOF
+                except (BlockingIOError, socket.timeout):
+                    break  # nothing more pending
+                except OSError:
+                    break
+        finally:
+            self._com2.settimeout(prev)
+
     def _await_banner(self, deadline):
         while time.time() < deadline:
             if QSH_BANNER in self._log_text():
@@ -786,8 +811,11 @@ class QosVM:
             # Drop any bytes left in the reassembly buffer from a PRIOR transact
             # (e.g. a reply that arrived after that call's deadline). The wire
             # carries no request/reply correlation id, so a stale same-opcode
-            # frame here would be mis-attributed to THIS request — flush first.
+            # frame here would be mis-attributed to THIS request — flush both the
+            # partial-reassembly bytes AND any stale COMPLETE frame still unread
+            # in the socket (the latter bit rapid nonce'd retries on slow runners).
             self._parser.buf.clear()
+            self._drain_com2()
             self._com2.sendall(req_frame)
             while time.time() < deadline:
                 chunk = self._recv_com2()
@@ -819,7 +847,7 @@ class QosVM:
         # guest (swarm_svc) keeps the same 32 bytes for the same purpose.
         self._session_key = key
 
-    def attest(self, deadline_s=6.0):
+    def attest(self, deadline_s=12.0):
         """Enable reply-auth for THIS session and confirm it is LIVE. Admits a
         FRESH host-generated 32-byte key, then retries an authenticated STATUS
         until the guest has consumed the key frame — after which every COM2 reply
@@ -837,7 +865,12 @@ class QosVM:
         last = None
         while time.time() < deadline:
             try:
-                return self.status_authenticated(deadline_s=1.5)
+                # Per-attempt deadline must comfortably EXCEED the guest's COM2
+                # round-trip (~1.3s+, slower on a loaded runner) — 5s matches the
+                # proven status() default. A tighter window would time out before
+                # the reply lands, leaving it in flight for the NEXT attempt and
+                # offsetting the nonce by one forever (the #201 CI failure).
+                return self.status_authenticated(deadline_s=5.0)
             except (QosRefused, QosTimeout) as exc:
                 # Not yet live: the guest may not have consumed the key frame yet
                 # (a plain reply -> QosRefused) or not have replied in the window
