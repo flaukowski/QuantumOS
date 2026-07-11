@@ -175,6 +175,28 @@ def qos_qrand() -> dict:
 
 
 @mcp.tool()
+def qos_qpu_submit(kind: str = "bell", n_qubits: int = 3, target: int = 0,
+                   iters: int = 1, probe: int = 0) -> dict:
+    """Submit a quantum circuit to the in-OS QPU broker (SYS_QPU, epic #148) over
+    the attested COM2 bridge and get the EXACT integer result back. `kind` is
+    'bell' | 'ghz' | 'grover' (grover uses n_qubits/target/iters; bell/ghz use
+    n_qubits/probe). This is the conscience-before-wallet path made agent-facing:
+    the broker is capability-gated (only swarm_svc holds the submit cap; a capless
+    submit is EPERM), quota-bounded (qsub_max in swarm_svc's intent manifest, e.g.
+    a 6th submit is refused), and every accepted job is recorded in the kernel
+    authority ledger (AUDIT_QSUBMIT) — a capability-gated, quota-metered, provable
+    quantum job. The kernel NEVER parses the circuit (opaque payload); qpud runs it
+    on the exact Gaussian-integer engine. Returns {kind, status, ok, probability,
+    prob_num, prob_den, n_qubits, ...}; status 0=OK / 1=quota-refused /
+    2=broker-rejected(EINVAL). Refuses if the boot attestation is not verified."""
+    try:
+        return _vm.qpu_run(kind=kind, n_qubits=n_qubits, target=target,
+                           iters=iters, probe=probe)
+    except QosError as exc:
+        return _err(exc)
+
+
+@mcp.tool()
 def qos_fetch(host: str, port: int = 80, allow_private: bool = False) -> dict:
     """Have QuantumOS fetch http://host:port/ over its own TCP stack; returns
     the status line, byte count, and whether the transfer completed.

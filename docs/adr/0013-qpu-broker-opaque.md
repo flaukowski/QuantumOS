@@ -58,10 +58,11 @@ broker in the ADR-0002 destroy ordering, closing an executor-death slot-leak DoS
   the EINVAL to `qpud`, which fail-closes malformed payloads. This is deliberate
   (the kernel must not parse) but means a submitter learns validity only at
   completion.
-- `QosVM.qsubmit` exists on the host bridge (scripts/qos_bridge.py:811) but is **not
-  yet exposed as an MCP tool** — the quantum broker is invisible to an agent driving
-  the OS through the 21-tool surface (ADR-0015). Adding `qos_qpu_submit` is a named
-  pre-freeze fix in ADR-0020.
+- The quantum broker is now agent-reachable: `qos_qpu_submit` (the 22nd MCP tool)
+  delegates to `QosVM.qpu_run` → `QosVM.qsubmit`, so an agent can run a named
+  capability-gated, quota-metered, `AUDIT_QSUBMIT`-ledgered circuit and get the exact
+  decoded result. Gated by `ci-smoke-qsubmit` (the `qpu_run('bell')` assertion). This
+  closed the ADR-0015 "qsubmit unexposed" gap and an ADR-0020 pre-freeze target.
 - One executor by construction: no parallel QPU service, no failover — an executor
   restart is a brief submit outage (bounded by the ADR-0002 watchdog).
 

@@ -54,12 +54,13 @@ it) and refuses argv that could be misread as flags.
 
 ### Negative
 - **Host-side ambient authority**: the MCP server grants every connected client all
-  21 tools — boot, shutdown, fs-write, fetch — with no host-side manifest or quota
+  22 tools — boot, shutdown, fs-write, fetch, qpu-submit — with no host-side manifest or quota
   analog to the guest's intent model (ADR-0008). Kernel safety is structural; host
   safety is not. This is a named trust boundary, and a per-session tool allowlist
   mirroring the guest manifest is the natural follow-on to ADR-0019.
-- The quantum broker is not on the surface: `QosVM.qsubmit` exists but has no MCP
-  tool (ADR-0013), so an agent cannot submit a circuit through the 21-tool set.
+- The quantum broker is now on the surface: `qos_qpu_submit` (the 22nd tool) lets an
+  agent run a capability-gated, quota-metered, ledgered circuit (ADR-0013) — this gap
+  is closed.
 - Documented drift: `qos_memory_import`'s docstring claims strength is not carried
   into slot energy, but the bridge maps similarity → `--energy` and CI asserts it
   (scripts/qos_mcp.py:211-212 vs qos_bridge.py:1161-1177). A pre-freeze fix (ADR-0020).
@@ -82,7 +83,7 @@ it) and refuses argv that could be misread as flags.
 - Shipped in: PR #128 — Kannaka HRM memory bridge (epic #127)
 - Shipped in: PR #130 — read-only SYS_FIELD_INFO + imprint --energy
 - Shipped in: PR #132 / #141 — two-VM and N-way society tools (ADR-0014)
-- Key code: scripts/qos_mcp.py (21 tools, :18-23 verified≠live, :38-39 error dicts,
+- Key code: scripts/qos_mcp.py (22 tools, :18-23 verified≠live, :38-39 error dicts,
   :211-212 docstring drift); scripts/qos_bridge.py:586-624 (COM2 connect-out),
   :324-357 (qsh input validation), :432-507 (Kannaka bridge)
 - CI gates: `ci-smoke-mcp` (scripts/test_qos_mcp.py — every tool, identity on each
