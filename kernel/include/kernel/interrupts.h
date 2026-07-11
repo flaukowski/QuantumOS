@@ -137,12 +137,6 @@ void pic_send_eoi(uint8_t irq);
 void pic_mask_irq(uint8_t irq);
 void pic_unmask_irq(uint8_t irq);
 
-// APIC (if available)
-void apic_init(void);
-void apic_timer_init(uint32_t frequency);
-void apic_send_eoi(void);
-void apic_timer_handler(cpu_state_t *state);
-
 // Stack switching for interrupts
 void interrupt_stack_init(void);
 void set_ist_entry(uint8_t vector, uint8_t ist_index);

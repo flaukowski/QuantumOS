@@ -21,7 +21,9 @@
  * caps are never freed — they are refused at check/find/derive time and the
  * slot is reclaimed only by owner death (recorded then as REAP), so the
  * absence of an EXPIRE entry does not mean the cap was live until revoked.
- * TRANSFER is not recorded (cap_transfer currently has no caller). GRANT/
+ * There is no TRANSFER kind: capability ownership is never moved in place (the
+ * unwired cap_transfer helper was deleted — a re-introduction MUST emit
+ * REVOKE(from) + GRANT(to) so the move is visible). GRANT/
  * REVOKE/REAP record the pid whose HOLDINGS changed, NOT the requester — a
  * forced ancestor revoke is indistinguishable from a self-revoke; before
  * SYS_CAP_REVOKE is ever exposed to ring 3, the denied path MUST audit_deny
