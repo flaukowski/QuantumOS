@@ -1,169 +1,67 @@
-# QuantumOS Development Guidelines
-
-## Peer Review: Resonant Scheduler Bugs (from Cascade — Feb 8 2026)
-
-All bugs from both review rounds have been fixed by Claude Code (Feb 8 2026).
-Fixes verified: ghostmagicOS `tsc --noEmit` and `npm run build` pass. QuantumOS C build pending WSL.
-
----
-
-### BUG 1: `fast_atan2()` uses `sin()` instead of `asin()` — FIXED
-
-**Files:** `resonant_scheduler.c`, `geometric_control.c`
-
-Implemented `fast_asin()` using rational polynomial approximation:
-`asin(x) ≈ x*(1 + x²*(1/6 + x²*(3/40 + x²*15/336)))`.
-Rewrote `fast_atan2()` in both files to use `fast_asin()` with proper quadrant handling.
-
----
-
-### BUG 2: `chiral_allocate()` shared static buffer — FIXED
-
-**Files:** `chiral_resources.h`, `chiral_resources.c`
-
-Replaced `uint32_t *qubit_ids` pointer with `uint32_t qubit_ids[MAX_ALLOC_IDS]` fixed-size
-array embedded directly in `chiral_alloc_result_t`. Removed the shared `alloc_id_buffer` static.
-`MAX_ALLOC_IDS` moved to the header. Allocation now writes directly into the result struct.
-
----
-
-### BUG 3: `resonant_unregister()` skips couplings — FIXED
-
-**File:** `resonant_scheduler.c`
-
-Changed forward iteration to reverse: `for (int8_t i = rpcb->coupling_count - 1; i >= 0; i--)`.
-
----
-
-### BUG 4: `init_chiral()` and `resonant_set_chiral()` missing `fabs` — FIXED
-
-**File:** `resonant_scheduler.c`
-
-Added `fast_abs()` helper. Both `init_chiral()` and `resonant_set_chiral()` now compute
-`fast_abs(eta / gamma)` for asymmetry.
-
----
-
-### BUG 5: Phi sub-components accumulate without bound — FIXED
-
-**File:** `consciousness_process.c`
-
-Added `clamp(value, 0.0, 1.0)` after every increment to `structural_phi`, `dynamic_phi`,
-and `emergent_phi` across all trigger cases (EMERGENCE, LEARNING, DECISION, CRISIS).
-
----
-
-### BUG 6: `COHERENCE_URGENCY` macro inverted division — FIXED
-
-**File:** `resonance_types.h`
-
-Replaced with: urgency = 1.0 when `now >= deadline`, otherwise
-`1.0 - (deadline - now) / (deadline + 1)`. Urgency correctly rises as deadline approaches.
-
----
-
-### NOTE: `process_is_ready()` — IMPLEMENTED
-
-**File:** `kernel/src/process.c`
-
-Added implementations for `process_is_ready()`, `process_is_running()`, and
-`process_is_terminated()` — all were declared in `process.h` but had no implementation.
-
----
-
-### BUG 7: `protocol.ts` comment says 58 bytes — FIXED
-
-**File:** `ghostmagicOS/src/bridge/protocol.ts`
-
-Changed comment from "58 bytes after header" to "48 bytes after header".
-
----
-
-### BUG 8: `EMERGENCE` and `ANOMALY` message types have no serializer — FIXED
-
-**File:** `ghostmagicOS/src/bridge/protocol.ts`, `ghostmagicOS/src/bridge/index.ts`
-
-Added `EmergenceMessage` interface (24-byte payload: emergenceNorm, integrationLevel,
-patternCount, isActive) and `AnomalyMessage` interface (32-byte payload: anomalyIndex,
-spectralAsymmetry, topologicalCharge, isAnomalous, leftModeCount, rightModeCount).
-Added serialize/deserialize methods for both. Updated `getMessageSize()` and barrel exports.
-
----
-
-### BUG 9: BFGS formula is SR1, not rank-2 — FIXED
-
-**Files:** `ghostmagicOS/src/geometric/manifold.ts`, `kernel/src/resonance/geometric_control.c`
-
-Replaced SR1-like update with full BFGS rank-2 inverse Hessian update:
-`H_new = (I - ρ·s·yᵀ)·H·(I - ρ·y·sᵀ) + ρ·s·sᵀ`
-Expanded form: `H + ρ·(1 + ρ·yᵀHy)·s·sᵀ - ρ·(s·(Hy)ᵀ + (Hy)·sᵀ)`.
-This preserves positive definiteness (with curvature condition check).
-
----
-
-### BUG 10: `curvature.ts` hardcoded epsilon — OPEN (low priority)
-
-The function already accepts `stepSize` as a parameter. Callers should pass
-a scaled value. No code change made — this is a usage concern, not a bug in the function.
-
----
-
-### BUG 11: `calculateLocalCoherence()` negative coherence — FIXED
-
-**File:** `ghostmagicOS/src/integration/index.ts`
-
-Both chiral and achiral paths now normalize `cos(phaseDiff)` from [-1,1] to [0,1]
-before applying CISS boost: `const normalized = (baseCoherence + 1) / 2`.
-
----
-
-### BUG 12: Phase variance uses unwrapped differences — FIXED
-
-**File:** `ghostmagicOS/src/integration/index.ts`
-
-Added S¹ phase wrapping: `if (diff > Math.PI) diff = 2 * Math.PI - diff`.
-
----
-
-### NOTE: `berry.ts` cross-product assumes even dimension — ACKNOWLEDGED
-
-Documented as precondition. Fine for even-dimensional oscillator systems.
-
-### NOTE: `wasm-bridge.ts` no WASM path configuration — ACKNOWLEDGED
-
-Will need parameterization for deployment. The bridge falls back to pure TypeScript
-geometric module when WASM is unavailable.
-
-### NOTE: `geometric_control.h` has no `.c` — RESOLVED
-
-`geometric_control.c` (~600 lines) now exists with full implementation.
-
----
-
-## Build & Architecture Notes
-
-- Makefile resonance integration (`RESONANCE_SOURCES`, compile rule) is correct.
-- ghostmagicOS TypeScript and QuantumOS C constants match across both codebases.
-- `quantum_types.h` dependency (`qubit_handle_t`, `FIDELITY_STANDARD`) is satisfied.
-- Static helper duplication (`fast_sqrt`, `fast_abs`, `fast_sin`, `fast_cos`, `fast_asin`,
-  `fast_atan2`, `clamp`, plus `PI`/`TWO_PI`) is now consolidated into the shared header
-  `kernel/include/kernel/resonance/math_helpers.h`. The helpers are `static inline`, so each
-  resonance TU gets its own copy with no link conflict; add new freestanding math helpers there.
-- `resonance_types.h` cross-repo constant documentation (`LAMBDA_DEFAULT` vs `K_COUPLING`,
-  `CISS_COHERENCE_BOOST` additive vs multiplicative) is clear.
-- `geometric_control.h` API design is clean. Implementation in `geometric_control.c` is complete.
-- ghostmagicOS geometric layer (`manifold.ts`, `berry.ts`, `curvature.ts`, `anomaly.ts`)
-  uses correct full BFGS rank-2 update.
-- Protocol serializer (`protocol.ts`) covers all 7 message types with binary serialize/deserialize.
-- Integration layer geometric control hookup in `QueenSynchronizer` and
-  `ResonanceEngine` is architecturally sound. Coherence normalization and phase wrapping are correct.
-- `geometric_control.c` is integrated into `resonant_scheduler.c`: metric updates after
-  `update_order_parameter()`, Ricci curvature factor in priority calculations, chiral anomaly
-  detection during sync.
-
-## Remaining Work
-
-- Verify QuantumOS C build via WSL (`make`)
-- BUG 10 (curvature.ts epsilon) is low priority — callers should scale `stepSize`
-- WASM bridge path configuration for multi-environment deployment
-- Document berry.ts even-dimension precondition in code
+# QuantumOS — Contributor & Agent Guide
+
+Orientation for anyone (human or AI agent) working in this repo. For the *architecture*, read
+[`docs/adr/`](docs/adr/) — 21 ADRs recording every major decision with `file:line` evidence and
+honest limits. For the *history*, read [`CHANGELOG.md`](CHANGELOG.md).
+
+## What this is
+
+A capability-secure, quantum-aware x86-64 microkernel that boots under QEMU, on real hardware
+(GRUB ISO), and [in a browser](https://flaukowski.github.io/QuantumOS/) (qemu-wasm). Ring-3
+citizens hold only their granted capabilities; the host-side MCP toolkit
+(`quantumos-host-tools`, `scripts/`) lets an agent operate a running kernel with a verified boot
+identity on every result. North star: **agents operate the OS; safety is structural (kernel
+capabilities + attestation), not bolted on — conscience before wallet.**
+
+## Layout
+
+- `kernel/src/` — the kernel (flat; there is **no** `kernel/{core,hal,quantum}` split despite
+  older docs). Boot roster of ring-3 citizens is `kernel/src/citizens.c` (ADR-0002).
+- `user/` — ring-3 citizens (C) + `libq` runtime; `rootfs/` — initrd contents; `/bin` ELFs.
+- `scripts/` — the host Python toolkit (MCP server, `QosVM`/`QosSociety` bridge, gateways).
+- `docs/adr/` — architecture decision records (the authoritative as-built reference).
+- `.github/workflows/` — `ci.yml` (18 jobs), `browser-demo.yml`, `quantum-phase3.yml`, `release.yml`.
+
+## Build & test (WSL/Linux)
+
+```bash
+make BUILD_TYPE=debug          # build the kernel (elf + elf32)
+make run                       # boot it interactively in QEMU (-serial stdio)
+make ci-smoke                  # the ~60-gate suite: boot + assert un-echoable signals
+make build/x86_64/kernel.iso   # GRUB ISO (needs grub-pc-bin xorriso mtools)
+make ci-smoke-iso              # boot the real GRUB handoff
+```
+
+The version string is single-sourced from the root `VERSION` file into the kernel banner via
+`-DQOS_VERSION` (see the Makefile). Bump `VERSION`; do not hardcode a version anywhere.
+
+## House rules (enforced by review + CI)
+
+- **Integer-only where it matters** (ADR-0004): ring 0 runs with no `fxsave`/`fxrstor`, so no
+  FPU in kernel/IRQ context. Fixed-point (Q15/Q16.16) and integer SHA-256 only.
+- **Single-core by design** (ADR-0005): the concurrency model is `cli`'d syscalls + irqsave
+  brackets against the IF=1 health monitor. Do not introduce code that assumes SMP.
+- **Anti-vacuous gates** (ADR-0016): every feature lands with a CI gate that asserts a runtime
+  signal it could not emit unless the feature works. **Revert-and-confirm-fail** on every gate.
+  A boot-only/crash-free check is not a gate.
+- **Honest slices** (ADR-0017): ship the narrow real thing, document its boundary, report
+  negative results plainly. Never overclaim (e.g. "quantum" entropy is `prng` without a qseed).
+- **Every code (`.c`/`.h`) PR touches a doc** (Documentation Sync CI) and is **clang-format-18
+  clean** (Code Quality runs it on all C). `cppcheck --error-exitcode` must pass.
+- Gate timeouts are single-sourced in the `Makefile`; never duplicate a `timeout` literal in
+  `ci.yml`.
+
+## Working discipline (how changes land clean here)
+
+Recon (`file:line`) → design brief → **adversarial attack panel before writing risky code**
+(hardware/protocol/concurrency/capability/CI lenses — it catches a blocker nearly every phase) →
+implement with a meaningful gate → WSL build + gate + revert-and-confirm-fail → PR (trailer
+`Co-Authored-By`) → merge on green → refresh the ISO if the kernel changed. Git operations run
+from **Git Bash** (autocrlf=true), not `wsl` git (which sees every file as CRLF-modified).
+
+## Known scaling walls (lift deliberately, per ADR)
+
+`MANIFEST_MAX_ENTRIES` 8 (agentd at 7/8), `FIELD_REGION_COUNT` 8 (7/8 used), `MAX_PEERS` 4,
+`MAX_SERVICES` 32, audit ring 256, PMM hardcoded to 128 MB. The QDSK disk homes are **frozen**
+(audit at `count-27`); anything touching the disk layout must respect the `ci-smoke-disk-upgrade`
+gate (ADR-0007).

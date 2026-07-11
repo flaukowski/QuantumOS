@@ -222,7 +222,8 @@ struct (`udp_req_t` in `user/usys.h`; the usys wrappers cap out at three
 registers — the classic socketcall shape): `UDP_BIND` (port 0 =
 ephemeral, from 49152 up), `UDP_SENDTO`, `UDP_RECVFROM`, `UDP_CLOSE`.
 Everything is non-blocking (`WOULD_BLOCK` = poll again), and every op is
-gated on the same `DEVICE_ID_NET` capability held by `qsh` alone — the
+gated on the same `DEVICE_ID_NET` capability (held by the citizens granted
+`grant_net` — `qsh`, `httpd`, and `fieldsyncd`) — the
 capless `ghost_test` proves the bind denial by attack every boot, NIC or
 no NIC (`NETC: capless UDP bind denied (EPERM)`).
 
@@ -507,7 +508,7 @@ couples `ghostd`'s *living* attractor field; the kernel holographic field
 - UDP: 4 sockets, 4-deep rings, 1472-byte datagrams (no IP
   fragmentation), no UDP TX checksum (0 is legal for IPv4), no
   broadcast/multicast send.
-- Single rtl8139, IPv4 only. Only `qsh` holds the network capability
+- Single rtl8139, IPv4 only. The network capability is held by `qsh`, `httpd`, and `fieldsyncd`
   today; one kernel resolve and one TCP connection in flight at a time.
 - Static mode is a single flat /24 with no gateway (no off-link routing)
   and no DNS server on the peer segment; it is the two-guest enabler, not
