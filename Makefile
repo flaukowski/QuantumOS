@@ -207,6 +207,11 @@ $(BUILD_DIR)/%.o: $(KERNEL_DIR)/src/%.c
 	@echo "Compiling $<..."
 	$(CC) $(CFLAGS) -c $< -o $@
 
+# The kernel banner embeds QOS_VERSION (from the VERSION file, injected via
+# CFLAGS). Declare main.o's dependency on VERSION so a version bump rebuilds the
+# banner even on an incremental build (a full `make clean` build always does).
+$(BUILD_DIR)/main.o: VERSION
+
 # Assembly files compile to *_asm.o to avoid collision with C files of same name
 $(BUILD_DIR)/%_asm.o: $(KERNEL_DIR)/src/%.S
 	@mkdir -p $(dir $@)

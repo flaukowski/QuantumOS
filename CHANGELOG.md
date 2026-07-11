@@ -5,6 +5,38 @@ All notable changes to QuantumOS. The project uses semantic-ish milestone versio
 groupings of the 126 merged PRs (#7–#183), recorded here so the history reads honestly.
 Full per-PR provenance: `git log` and the PR list on GitHub.
 
+## [0.5.0] — 2026-07-11 — Agent-reachable QPU, hardening, dead-code payoff
+
+Post-v0.4.0 increments landed autonomously through the panel → gate (revert-and-confirm)
+→ merge pipeline. PRs #187–#190.
+
+### Added
+- **`qos_qpu_submit` — the 22nd MCP tool** (#189): an agent can now run a named quantum
+  circuit (`bell` / `ghz` / `grover`) on the in-OS QPU broker and get the exact integer
+  result back — capability-gated (only `swarm_svc` holds the submit cap), quota-bounded
+  (`qsub_max`), and recorded in the authority ledger (`AUDIT_QSUBMIT`). The
+  conscience-before-wallet demo made agent-facing. Gated by `ci-smoke-qsubmit`.
+- **Published to PyPI**: `pip install quantumos-host-tools` is live; tagged releases now
+  auto-publish (the `PYPI_API_TOKEN` secret is wired into `release.yml`).
+
+### Fixed
+- **PMM heap-reservation gap** (#187): the kernel heap's backing frames are now reserved
+  in the physical allocator, so the low-first rover can never hand a live-heap frame to a
+  page table or ELF segment (an arbitrary-corruption path reachable only under a large
+  residency storm). New `PMMHEAP` boot self-test, revert-confirmed.
+- **Multiboot2-magic trap** (#187): the kernel is Multiboot1-only, so an MB2 magic is now
+  refused with an honest panic instead of parsing a v2 info block as v1 (which would lose
+  the cmdline and wild-write the framebuffer). New `MB2REJECT` self-test.
+- **`qos_memory_import` docstring** (#190): corrected — each memory's Kannaka similarity
+  *is* carried into its slot energy (the docstring had claimed it was not).
+- **Society error identity** (#190): the society tools no longer misattribute a failure to
+  the unrelated single-VM identity (`_society_err`).
+
+### Changed
+- **Dead-code payoff** (#188): deleted the unwired `cap_transfer` helper, the
+  declared-never-defined `apic_*` prototypes, and five stale duplicate bare headers under
+  `kernel/include/` — −641 lines, proven dead by a green `ci-smoke`.
+
 ## [0.4.0] — 2026-07-11 — Quantum stack, agent societies, hardened (first tagged release)
 
 The agent-native arc completed and battle-tested. PRs #151–#183.
