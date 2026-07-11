@@ -237,6 +237,10 @@ static uint64_t sys_send(uint32_t pid, uint64_t user_ptr, uint64_t len) {
 
     uint32_t dest = 0;
     if (cap_find(pid, CAP_RESOURCE_IPC, CAP_WRITE, &dest) != CAP_SUCCESS) {
+        /* Record the ownership denial so a citizen probing IPC caps it does not
+         * hold is visible in the authority ledger (ADR-0009 deny-coverage gap).
+         * First-match: no specific destination, so resource_id = ANY. */
+        audit_deny(pid, CAP_RESOURCE_IPC, AUDIT_RESOURCE_ANY, CAP_WRITE);
         return SYSCALL_EPERM;
     }
 
@@ -271,6 +275,10 @@ static uint64_t sys_send_to(uint32_t pid, uint64_t dest, uint64_t user_ptr, uint
     }
 
     if (cap_find_resource(pid, CAP_RESOURCE_IPC, CAP_WRITE, (uint32_t)dest) != CAP_SUCCESS) {
+        /* Record the ownership denial (ADR-0009 deny-coverage gap): a targeted
+         * send to an address the caller holds no cap for now appears in the
+         * authority ledger, naming the exact destination it tried to reach. */
+        audit_deny(pid, CAP_RESOURCE_IPC, (uint32_t)dest, CAP_WRITE);
         return SYSCALL_EPERM;
     }
 

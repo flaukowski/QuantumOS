@@ -420,6 +420,13 @@ def _exercise_audit(vm):
     if not any(e["kind"] == "DENY" and e["resource_type"] == "QRNG" for e in a["entries"]):
         _fail("no QRNG DENY — the qrand audit_deny honesty fix is not live")
     print("OK: audit records a QRNG DENY (capless qrand — the claimed coverage is now real)")
+    # Deny-coverage completion (ADR-0009): sys_send/sys_send_to used to return
+    # EPERM with NO ledger entry, so a citizen probing IPC caps it does not hold
+    # was invisible to the authority ledger. paradox-test's capless send_to now
+    # records a real IPC DENY — assert it (un-echoable; the header claim made true).
+    if not any(e["kind"] == "DENY" and e["resource_type"] == "IPC" for e in a["entries"]):
+        _fail("no IPC DENY — the sys_send/send_to ownership-denial audit hook is not live")
+    print("OK: audit records an IPC DENY (capless send — the ledger deny-coverage gap is closed)")
     seqs = [e["seq"] for e in a["entries"]]
     if seqs != sorted(seqs) or len(set(seqs)) != len(seqs):
         _fail(f"audit seq not strictly increasing: {seqs[:12]}")

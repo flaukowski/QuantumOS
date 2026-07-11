@@ -90,10 +90,12 @@ provably came from disk — this boot has emitted zero entries yet
   auditable delegator (ADR-0008); an actor-bearing record is the named
   precondition for any ring-3 SYS_CAP_REVOKE and for multi-delegator expansion
   (ADR-0020).
-- **IPC and net ownership EPERMs are unaudited** (audit.h:28-30): capless
-  `sys_send`/`sys_send_to` return EPERM with no DENY record
-  (syscall.c:239-241, 273-275) — a citizen probing IPC caps it does not hold is
-  invisible to the "authority ledger". Closing this is proposed in ADR-0019.
+- **IPC denials are now audited; net denials are not yet** (audit.h:30-32): capless
+  `sys_send`/`sys_send_to` used to return EPERM with no DENY record — a citizen probing
+  IPC caps it does not hold was invisible to the ledger. Both now record an IPC DENY
+  (naming the exact target for `send_to`, or ANY for the first-match `send`), gated by
+  paradox-test's capless send in `ci-smoke-mcp`. The analogous **net** ownership denials
+  (`SYS_UDP`/`SYS_TCP`/`SYS_RESOLVE`) remain unaudited — the residual gap.
 - No EXPIRE kind: expired caps are refused but never freed until owner death
   (audit.h:20-23), so absence of an entry does not mean the cap stayed live.
   TRANSFER is likewise unrecorded because `cap_transfer` has no caller

@@ -29,7 +29,8 @@
  * SYS_CAP_REVOKE is ever exposed to ring 3, the denied path MUST audit_deny
  * and the forced path needs an actor-bearing record. DENY coverage is the set
  * of cap-gated syscalls hooked in syscall.c (quantum, com2, console, field,
- * spawn); IPC and net ownership denials are not yet logged (documented gap).
+ * spawn, and IPC send/send_to — a capless send now records an IPC DENY);
+ * net ownership denials are still not logged (a remaining documented gap).
  *
  * CONCURRENCY: audit_record is called from BOTH syscall context AND the IF=1
  * service health monitor (a watchdog-reborn citizen re-mints caps from that
