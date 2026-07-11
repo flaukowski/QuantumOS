@@ -111,7 +111,7 @@ OBJECTS = $(KERNEL_SOURCES:$(KERNEL_DIR)/src/%.c=$(BUILD_DIR)/%.o) \
 -include $(OBJECTS:.o=.d)
 
 # Targets
-.PHONY: all clean kernel run debug dump test test-list test-coverage ci-smoke ci-smoke-disk ci-smoke-net ci-smoke-http ci-smoke-httpd ci-smoke-quiet ci-smoke-resonant ci-smoke-qseed ci-smoke-swarm ci-smoke-mcp ci-smoke-mcp-gate ci-smoke-qsubmit ci-smoke-society ci-smoke-society-gate ci-smoke-society-agents ci-smoke-society-agents-gate ci-smoke-society3 ci-smoke-society3-gate ci-smoke-iso ci-smoke-kbd ci-smoke-noserial ci-smoke-screen swarm-pingpong
+.PHONY: all clean kernel run debug dump test test-list test-coverage ci-smoke ci-smoke-disk ci-smoke-disk-upgrade ci-smoke-net ci-smoke-http ci-smoke-httpd ci-smoke-quiet ci-smoke-resonant ci-smoke-qseed ci-smoke-swarm ci-smoke-mcp ci-smoke-mcp-gate ci-smoke-qsubmit ci-smoke-society ci-smoke-society-gate ci-smoke-society-agents ci-smoke-society-agents-gate ci-smoke-society3 ci-smoke-society3-gate ci-smoke-iso ci-smoke-kbd ci-smoke-noserial ci-smoke-screen swarm-pingpong
 
 all: kernel
 
@@ -1354,6 +1354,78 @@ ci-smoke-disk: kernel
 	@echo "SUCCESS: corrupted field detected, cold-started honestly, fs unaffected — SECTION ISOLATION PROVEN"
 	@echo ""
 	@echo "=== Persistence Test PASSED ==="
+
+# CI Smoke Test (disk UPGRADE path, epic #177): ci-smoke-disk above always
+# writes AND reads with the SAME kernel, so it never exercises the cross-version
+# case where an OLDER kernel's on-disk FIELD descriptor meets a NEWER field
+# geometry. #177 froze the audit-ledger home (AUDIT_HOME_TOP_OFFSET) precisely so
+# a field-geometry bump can never relocate — and thus never discard — the
+# format-unchanged authority ledger on an existing disk. This gate proves BOTH
+# halves, non-vacuously:
+#   1. the on-disk audit descriptor names EXACTLY the frozen home (count-27) —
+#      any change to audit_home_lba() moves it and fails this assert. The
+#      compile-time _Static_assert pins the CONSTANT; this pins the FUNCTION's
+#      actual on-disk result.
+#   2. a superblock carrying a PRE-#177 field descriptor (old home count-6, old
+#      4-region size 2456) restores the ledger anyway and cold-starts the field
+#      GRACEFULLY (the lba/bytes mismatch short-circuits before any off-the-end
+#      blob read from the stale LBA).
+DISK_UPG_IMG = $(BUILD_DIR)/disk-upgrade.img
+ci-smoke-disk-upgrade: kernel
+	@echo "=== QuantumOS Disk Upgrade-Path Test (epic #177 frozen audit home) ==="
+	@rm -f $(DISK_UPG_IMG)
+	@dd if=/dev/zero of=$(DISK_UPG_IMG) bs=1M count=2 2>/dev/null
+	@echo "[boot 1] write a valid QDSK disk (fs + field + audit) with the current kernel..."
+	@( printf 'write /data/note upgrade-probe\nimprint the field abides\nsync\n'; sleep 8 ) | \
+		timeout 10s qemu-system-x86_64 -kernel $(BUILD_DIR)/kernel.elf32 \
+		-drive file=$(DISK_UPG_IMG),format=raw,if=ide -serial stdio -m 128M \
+		-display none -no-reboot 2>&1 | tee /tmp/qemu-upg-boot1.log || true
+	@if ! grep -q "qsh: sync ok" /tmp/qemu-upg-boot1.log 2>/dev/null; then \
+		echo "ERROR: boot 1 sync failed — no valid disk to upgrade"; \
+		cat /tmp/qemu-upg-boot1.log 2>/dev/null || true; \
+		echo ""; echo "=== Upgrade Test FAILED ==="; exit 1; \
+	fi
+	@# (1) FROZEN-HOME GUARD: the superblock's audit descriptor (QDSK_AUDIT_LBA_OFF
+	@# = byte 44) must name LBA count-27 = 4096-27 = 4069 on this 2 MiB image.
+	@# od -tu4 reads the little-endian u32 the kernel wrote.
+	@AUDIT_LBA=$$(dd if=$(DISK_UPG_IMG) bs=1 skip=44 count=4 2>/dev/null | od -An -tu4 | tr -d ' '); \
+	if [ "$$AUDIT_LBA" != "4069" ]; then \
+		echo "ERROR: audit home is NOT frozen at count-27 (4069) — superblock names $$AUDIT_LBA."; \
+		echo "       audit_home_lba() moved; a field-geometry upgrade would now discard the ledger."; \
+		echo ""; echo "=== Upgrade Test FAILED ==="; exit 1; \
+	fi
+	@echo "SUCCESS: audit ledger home frozen at LBA 4069 (count-27) — survives field growth"
+	@# (2) Simulate a PRE-#177 disk: rewrite ONLY the FIELD descriptor to the old
+	@# geometry — field_lba (byte 32) = count-6 = 4090, field_bytes (byte 36) =
+	@# 2456 (24 + 4*8*76, the 4-region blob). Audit descriptor (byte 44+) is
+	@# untouched. python3 writes the two LE u32s unambiguously — a `printf '\xNN'`
+	@# is NOT portable (make runs recipes under /bin/sh, whose printf lacks \xHH
+	@# and would splat the literal string across the audit descriptor).
+	@python3 -c "f=open('$(DISK_UPG_IMG)','r+b'); f.seek(32); f.write((4090).to_bytes(4,'little')+(2456).to_bytes(4,'little')); f.close()"
+	@echo "[boot 2] boot the current kernel on the stale-field-descriptor disk..."
+	@( printf 'help\n'; sleep 8 ) | \
+		timeout 10s qemu-system-x86_64 -kernel $(BUILD_DIR)/kernel.elf32 \
+		-drive file=$(DISK_UPG_IMG),format=raw,if=ide -serial stdio -m 128M \
+		-display none -no-reboot 2>&1 | tee /tmp/qemu-upg-boot2.log || true
+	@# The ledger must RESTORE — its frozen home is untouched by the field change.
+	@if ! grep -q "AUDIT: restored ledger from disk" /tmp/qemu-upg-boot2.log 2>/dev/null; then \
+		echo "ERROR: the authority ledger was LOST across a field-descriptor upgrade"; \
+		cat /tmp/qemu-upg-boot2.log 2>/dev/null || true; \
+		echo ""; echo "=== Upgrade Test FAILED ==="; exit 1; \
+	fi
+	@# ...and the FIELD must cold-start gracefully from the implausible descriptor.
+	@if ! grep -q "FIELD: superblock names an implausible field section" /tmp/qemu-upg-boot2.log 2>/dev/null; then \
+		echo "ERROR: stale field descriptor did not trigger a graceful cold start"; \
+		cat /tmp/qemu-upg-boot2.log 2>/dev/null || true; \
+		echo ""; echo "=== Upgrade Test FAILED ==="; exit 1; \
+	fi
+	@if grep -q "FIELD: restored slots from disk" /tmp/qemu-upg-boot2.log 2>/dev/null; then \
+		echo "ERROR: field FALSELY restored from a pre-#177 descriptor"; \
+		echo ""; echo "=== Upgrade Test FAILED ==="; exit 1; \
+	fi
+	@echo "SUCCESS: ledger restored + field cold-started across a field-geometry upgrade"
+	@echo ""
+	@echo "=== Disk Upgrade-Path Test PASSED ==="
 
 # CI Smoke Test (networking): boot WITH an rtl8139 NIC on QEMU's user-mode
 # network (SLIRP), and prove the link layer works end to end. SLIRP's gateway
