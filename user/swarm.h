@@ -71,6 +71,11 @@
     0x03u /* -> SYS_QPU broker: payload = opaque circuit (epic #149 B1).
            * Reply: [0x03][status u8][result QC_RESULT_LEN on OK].
            * status: 0=OK, 1=refused (quota/EPERM), 2=broker/EINVAL error. */
+#define SWARM_OP_KEY                                                                               \
+    0x04u /* host admits the swarm-plane group session key (ADR-0019): payload =
+           * [0x04][32-byte key]. swarm_svc forwards it to fieldsyncd over IPC so
+           * the field-coupling wire can be HMAC-authenticated. No reply. Trust
+           * reduces to control of the host's COM2 channel (the key root). */
 
 /* ---- Lamport parameters ---- */
 #define LAMPORT_BITS 256    /* SHA-256 digest width */

@@ -93,6 +93,33 @@ static void note_aggregate(const char *buf, long got) {
     }
 }
 
+/* The host-admitted swarm-plane group session key (ADR-0019). Delivered from
+ * swarm_svc (the sole COM2 holder) over IPC as "K"+32 bytes. Held in memory: a
+ * watchdog rebirth loses it (same class as the ghostd-IPC restart limitation);
+ * the host re-admits. Until it arrives, the wire is unauthenticated exactly as
+ * before — increment B-frame-auth makes possession of this key load-bearing. */
+static uint8_t session_key[32];
+static int have_key;
+
+/* Capture a "K"+32-byte key handoff from swarm_svc. Dual-sited like
+ * note_aggregate — the key can race a snapshot reply. `got` is recv_msg's
+ * return, which is the SENDER PID (non-zero) on a message, 0 on an empty queue
+ * — NOT a byte count — so the message is identified by its 'K' tag, not length.
+ * swarm_svc always sends exactly "K"+32 bytes, and the caller's buffer is
+ * zero-initialized and >= 33 bytes, so the 32-byte read is always in bounds.
+ * 'K' (0x4B) cannot collide with agentd's 'A' or ghostd's small op bytes. */
+static void note_key(const char *buf, long got) {
+    if (got != 0 && buf[0] == 'K') {
+        for (int i = 0; i < 32; i++) {
+            session_key[i] = (uint8_t)buf[i + 1];
+        }
+        if (!have_key) {
+            write_str("FSKEY: swarm-plane session key installed");
+        }
+        have_key = 1;
+    }
+}
+
 /* The configured peer set (epic #139 N-way society): up to GHOST_MAX_PEERS
  * packed IPv4 addresses read from SYSINFO_PEER_COUNT / SYSINFO_PEER<index>. A
  * 2-VM boot has exactly one. NOTE: this is the packed IP, not a key — source-IP
@@ -136,9 +163,11 @@ static int ghost_snapshot(uint8_t *phase_out) {
                 }
                 return 1;
             }
-            /* Not our reply. An agentd aggregate handoff can race the
-             * snapshot reply — capture it here rather than dropping it. */
+            /* Not our reply. An agentd aggregate handoff OR a swarm_svc key
+             * handoff can race the snapshot reply — capture it here rather
+             * than dropping it. */
             note_aggregate(buf, s);
+            note_key(buf, s);
         }
         heartbeat();
         yield();
@@ -221,11 +250,13 @@ void _start(void) {
          * ghost snapshot replies arriving here are impossible (each snapshot
          * request is awaited to completion before the loop continues). */
         {
-            char abuf[16];
+            char abuf[40]; /* fits "A"+8hex (agentd) and "K"+32-byte key (swarm) */
             for (unsigned i = 0; i < sizeof(abuf); i++) {
                 abuf[i] = 0;
             }
-            note_aggregate(abuf, recv_msg(abuf, sizeof(abuf)));
+            long got = recv_msg(abuf, sizeof(abuf));
+            note_aggregate(abuf, got);
+            note_key(abuf, got);
         }
 
         /* Drain any peer frames. Dispatch on MAGIC FIRST, then per-type size:

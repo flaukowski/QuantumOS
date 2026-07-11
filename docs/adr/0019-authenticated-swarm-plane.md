@@ -82,6 +82,16 @@ host `hmac.new(key, msg, sha256)`. Gated by the `HMAC256: self-test OK (RFC4231 
 `ci-smoke` (revert-confirmed: a corrupted vector prints `SELF-TEST FAILED` and the gate reddens).
 Increment B (below) wires it onto the frame.
 
+**Increment B scope refinement (2026-07-11):** the key cap is **boot-minted** `swarm_svc→fieldsyncd`
+in `citizens.c` (the existing `agentd→fieldsyncd` precedent, `cap_create(swarm_pid,
+CAP_RESOURCE_IPC, fs_pid, CAP_WRITE, ...)` — no kernel change), rather than the generic
+`service_definition_t.ipc_peer` + `start_slot` re-mint the panel proposed. Rationale: a
+`fieldsyncd` watchdog rebirth **already** loses its ghostd IPC cap and stops coupling today (a
+documented existing limitation), so a key outage on rebirth is the *same* pre-existing failure
+class, not a new regression the auth introduces. The generic IPC re-mint (fixing both the ghostd
+cap and the key cap on rebirth) is deferred to its own increment. This keeps B off the load-bearing
+`start_slot` cli path.
+
 
 A 3-lens implementation-design panel resolved the wiring against the real code. Key finding:
 `fieldsyncd.c`'s `peer_pk[]` is a **packed IP** array (a review trap — "pk" = packed, not public

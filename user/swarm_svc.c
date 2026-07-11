@@ -344,6 +344,48 @@ static void handle_data(const uint8_t *payload, uint32_t len) {
             uint8_t err[2] = {SWARM_OP_QSUBMIT, (uint8_t)(r == -4 ? 1 : 2)};
             emit_frame(FRAME_DATA, err, sizeof(err));
         }
+    } else if (op == SWARM_OP_KEY) {
+        /* Host admits the swarm-plane group session key (ADR-0019): forward it
+         * to fieldsyncd over the boot-minted swarm_svc->fieldsyncd IPC send-cap
+         * so the field-coupling wire can be HMAC-authenticated. fieldsyncd's pid
+         * comes from the uncapped SYSINFO_PS text (the agentd/qtop pattern).
+         * No reply — the host does not depend on a guest ack for the key. */
+        if (len < 1 + 32) {
+            return;
+        }
+        static char ps[2048];
+        long pn = sysinfo(SYSINFO_PS, ps, sizeof(ps) - 1);
+        ps[(pn > 0) ? pn : 0] = '\0';
+        long fs_pid = 0;
+        for (long o = 0; ps[o]; o++) {
+            if ((o == 0 || ps[o - 1] == '\n') && ps[o] == 'P' && ps[o + 1] == 'S' &&
+                ps[o + 2] == ':' && ps[o + 3] == ' ') {
+                long p = 0, k = o + 4;
+                while (ps[k] >= '0' && ps[k] <= '9') {
+                    p = p * 10 + (ps[k] - '0');
+                    k++;
+                }
+                if (ps[k] == ' ' && ps[k + 1] == 'f' && ps[k + 2] == 'i' && ps[k + 3] == 'e' &&
+                    ps[k + 4] == 'l' && ps[k + 5] == 'd' && ps[k + 6] == 's' && ps[k + 7] == 'y') {
+                    fs_pid = p;
+                    break;
+                }
+            }
+        }
+        if (fs_pid == 0) {
+            logline("SWARM: key admit failed — fieldsyncd not in PS");
+            return;
+        }
+        char km[33];
+        km[0] = 'K';
+        for (int i = 0; i < 32; i++) {
+            km[i + 1] = (char)payload[1 + i];
+        }
+        if (send_to(fs_pid, km, 33) == 0) {
+            logline("SWARM: swarm-plane key forwarded to fieldsyncd");
+        } else {
+            logline("SWARM: key forward to fieldsyncd FAILED (no IPC cap?)");
+        }
     }
 }
 

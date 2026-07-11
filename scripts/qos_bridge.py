@@ -56,6 +56,7 @@ FRAME_SIG = 0x12
 SWARM_OP_STATUS = 0x01
 SWARM_OP_RECALL = 0x02
 SWARM_OP_QSUBMIT = 0x03  # host submits an opaque circuit to the SYS_QPU broker (epic #149 B1)
+SWARM_OP_KEY = 0x04      # host admits the swarm-plane group session key (ADR-0019)
 
 # ---- Lamport parameters (user/swarm.h) ------------------------------------
 LAMPORT_BITS = 256
@@ -797,6 +798,21 @@ class QosVM:
                         return payload
                     # stray PONG / late attestation frame / other op: ignore
         raise QosTimeout(f"no DATA reply for op {expect_op}")
+
+    def admit_key(self, key):
+        """Admit the swarm-plane group session key (ADR-0019) to this VM over the
+        attested COM2 channel: swarm_svc forwards it to fieldsyncd so the
+        field-coupling wire can be HMAC-authenticated. `key` is 32 bytes.
+        Fire-and-forget — the SWARM_OP_KEY guest handler sends no reply (the host
+        is the key root; it does not depend on a guest ack). Trust reduces to
+        control of this COM2 channel."""
+        self._ensure_verified()
+        key = bytes(key)
+        if len(key) != 32:
+            raise QosError(f"session key must be 32 bytes, got {len(key)}")
+        req = frame(FRAME_DATA, bytes([SWARM_OP_KEY]) + key)
+        with self._io_lock:
+            self._com2.sendall(req)
 
     def status(self, deadline_s=5.0):
         """ghostd field STATUS over COM2: {r, live}. (This is the ghostd
