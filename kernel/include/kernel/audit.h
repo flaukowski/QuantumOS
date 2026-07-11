@@ -27,10 +27,13 @@
  * REVOKE/REAP record the pid whose HOLDINGS changed, NOT the requester — a
  * forced ancestor revoke is indistinguishable from a self-revoke; before
  * SYS_CAP_REVOKE is ever exposed to ring 3, the denied path MUST audit_deny
- * and the forced path needs an actor-bearing record. DENY coverage is the set
- * of cap-gated syscalls hooked in syscall.c (quantum, com2, console, field,
- * spawn, and IPC send/send_to — a capless send now records an IPC DENY);
- * net ownership denials are still not logged (a remaining documented gap).
+ * and the forced path needs an actor-bearing record. DENY coverage now spans
+ * every gated authority site: the authorize() helper records a DENY for all
+ * device/disk/net/field caps (a capless SYS_UDP/TCP/RESOLVE is a DEV:NET DENY),
+ * and IPC send/send_to — which use raw cap_find, not authorize() — were the last
+ * gap, now closed (a capless send records an IPC DENY). Remaining non-coverage
+ * is by design, not omission: successful use is unrecorded (except the
+ * quota-bounded SPAWN/QSUBMIT), and there is no EXPIRE/TRANSFER kind.
  *
  * CONCURRENCY: audit_record is called from BOTH syscall context AND the IF=1
  * service health monitor (a watchdog-reborn citizen re-mints caps from that
