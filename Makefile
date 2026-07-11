@@ -2094,6 +2094,15 @@ ci-smoke-keyadmit: kernel
 	@echo "=== QuantumOS swarm-plane key-admit Test (ADR-0019) ==="
 	QOS_KERNEL=$(BUILD_DIR)/kernel.elf32 python3 scripts/test_qos_keyadmit.py
 
+# COM2 DATA-reply authentication (ADR-0019 Extension): a keyed VM's STATUS reply
+# carries a per-request nonce echo + HMAC tag the host verifies, so a tool
+# RESULT is provably fresh + unforged. Positive + replay-reject + forgery-reject
+# + fail-open (unkeyed status still plain). Revert-confirmed (neutering the guest
+# auth reply makes the keyed host reject the stripped-tag reply).
+ci-smoke-replyauth: kernel
+	@echo "=== QuantumOS COM2 reply-auth Test (ADR-0019 Extension) ==="
+	QOS_KERNEL=$(BUILD_DIR)/kernel.elf32 python3 scripts/test_qos_replyauth.py
+
 # Authenticated FSYN (ADR-0019 increment B-frame-auth): boots two 2-VM societies
 # and proves the per-frame HMAC gates coupling — same key couples, different
 # keys REJECT each other and do not synchronize. Revert-confirmed (neutering the
