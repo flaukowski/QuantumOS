@@ -3,6 +3,14 @@
 Date: 2026-07-11 (as-built record)
 Status: Accepted
 
+> **Update (2026-07-11).** The dead APIC declarations this ADR recorded as debt
+> (`apic_init`/`apic_timer_init`/`apic_send_eoi`/`apic_timer_handler` — declared, never
+> defined, never called) were deleted, together with the unwired `cap_transfer` helper
+> (ADR-0010/ADR-0020) and five stale duplicate bare headers under `kernel/include/`
+> (`boot.h`, `interrupts.h`, `memory.h`, `quantum_types.h`, `types.h` — superseded by the
+> `kernel/include/kernel/` copies everything actually includes). A dead-code sweep in the
+> #180/#181 tradition; the build + `ci-smoke` staying green is the proof they were dead.
+
 ## Context
 
 QuantumOS runs on exactly one CPU. This was never an accident of youth: it is the

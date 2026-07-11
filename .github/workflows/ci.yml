@@ -433,9 +433,11 @@ jobs:
         echo "=== Quantum Component Tests ===" > quantum_test_results.txt
         QUANTUM_FAILURES=0
 
-        # Check quantum headers exist
+        # Check quantum headers exist (the canonical header is under kernel/;
+        # the bare kernel/include/quantum_types.h duplicate was removed in the
+        # dead-code sweep — everything includes <kernel/quantum_types.h>).
         echo "Checking quantum headers..." >> quantum_test_results.txt
-        if [ -f kernel/include/quantum_types.h ]; then
+        if [ -f kernel/include/kernel/quantum_types.h ]; then
           echo "  [PASS] quantum_types.h found" >> quantum_test_results.txt
         else
           echo "  [FAIL] quantum_types.h missing" >> quantum_test_results.txt
@@ -451,16 +453,16 @@ jobs:
         # Verify quantum types are properly defined
         echo "" >> quantum_test_results.txt
         echo "Checking quantum type definitions..." >> quantum_test_results.txt
-        if grep -q "typedef.*qubit" kernel/include/quantum_types.h 2>/dev/null; then
+        if grep -q "qubit_handle_t" kernel/include/kernel/quantum_types.h 2>/dev/null; then
           echo "  [PASS] Qubit type defined" >> quantum_test_results.txt
         else
           echo "  [WARN] Qubit type not found" >> quantum_test_results.txt
         fi
 
-        if grep -q "typedef.*quantum_state" kernel/include/quantum_types.h 2>/dev/null; then
-          echo "  [PASS] Quantum state type defined" >> quantum_test_results.txt
+        if grep -q "quantum_process_type_t" kernel/include/kernel/quantum_types.h 2>/dev/null; then
+          echo "  [PASS] Quantum process type defined" >> quantum_test_results.txt
         else
-          echo "  [WARN] Quantum state type not found" >> quantum_test_results.txt
+          echo "  [WARN] Quantum process type not found" >> quantum_test_results.txt
         fi
 
         echo "" >> quantum_test_results.txt

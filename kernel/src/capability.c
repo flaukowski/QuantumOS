@@ -205,29 +205,6 @@ cap_result_t cap_derive(uint32_t parent_cap_id, uint32_t requester_pid, uint32_t
     return CAP_SUCCESS;
 }
 
-/* NOT audited (currently has no caller anywhere in the kernel). Before the
- * first caller ships, this MUST emit REVOKE(from) + GRANT(to) — a silent
- * ownership move would be an invisible authority change in the ledger. */
-cap_result_t cap_transfer(uint32_t cap_id, uint32_t from_pid, uint32_t to_pid) {
-    cap_slot_t *slot = resolve(cap_id);
-    if (!slot) {
-        return CAP_ERROR_INVALID_ID;
-    }
-    if (slot->cap.owner_id != from_pid) {
-        return CAP_ERROR_NOT_OWNER;
-    }
-    if (!(slot->cap.permissions & CAP_GRANT)) {
-        return CAP_ERROR_DENIED;
-    }
-    if (is_expired(&slot->cap)) {
-        return CAP_ERROR_EXPIRED;
-    }
-
-    slot->cap.owner_id = to_pid;
-    stats.transferred++;
-    return CAP_SUCCESS;
-}
-
 /* Recursively revoke every capability derived from parent_id. `kind` is the
  * ledger kind recorded for each freed child (AUDIT_REVOKE when reached from
  * an explicit cap_revoke, AUDIT_REAP from the reaper's

@@ -92,7 +92,6 @@ typedef struct {
 typedef struct {
     uint64_t created;
     uint64_t derived;
-    uint64_t transferred;
     uint64_t revoked;
     uint64_t checks_passed;
     uint64_t checks_denied;
@@ -115,9 +114,6 @@ cap_result_t cap_create(uint32_t owner_pid, cap_resource_type_t resource_type, u
  * permissions fails with CAP_ERROR_ESCALATION. */
 cap_result_t cap_derive(uint32_t parent_cap_id, uint32_t requester_pid, uint32_t new_owner_pid,
                         uint32_t permissions, uint64_t expiration, uint32_t *cap_id_out);
-
-/* Transfer ownership of a capability. Requires CAP_GRANT and ownership. */
-cap_result_t cap_transfer(uint32_t cap_id, uint32_t from_pid, uint32_t to_pid);
 
 /* Revoke a capability and (recursively) everything derived from it.
  * Requires ownership of the capability or of an ancestor with CAP_REVOKE. */
