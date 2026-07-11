@@ -38,7 +38,7 @@ SMP; defer UEFI, a libagent extraction, and a block filesystem — are recorded 
 | ADR | Status | Title |
 |-----|--------|-------|
 | [0018](0018-versioned-releases-and-package.md) | Accepted | Versioned releases and a published host package |
-| [0019](0019-authenticated-swarm-plane.md) | Proposed | Authenticate the swarm plane |
+| [0019](0019-authenticated-swarm-plane.md) | Accepted | Authenticate the swarm plane (FSYN + COM2 reply-auth shipped) |
 | [0020](0020-v1-contract-freeze.md) | Proposed | Freeze the v1 agent-surface contracts |
 | [0021](0021-honest-memory-1gb.md) | Proposed | Honest memory to the 1 GB identity window |
 | [0022](0022-com2-latency-scheduler-bound.md) | Proposed | COM2 round-trip latency is scheduler-cadence-bound |

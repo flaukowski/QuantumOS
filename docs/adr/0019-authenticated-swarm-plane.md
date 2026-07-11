@@ -1,7 +1,8 @@
 # 19. Authenticate the Swarm Plane
 
 Date: 2026-07-11
-Status: Accepted (core FSYN authentication shipped; FSYP / COM2-reply / insider extensions deferred)
+Status: Accepted (core FSYN authentication + the full COM2 reply-auth extension shipped — STATUS #199,
+QSUBMIT #200, attestation-by-default #201, consolidation #202; FSYP and insider hardening still deferred)
 
 > **Shipped 2026-07-11.** The core is live: the FSYN field-coupling frame now carries an
 > HMAC-SHA256 tag over `magic||seq||phase` under a host-admitted group session key, with a
