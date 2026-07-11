@@ -1324,10 +1324,13 @@ class QosSociety:
         return (self.a is not None and self.a.is_running()
                 and self.b is not None and self.b.is_running())
 
-    def boot(self, qseed_a, qseed_b, expect_a=_UNSET, expect_b=_UNSET, timeout=45):
+    def boot(self, qseed_a, qseed_b, expect_a=_UNSET, expect_b=_UNSET, timeout=45,
+             extra_tokens=""):
         """Boot two coupled members. qseed_a != qseed_b is REQUIRED (identical
         qseeds are a duplicate attested identity and a vacuous instant 'sync').
-        expect_a/expect_b verify against a DIFFERENT qseed (negative admission)."""
+        expect_a/expect_b verify against a DIFFERENT qseed (negative admission).
+        extra_tokens: additional cmdline tokens appended to BOTH members (e.g.
+        "agentdemo" for the society-of-societies gate, epic #178)."""
         with self._lock:
             if self.a is not None or self.b is not None:
                 raise QosError("society already booted — shut it down first")
@@ -1352,14 +1355,15 @@ class QosSociety:
             try:
                 # Directed udp= crossing must be EXACT: A localaddr=port_a sends to
                 # port_b; B mirrors. Get it backwards and phases flow one way only.
+                extra = f" {extra_tokens.strip()}" if extra_tokens.strip() else ""
                 self.a.boot(qseed=qseed_a, expect_qseed=expect_a, timeout=timeout,
                             quiet=False, arm_signals=False, mac=self._MAC_A,
-                            append_extra=f"ip={self._NET_A} peer={self._NET_B}",
+                            append_extra=f"ip={self._NET_A} peer={self._NET_B}{extra}",
                             netdev=("socket,id=n0,"
                                     f"udp=127.0.0.1:{port_b},localaddr=127.0.0.1:{port_a}"))
                 self.b.boot(qseed=qseed_b, expect_qseed=expect_b, timeout=timeout,
                             quiet=False, arm_signals=False, mac=self._MAC_B,
-                            append_extra=f"ip={self._NET_B} peer={self._NET_A}",
+                            append_extra=f"ip={self._NET_B} peer={self._NET_A}{extra}",
                             netdev=("socket,id=n0,"
                                     f"udp=127.0.0.1:{port_a},localaddr=127.0.0.1:{port_b}"))
                 # Both coupling NICs must come up — fieldsyncd logs this even under

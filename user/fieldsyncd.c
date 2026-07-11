@@ -27,12 +27,66 @@
 
 #define FSYN_PORT 4747
 #define FSYN_MAGIC 0x4E595346u /* 'FSYN' little-endian */
+#define FSYP_MAGIC 0x50595346u /* 'FSYP' little-endian — society aggregate (epic #178) */
 
 /* One UDP datagram: magic + this node's 256 phase bytes. 260 bytes. */
 typedef struct {
     uint32_t magic;
     uint8_t phase[GHOST_N];
 } fsyn_frame_t;
+
+/* Society-aggregate datagram (epic #178): fixed 16 bytes, sent alongside the
+ * phase frame each cycle once the local agentd has handed us its aggregate
+ * (continuous idempotent RESEND — the peer VM may boot later, and UDP may
+ * drop frames; receivers dedup by value). NEVER imprinted into the field:
+ * the design review rejected field-content replication (unauthenticated wire
+ * data must not become recallable/persistable field content); received
+ * values are only PRINTED for host-side verification. */
+typedef struct {
+    uint32_t magic;
+    uint32_t aggregate;
+    uint64_t reserved0;
+} fsyp_frame_t;
+
+/* The local society's aggregate (from agentd via IPC, "A<8hex>") and the
+ * last few DISTINCT peer aggregates already printed (print-once dedup so the
+ * ~1 Hz resend does not spam the console). All in-memory: a watchdog rebirth
+ * loses them — the same documented limitation as the ghostd IPC wiring. */
+static uint32_t local_agg;
+static int have_agg;
+static uint32_t seen_agg[4];
+static int seen_count;
+
+/* Parse 8 lowercase-hex digits; returns 0xffffffff on malformed input. */
+static uint32_t hex32(const char *p) {
+    uint32_t v = 0;
+    for (int i = 0; i < 8; i++) {
+        char c = p[i];
+        uint32_t d;
+        if (c >= '0' && c <= '9') {
+            d = (uint32_t)(c - '0');
+        } else if (c >= 'a' && c <= 'f') {
+            d = (uint32_t)(c - 'a') + 10u;
+        } else {
+            return 0xffffffffu;
+        }
+        v = (v << 4) | d;
+    }
+    return v;
+}
+
+/* Capture an "A<8hex>" aggregate handoff from agentd. Called from BOTH recv
+ * sites (the main-loop drain AND ghost_snapshot's reply wait, which would
+ * otherwise swallow-and-drop a message that races the snapshot reply). */
+static void note_aggregate(const char *buf, long got) {
+    if (got != 0 && buf[0] == 'A') {
+        uint32_t v = hex32(buf + 1);
+        if (v != 0xffffffffu) {
+            local_agg = v;
+            have_agg = 1;
+        }
+    }
+}
 
 /* The configured peer set (epic #139 N-way society): up to GHOST_MAX_PEERS
  * packed IPs read from SYSINFO_PEER_COUNT / SYSINFO_PEER<index>. A 2-VM boot
@@ -75,7 +129,9 @@ static int ghost_snapshot(uint8_t *phase_out) {
                 }
                 return 1;
             }
-            /* not our reply — ignore and keep waiting */
+            /* Not our reply. An agentd aggregate handoff can race the
+             * snapshot reply — capture it here rather than dropping it. */
+            note_aggregate(buf, s);
         }
         heartbeat();
         yield();
@@ -154,7 +210,23 @@ void _start(void) {
     for (;;) {
         heartbeat();
 
-        /* Drain any peer frames and fold them into ghostd. */
+        /* Drain a pending agentd aggregate handoff (epic #178). Non-blocking;
+         * ghost snapshot replies arriving here are impossible (each snapshot
+         * request is awaited to completion before the loop continues). */
+        {
+            char abuf[16];
+            for (unsigned i = 0; i < sizeof(abuf); i++) {
+                abuf[i] = 0;
+            }
+            note_aggregate(abuf, recv_msg(abuf, sizeof(abuf)));
+        }
+
+        /* Drain any peer frames. Dispatch on MAGIC FIRST, then per-type size:
+         * the old `break` on anything under 260 bytes treated a short frame
+         * as WOULDBLOCK and stalled the whole drain — but a datagram is
+         * CONSUMED by UDP_RECVFROM regardless of its size, so a runt must be
+         * `continue`d past, and only a genuinely empty ring (n < 0) ends the
+         * drain (the latent demux bug the epic #178 design review found). */
         for (int drain = 0; drain < 8; drain++) {
             udp_req_t r;
             for (unsigned i = 0; i < sizeof(r); i++) {
@@ -165,28 +237,82 @@ void _start(void) {
             r.buf = rbuf;
             r.len = sizeof(rbuf);
             long n = udp_(UDP_RECVFROM, &r);
-            if (n < (long)sizeof(fsyn_frame_t)) {
-                break; /* WOULDBLOCK or a runt */
+            if (n < 0) {
+                break; /* WOULDBLOCK — ring empty */
             }
-            const fsyn_frame_t *f = (const fsyn_frame_t *)rbuf;
-            if (f->magic != FSYN_MAGIC) {
-                continue; /* not ours — drop */
+            if (n < 4) {
+                continue; /* consumed runt — too short for any magic */
             }
+            uint32_t magic = (uint32_t)rbuf[0] | ((uint32_t)rbuf[1] << 8) |
+                             ((uint32_t)rbuf[2] << 16) | ((uint32_t)rbuf[3] << 24);
             uint32_t src = (uint32_t)r.ip[0] | ((uint32_t)r.ip[1] << 8) |
                            ((uint32_t)r.ip[2] << 16) | ((uint32_t)r.ip[3] << 24);
-            /* Only fold frames from a CONFIGURED peer — a forged/stray source
-             * on the shared L2 (or our own echo) never reaches ghostd's slots. */
+            /* Only accept frames from a CONFIGURED peer — a forged/stray
+             * source on the shared L2 (or our own echo) never reaches
+             * ghostd's slots or the console. */
             if (!in_peer_set(src)) {
                 continue;
             }
-            ghost_couple(f->phase, src);
-            log_ip("FIELDSYNC: frame from ", src);
+            if (magic == FSYN_MAGIC && n >= (long)sizeof(fsyn_frame_t)) {
+                const fsyn_frame_t *f = (const fsyn_frame_t *)rbuf;
+                ghost_couple(f->phase, src);
+                log_ip("FIELDSYNC: frame from ", src);
+            } else if (magic == FSYP_MAGIC && n >= (long)sizeof(fsyp_frame_t)) {
+                /* A peer society's aggregate (epic #178). PRINT once per
+                 * distinct value for host-side verification — never imprint:
+                 * unauthenticated wire data must not become field content. */
+                const fsyp_frame_t *p = (const fsyp_frame_t *)rbuf;
+                int dup = 0;
+                for (int i = 0; i < seen_count; i++) {
+                    if (seen_agg[i] == p->aggregate) {
+                        dup = 1;
+                    }
+                }
+                if (!dup) {
+                    if (seen_count < 4) {
+                        seen_agg[seen_count++] = p->aggregate;
+                    }
+                    char b[64];
+                    int o = ghost_put(b, 0, "FIELDSYNC: peer aggregate a");
+                    for (int i = 7; i >= 0; i--) {
+                        uint32_t d = (p->aggregate >> (i * 4)) & 0xF;
+                        b[o++] = (char)(d < 10 ? '0' + d : 'a' + d - 10);
+                    }
+                    b[o] = 0;
+                    write_str(b);
+                }
+            }
+            /* other magics: not ours — drop */
         }
 
         /* ~1 Hz: snapshot our field and send it to EACH peer (N-1 unicasts on
-         * the shared L2 — the mean field is all-to-all). */
+         * the shared L2 — the mean field is all-to-all). The society
+         * aggregate rides the same cadence as its own fixed 16-byte frame
+         * (epic #178): continuous idempotent resend, so a peer that boots
+         * later (the society gate boots VMs SEQUENTIALLY) or loses datagrams
+         * still converges; receivers dedup by value. */
         if (ticks() - last_send >= 100) {
             last_send = ticks();
+            if (have_agg) {
+                fsyp_frame_t pout;
+                pout.magic = FSYP_MAGIC;
+                pout.aggregate = local_agg;
+                pout.reserved0 = 0;
+                for (int pi = 0; pi < peer_count; pi++) {
+                    udp_req_t s;
+                    for (unsigned i = 0; i < sizeof(s); i++) {
+                        ((unsigned char *)&s)[i] = 0;
+                    }
+                    s.sock = sock;
+                    for (int i = 0; i < 4; i++) {
+                        s.ip[i] = (uint8_t)((peer_pk[pi] >> (8 * i)) & 0xFF);
+                    }
+                    s.port = FSYN_PORT;
+                    s.buf = &pout;
+                    s.len = sizeof(pout);
+                    udp_(UDP_SENDTO, &s); /* WOULDBLOCK ok — next round retries */
+                }
+            }
             fsyn_frame_t out;
             out.magic = FSYN_MAGIC;
             if (ghost_snapshot(out.phase)) {

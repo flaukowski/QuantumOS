@@ -1125,6 +1125,15 @@ ci-smoke: kernel
 		grep -E "AGENT|AGENTSUB" /tmp/qemu-boot.log 2>/dev/null || true; \
 		echo ""; echo "=== Smoke Test FAILED ==="; exit 1; \
 	fi
+	@# Society-of-societies handoff (epic #178): the orchestrator computed its
+	@# society's qseed-salted aggregate and handed it to fieldsyncd (which
+	@# broadcasts it to coupled peers; single-VM boots just hold it). Inside
+	@# the DEMO OK conjunction — a dead handoff cannot ship green.
+	@if ! grep -q "AGENT: aggregate a" /tmp/qemu-boot.log 2>/dev/null; then \
+		echo "ERROR: society aggregate not handed off (AGENT: aggregate a...)"; \
+		grep -E "AGENT" /tmp/qemu-boot.log 2>/dev/null || true; \
+		echo ""; echo "=== Smoke Test FAILED ==="; exit 1; \
+	fi
 	@if grep -qE "AGENT BROKEN|AGENTD: DEMO BROKEN|AGENTSUB BROKEN" /tmp/qemu-boot.log 2>/dev/null; then \
 		echo "ERROR: agent demo reported a BROKEN step"; \
 		grep -E "AGENT BROKEN|AGENTD: DEMO BROKEN|AGENTSUB BROKEN" /tmp/qemu-boot.log 2>/dev/null || true; \
@@ -1969,6 +1978,20 @@ ci-smoke-society: kernel ci-smoke-society-gate
 ci-smoke-society-gate:
 	@echo "=== QuantumOS Agent Society Test (epic #131) ==="
 	timeout -k 5 $(SOCIETY_GATE_TIMEOUT) python3 scripts/test_qos_society.py
+
+# Society of societies (epic #178): TWO kernels, each running its OWN complete
+# agent society (agentdemo token), coupled AND exchanging qseed-salted society
+# aggregates over the FSYP wire — host-verified cross-appearance. A separate
+# gate from ci-smoke-society so the demo-free society timing stays untouched
+# (design-review finding); generous timeout because the agentdemo work rides
+# the same boots (the #171 lesson). Single-sourced like the others.
+SOCIETY_AGENTS_GATE_TIMEOUT ?= 420s
+
+ci-smoke-society-agents: kernel ci-smoke-society-agents-gate
+
+ci-smoke-society-agents-gate:
+	@echo "=== QuantumOS Society-of-Societies Test (epic #178, two societies) ==="
+	timeout -k 5 $(SOCIETY_AGENTS_GATE_TIMEOUT) python3 scripts/test_qos_society_agents.py
 
 # N-way society (epic #139): THREE kernels mean-field-couple on a shared mcast
 # L2. A separate gate/timeout from the 2-node one (a 3-body field converges

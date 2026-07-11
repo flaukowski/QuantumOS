@@ -428,6 +428,29 @@ again relocate the format-unchanged authority ledger's home — existing
 disks keep their durable ledger across the upgrade, and only the field
 section honestly cold-starts at the superblock geometry guard.
 
+**Society of societies (epic #178).** In a coupled boot each kernel runs its
+OWN complete agent society, and the two societies **exchange results**: after
+the division-of-labor verification, the orchestrator computes its society's
+AGGREGATE (FNV-1a over the three specialist results, salted with FNV-1a over
+the boot qseed's bytes so two members' aggregates provably differ), prints it
+inside the `DEMO OK` conjunction, and hands it to `fieldsyncd` over an IPC
+pair minted only in `agentdemo` boots (agentd discovers the pid via the
+uncapped `SYSINFO_PS` text — the qtop pattern). `fieldsyncd` broadcasts it to
+every configured peer as a fixed 16-byte **FSYP** frame riding the same ~1 Hz
+cadence and peer-source validation as the phase frames — a **continuous
+idempotent resend**, so a peer that boots later or loses datagrams still
+converges — and prints each DISTINCT received value once:
+`FIELDSYNC: peer aggregate a<hex>`. Received aggregates are **never imprinted
+into the field**: the design review rejected field-content replication
+(unauthenticated wire data must not become recallable or persistable field
+content); the printed line is verified HOST-side by the
+`test_qos_society_agents.py` gate, which recomputes both expected values from
+the compile-time scheme + each boot's qseed and asserts cross-appearance on
+both consoles (`ci-smoke-society-agents`). The same change fixed a latent
+`fieldsyncd` demux bug: the receive drain treated any datagram under 260
+bytes as WOULDBLOCK and stalled, so a short frame both vanished and ended the
+drain — dispatch is now magic-first with per-type size checks.
+
 `user/quantumd.c` is the essence of `kannaka-quantum`, and — unlike the two
 above — a **kernel-embedded service**, not a `/bin` program. `SYS_QRAND` and
 `SYS_QSEED` are capability-gated (a capless `/bin` caller gets EPERM by
