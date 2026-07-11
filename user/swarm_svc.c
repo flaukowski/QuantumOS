@@ -288,16 +288,16 @@ static int ghost_query(const ghost_req_t *req, ghost_rep_t *rep) {
     return 0;
 }
 
-/* Emit a QSUBMIT reply, optionally authenticated (ADR-0019 Extension). When
- * `nonce` is non-NULL (a keyed submit) append the 16-byte nonce echo + HMAC-
- * SHA256(key, op || nonce || body[1..]) so the host proves the reply FRESH
- * (echo) and UNFORGED (tag) — the SAME preimage shape the STATUS reply-auth
- * uses (#199), so the two ops share one verify convention. A NULL nonce emits
+/* Emit a COM2 reply, optionally authenticated (ADR-0019 Extension). ONE emit
+ * path for every op (STATUS + QSUBMIT): when `nonce` is non-NULL (keyed request)
+ * append the 16-byte nonce echo + HMAC-SHA256(key, op || nonce || body[1..]) so
+ * the host proves the reply FRESH (echo) and UNFORGED (tag); a NULL nonce emits
  * the legacy plain body, byte-for-byte identical to the pre-auth wire (the
- * unkeyed ci-smoke path). body[0] is the op; body_len is 2 (error) or
- * 2 + QC_RESULT_LEN (DONE), so the tag covers the exact status/result bytes and
- * a truncation is caught by the host's length + MAC checks. */
-static void emit_qsubmit_reply(const uint8_t *body, uint32_t body_len, const uint8_t *nonce) {
+ * unkeyed ci-smoke path). body[0] is the op; body_len is the op's reply body
+ * size (6 for STATUS, 2 or 2+QC_RESULT_LEN for QSUBMIT), so the tag covers the
+ * exact body bytes and a truncation is caught by the host's length + MAC checks.
+ * The out/macin buffers are sized for the largest body (QSUBMIT DONE). */
+static void emit_authed_reply(const uint8_t *body, uint32_t body_len, const uint8_t *nonce) {
     if (!nonce) {
         emit_frame(FRAME_DATA, body, body_len);
         return;
@@ -340,38 +340,19 @@ static void handle_data(const uint8_t *payload, uint32_t len) {
             return;
         /* reply body (leading, so legacy 6-byte parsers still work): op,
          * r_q16 (LE u32), live (u8). */
-        uint8_t out[6 + 16 + 32]; /* body(6) + nonce echo(16) + HMAC tag(32) */
-        out[0] = SWARM_OP_STATUS;
-        out[1] = (uint8_t)(rep.r_q16);
-        out[2] = (uint8_t)(rep.r_q16 >> 8);
-        out[3] = (uint8_t)(rep.r_q16 >> 16);
-        out[4] = (uint8_t)(rep.r_q16 >> 24);
-        out[5] = rep.live;
-        /* Authenticated STATUS (ADR-0019 Extension): when we hold a key AND the
-         * request carried a 16-byte host nonce, echo the nonce and append
-         * HMAC(key, op||nonce||body) so the host can prove the reply is FRESH
-         * (nonce echo) and UNFORGED (tag). No nonce / no key -> the legacy
-         * 6-byte reply, so an unkeyed host (ci-smoke-mcp) is unaffected. */
-        if (have_key && len >= 1 + 16) {
-            for (int i = 0; i < 16; i++) {
-                out[6 + i] = payload[1 + i]; /* nonce echo */
-            }
-            /* MAC input: op(1) || nonce(16) || body(r_q16(4)+live(1)) = 22 bytes. */
-            uint8_t macin[1 + 16 + 5];
-            macin[0] = SWARM_OP_STATUS;
-            for (int i = 0; i < 16; i++) {
-                macin[1 + i] = payload[1 + i];
-            }
-            macin[17] = out[1];
-            macin[18] = out[2];
-            macin[19] = out[3];
-            macin[20] = out[4];
-            macin[21] = out[5];
-            hmac_sha256(session_key, 32, macin, sizeof(macin), &out[6 + 16]);
-            emit_frame(FRAME_DATA, out, 6 + 16 + 32);
-        } else {
-            emit_frame(FRAME_DATA, out, 6);
-        }
+        uint8_t body[6];
+        body[0] = SWARM_OP_STATUS;
+        body[1] = (uint8_t)(rep.r_q16);
+        body[2] = (uint8_t)(rep.r_q16 >> 8);
+        body[3] = (uint8_t)(rep.r_q16 >> 16);
+        body[4] = (uint8_t)(rep.r_q16 >> 24);
+        body[5] = rep.live;
+        /* Authenticated when keyed AND the request carried a 16-byte host nonce
+         * (OPTIONAL for STATUS: a plain 1-byte request keeps the legacy 6-byte
+         * reply, so an unkeyed host / ci-smoke-mcp is unaffected). Same emit path
+         * as QSUBMIT — one audited nonce-echo + HMAC(op||nonce||body[1..]). */
+        const uint8_t *nonce = (have_key && len >= 1 + 16) ? &payload[1] : NULL;
+        emit_authed_reply(body, sizeof(body), nonce);
     } else if (op == SWARM_OP_RECALL) {
         if (len < 1 + GHOST_PW * 4)
             return;
@@ -423,7 +404,7 @@ static void handle_data(const uint8_t *payload, uint32_t len) {
         }
         if (clen == 0 || clen > QPU_CIRCUIT_MAX) {
             uint8_t err[2] = {SWARM_OP_QSUBMIT, 2}; /* malformed → broker/EINVAL */
-            emit_qsubmit_reply(err, sizeof(err), nonce);
+            emit_authed_reply(err, sizeof(err), nonce);
             return;
         }
         if (qsub_jid != 0) {
@@ -431,7 +412,7 @@ static void handle_data(const uint8_t *payload, uint32_t len) {
              * host that waits for each reply; defensive). Report refused with
              * the IN-HAND nonce — a synchronous error NEVER touches the stash. */
             uint8_t busy[2] = {SWARM_OP_QSUBMIT, 1};
-            emit_qsubmit_reply(busy, sizeof(busy), nonce);
+            emit_authed_reply(busy, sizeof(busy), nonce);
             return;
         }
         qpu_submit_req_t sreq;
@@ -455,7 +436,7 @@ static void handle_data(const uint8_t *payload, uint32_t len) {
             /* -4 EPERM/quota → refused(1); other broker errors → 2. Synchronous
              * error → in-hand nonce, no stash write. */
             uint8_t err[2] = {SWARM_OP_QSUBMIT, (uint8_t)(r == -4 ? 1 : 2)};
-            emit_qsubmit_reply(err, sizeof(err), nonce);
+            emit_authed_reply(err, sizeof(err), nonce);
         }
     } else if (op == SWARM_OP_KEY) {
         /* Host admits the swarm-plane group session key (ADR-0019): forward it
@@ -536,11 +517,11 @@ static void qsub_poll_step(void) {
         for (uint32_t i = 0; i < QC_RESULT_LEN; i++) {
             reply[2 + i] = out.result[i];
         }
-        emit_qsubmit_reply(reply, sizeof(reply), nonce);
+        emit_authed_reply(reply, sizeof(reply), nonce);
     } else {
         /* EXECFAIL, a short/oversized result, or a poll error → broker error. */
         reply[1] = 2;
-        emit_qsubmit_reply(reply, 2, nonce);
+        emit_authed_reply(reply, 2, nonce);
     }
     /* Clear-on-completion: free the broker slot AND scrub the auth context so no
      * later path can emit with a stale nonce (a replayed DONE re-poll is already
