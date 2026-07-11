@@ -142,6 +142,13 @@ jobs:
     steps:
       - uses: actions/download-artifact@v4
         with: { name: package-artifacts, path: dist }
+      # Isolated, recent Python — NOT the runner's system python. The system
+      # `packaging` (24.0) is too old to validate the Metadata-Version 2.4
+      # License-Expression / License-File fields modern setuptools emits, and a
+      # plain `pip install --upgrade twine` does NOT upgrade it (twine only
+      # requires packaging>=24.0). That skew failed the v0.5.0 auto-publish.
+      - uses: actions/setup-python@v5
+        with: { python-version: '3.12' }
       - name: Publish if a token is configured, otherwise skip honestly
         env:
           PYPI_API_TOKEN: ${{ secrets.PYPI_API_TOKEN }}
@@ -150,5 +157,6 @@ jobs:
             echo "::notice::PYPI_API_TOKEN not configured — skipping PyPI publish (artifacts are on the GitHub Release)"
             exit 0
           fi
-          python -m pip install --upgrade twine
+          python -m pip install --upgrade twine packaging
+          python -m twine check dist/*.whl dist/*.tar.gz
           python -m twine upload -u __token__ -p "$PYPI_API_TOKEN" dist/*.tar.gz dist/*.whl
