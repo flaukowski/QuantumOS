@@ -36,11 +36,6 @@
 #define IPC_MSG_QUANTUM 0x0008         /* Quantum-related message */
 #define IPC_MSG_CIRCUIT_HANDOFF 0x0010 /* Quantum circuit transfer */
 
-/* Shared region permissions */
-#define IPC_SHARE_READ 0x01
-#define IPC_SHARE_WRITE 0x02
-#define IPC_SHARE_EXEC 0x04
-
 /* Port states */
 #define IPC_PORT_CLOSED 0
 #define IPC_PORT_OPEN 1
@@ -132,35 +127,6 @@ typedef struct {
     uint8_t state;     /* Port state */
     ipc_queue_t queue; /* Message queue for this port */
 } ipc_port_t;
-
-/**
- * Shared Memory Region
- *
- * Zero-copy memory region for large data transfers.
- */
-typedef struct {
-    uint32_t region_id;   /* Unique region identifier */
-    uint32_t owner_id;    /* Creating process */
-    void *physical_addr;  /* Physical memory address */
-    void *virtual_addr;   /* Virtual address in owner's space */
-    size_t size;          /* Region size in bytes */
-    uint32_t permissions; /* Access permissions */
-    uint32_t ref_count;   /* Number of processes with access */
-    uint8_t is_active;    /* Region is active */
-} ipc_shared_region_t;
-
-/**
- * Shared Region Grant
- *
- * Records a grant of access to a shared region.
- */
-typedef struct {
-    uint32_t region_id;   /* Shared region ID */
-    uint32_t grantee_id;  /* Process granted access */
-    void *mapped_addr;    /* Address in grantee's space */
-    uint32_t permissions; /* Granted permissions */
-    uint8_t is_active;    /* Grant is active */
-} ipc_region_grant_t;
 
 /**
  * IPC Channel
@@ -313,75 +279,6 @@ ipc_result_t ipc_port_send(uint32_t port_id, const ipc_message_t *msg);
  * @return IPC_SUCCESS on success, error code otherwise
  */
 ipc_result_t ipc_port_receive(uint32_t port_id, ipc_message_t *msg, uint64_t timeout_ns);
-
-/* ============================================================================
- * Zero-Copy Shared Memory Operations
- * ============================================================================ */
-
-/**
- * Create a shared memory region
- *
- * Creates a new shared memory region for zero-copy transfers.
- *
- * @param size Size of region in bytes
- * @param region Pointer to store region info
- * @return IPC_SUCCESS on success, error code otherwise
- */
-ipc_result_t ipc_share_create(size_t size, ipc_shared_region_t *region);
-
-/**
- * Destroy a shared memory region
- *
- * Frees a shared region. All grants must be revoked first.
- *
- * @param region_id Region to destroy
- * @return IPC_SUCCESS on success, error code otherwise
- */
-ipc_result_t ipc_share_destroy(uint32_t region_id);
-
-/**
- * Grant access to a shared region
- *
- * Grants another process access to a shared memory region.
- *
- * @param region_id Region to share
- * @param grantee_id Process to grant access to
- * @param permissions Access permissions
- * @param grant Pointer to store grant info
- * @return IPC_SUCCESS on success, error code otherwise
- */
-ipc_result_t ipc_share_grant(uint32_t region_id, uint32_t grantee_id, uint32_t permissions,
-                             ipc_region_grant_t *grant);
-
-/**
- * Revoke access to a shared region
- *
- * Revokes a previously granted access.
- *
- * @param region_id Region ID
- * @param grantee_id Process to revoke from
- * @return IPC_SUCCESS on success, error code otherwise
- */
-ipc_result_t ipc_share_revoke(uint32_t region_id, uint32_t grantee_id);
-
-/**
- * Map a shared region into current process
- *
- * Maps a granted shared region into the calling process's address space.
- *
- * @param region_id Region to map
- * @param addr Pointer to store mapped address
- * @return IPC_SUCCESS on success, error code otherwise
- */
-ipc_result_t ipc_share_map(uint32_t region_id, void **addr);
-
-/**
- * Unmap a shared region
- *
- * @param region_id Region to unmap
- * @return IPC_SUCCESS on success, error code otherwise
- */
-ipc_result_t ipc_share_unmap(uint32_t region_id);
 
 /* ============================================================================
  * Channel Operations
