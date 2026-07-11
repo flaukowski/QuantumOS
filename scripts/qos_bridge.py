@@ -896,29 +896,45 @@ class QosVM:
                                  SWARM_OP_STATUS, time.time() + deadline_s)
         return self._verify_status_reply(payload, nonce)
 
-    def _verify_status_reply(self, payload, expect_nonce):
-        """Verify an authenticated STATUS reply against the nonce we sent.
-        Reply layout: op(1) | r_q16(4) | live(1) | nonce_echo(16) | tag(32) = 54.
-        Fails CLOSED (a keyed caller never accepts a stripped-tag reply)."""
+    def _verify_reply_auth(self, payload, expect_nonce, op, valid_body_lens):
+        """One audited COM2 reply-auth verify for every op (ADR-0019 Extension).
+        Reply layout: body(var) | nonce_echo(16) | tag(32), where body[0]==op and
+        body_len is in valid_body_lens (fixed for STATUS, {2,22} for QSUBMIT). The
+        MAC preimage op||nonce||body[1..] is identical across ops, so one function
+        gets the crypto right for all callers. Freshness (echo) is checked FIRST —
+        a replayed genuine reply carries an OLD nonce whose tag is still valid, so
+        only the echo betrays it — then the MAC (unforgeability). Fails CLOSED: a
+        stripped/short reply is rejected on the length floor, never mis-sliced.
+        Returns the verified `body` bytes for the caller to parse."""
         if self._session_key is None:
             raise QosError("no session key admitted")
-        if len(payload) < 6 + 16 + 32:
+        total = len(payload)
+        floor = min(valid_body_lens) + 16 + 32
+        if total < floor:
             raise QosRefused(
-                f"STATUS reply too short to authenticate ({len(payload)} < 54) — "
+                f"op {op} reply too short to authenticate ({total} < {floor}) — "
                 "tag stripped or unkeyed guest")
-        r_q16 = int.from_bytes(payload[1:5], "little")
-        live = payload[5]
-        echo = bytes(payload[6:22])
-        tag = bytes(payload[22:54])
-        # Freshness FIRST: a replayed genuine reply carries an OLD nonce whose
-        # tag is still HMAC-valid, so only echo != the nonce we sent rejects it.
+        body_len = total - 16 - 32
+        if body_len not in valid_body_lens:
+            raise QosRefused(f"op {op} reply body_len {body_len} not in {valid_body_lens}")
+        body = bytes(payload[:body_len])
+        echo = bytes(payload[body_len:body_len + 16])
+        tag = bytes(payload[body_len + 16:body_len + 48])
+        if body[0] != op:
+            raise QosRefused(f"op {op} reply op mismatch (0x{body[0]:02x}) — cross-op frame")
         if echo != bytes(expect_nonce):
-            raise QosRefused("nonce echo mismatch — replayed or stale STATUS reply")
-        macin = bytes([SWARM_OP_STATUS]) + bytes(expect_nonce) + bytes(payload[1:6])
+            raise QosRefused(f"nonce echo mismatch — replayed or stale op {op} reply")
+        macin = bytes([op]) + bytes(expect_nonce) + body[1:]
         want = hmac.new(self._session_key, macin, hashlib.sha256).digest()
         if not hmac.compare_digest(want, tag):
-            raise QosRefused("reply MAC failed — forged STATUS reply")
-        return {"r": r_q16 / 65536.0, "live": live, "authenticated": True,
+            raise QosRefused(f"reply MAC failed — forged op {op} reply")
+        return body
+
+    def _verify_status_reply(self, payload, expect_nonce):
+        """Verify an authenticated STATUS reply (body op|r_q16(4)|live = 6 bytes)."""
+        body = self._verify_reply_auth(payload, expect_nonce, SWARM_OP_STATUS, (6,))
+        r_q16 = int.from_bytes(body[1:5], "little")
+        return {"r": r_q16 / 65536.0, "live": body[5], "authenticated": True,
                 "identity": self.identity()}
 
     def status(self, deadline_s=5.0):
@@ -963,42 +979,11 @@ class QosVM:
         return {"status": status, "result": result}
 
     def _verify_qsubmit_reply(self, payload, expect_nonce):
-        """Verify an authenticated QSUBMIT reply against the nonce we sent.
-        Reply layout: body(variable) | nonce_echo(16) | tag(32), where body is
-        op(1)|status(1) for an error or op(1)|status(1)|result(20) for DONE — so
-        body_len is 2 or 22 and total is 50 or 70. Fails CLOSED (a keyed submit
-        never accepts a stripped-tag or forged reply — the whole point of
-        authenticating the live circuit path). Mirrors _verify_status_reply."""
-        if self._session_key is None:
-            raise QosError("no session key admitted")
-        total = len(payload)
-        # Fail-closed length floor (mirror STATUS's <54): min body 2 + nonce 16
-        # + tag 32 = 50. Rejects a truncated/stripped reply here, never silently
-        # mis-slices a negative body_len.
-        if total < 2 + 16 + 32:
-            raise QosRefused(
-                f"QSUBMIT reply too short to authenticate ({total} < 50) — "
-                "tag stripped or unkeyed guest")
-        body_len = total - 16 - 32
-        if body_len not in (2, 22):
-            raise QosRefused(f"QSUBMIT reply body_len {body_len} not in (2, 22) — malformed")
-        body = bytes(payload[:body_len])
-        echo = bytes(payload[body_len:body_len + 16])
-        tag = bytes(payload[body_len + 16:body_len + 48])
-        if body[0] != SWARM_OP_QSUBMIT:
-            raise QosRefused(f"QSUBMIT reply op mismatch (0x{body[0]:02x}) — cross-op frame")
-        # Freshness FIRST: a replayed genuine reply carries an OLD nonce whose
-        # tag is still HMAC-valid, so only echo != the nonce we sent rejects it.
-        if echo != bytes(expect_nonce):
-            raise QosRefused("nonce echo mismatch — replayed or stale QSUBMIT reply")
-        # MAC input: op || nonce || body[1..] — the SAME preimage shape as STATUS.
-        macin = bytes([SWARM_OP_QSUBMIT]) + bytes(expect_nonce) + body[1:]
-        want = hmac.new(self._session_key, macin, hashlib.sha256).digest()
-        if not hmac.compare_digest(want, tag):
-            raise QosRefused("reply MAC failed — forged QSUBMIT reply")
-        status = body[1]
-        result = body[2:] if body_len > 2 else b""
-        return {"status": status, "result": result, "authenticated": True}
+        """Verify an authenticated QSUBMIT reply. Body is op|status(1) for an
+        error or op|status(1)|result(20) for DONE, so body_len is 2 or 22."""
+        body = self._verify_reply_auth(payload, expect_nonce, SWARM_OP_QSUBMIT, (2, 22))
+        return {"status": body[1], "result": body[2:] if len(body) > 2 else b"",
+                "authenticated": True}
 
     def qpu_run(self, kind="bell", n_qubits=3, target=0, iters=1, probe=0,
                 deadline_s=10.0):
