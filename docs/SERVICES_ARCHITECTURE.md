@@ -1,3 +1,5 @@
+> **⚠️ Historical design document.** This predates the implementation and describes original *intent*, not the shipped system. For the as-built architecture see the [Architecture Decision Records](adr/) and the [CHANGELOG](../CHANGELOG.md); where they disagree with this file, they are correct.
+
 # User-Space Services Architecture
 
 ## Service Design Principles

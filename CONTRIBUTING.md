@@ -163,11 +163,10 @@ make && make run
 ## Development Workflow
 
 ### Branch Strategy
-- **main** - Stable, releasable code
-- **develop** - Integration branch for features
-- **feature/*** - Feature branches
-- **bugfix/*** - Bug fix branches
-- **release/*** - Release preparation
+- **main** - the single integration branch; every PR targets it and CI must be green to merge
+- **feature/*** , **docs/*** , **fix/*** - short-lived branches, squash-merged into `main`
+- Releases are cut by pushing a `vX.Y.Z` tag (matching the `VERSION` file), which fires
+  `.github/workflows/release.yml` — there is no long-lived `develop` or `release` branch
 
 ### Commit Guidelines
 Use conventional commits:
@@ -305,17 +304,23 @@ tests/
 ```
 
 ### Running Tests
+
+QuantumOS is a freestanding kernel (`-nostdlib`), so it is not unit-tested like a library —
+`gcov` cannot instrument it. Assurance comes from **serial-log integration gates**: the kernel
+boots in headless QEMU and CI asserts an un-echoable runtime signal for each feature (the
+discipline is [ADR-0016](docs/adr/0016-anti-vacuous-ci-gates.md)).
+
 ```bash
-# Run all tests
+# The ~60-gate smoke suite: build + boot + assert every feature's runtime signal
+make ci-smoke
+
+# Boot the in-kernel test citizen and grep its PASS/FAIL
 make test
 
-# Run specific test category
-make test-unit
-make test-integration
-make test-system
-
-# Run performance benchmarks
-make benchmark
+# Targeted gates (see the Makefile for the full ci-smoke-* list)
+make ci-smoke-disk        # persistence: two boots, one disk
+make ci-smoke-mcp         # the host MCP toolbox against a live VM
+make ci-smoke-society3    # N kernels synchronize one field
 ```
 
 ### Test Requirements

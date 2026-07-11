@@ -93,6 +93,7 @@ append):
 | 32 | SYS_AUDIT      | `audit_`                  | read the capability authority ledger (uncapped RO) |
 | 33 | SYS_MANIFEST   | `manifest_`               | read the per-pid intent manifests (uncapped RO) |
 | 34 | SYS_CAP_DERIVE | `cap_derive_`             | delegate a narrowed capability to a sub-agent (cap) |
+| 35 | SYS_QPU        | `qpu_`                    | submit/poll an opaque quantum circuit to the kernel QPU broker (cap+quota) |
 
 **Cross-ring capability delegation (epic #137).** `SYS_CAP_DERIVE` lets a
 citizen holding `CAP_GRANT` hand a strictly-**narrowed** slice of one of

@@ -25,24 +25,28 @@
 
 ## ✅ What runs today
 
-QuantumOS boots on x86-64 under QEMU (`make run`), and every claim below is gated in CI (`make ci-smoke`):
+QuantumOS boots on x86-64 under QEMU (`make run`), and every claim below is gated in CI — the core by `make ci-smoke`, the rest by the broader gate suite (`ci-smoke-mcp`, `ci-smoke-society*`, `quantum-gateway`, the browser boot gate, …):
 
 - **Microkernel core** — preemptive scheduler, per-process page tables, ELF loader for compiled C programs, kernel heap with coalescing `kfree`, memory reclaimed on process exit, heartbeat watchdog that restarts dead services
 - **Capability-based security** — ring-3 services reachable only through capability-checked IPC; capless syscall attempts are denied with EPERM, and CI proves it by attack
 - **Real quantum entropy at boot** — a launcher can run a circuit on a real QPU (Rigetti, via qBraid) and hand the measured bits to the kernel (`qseed=<hex>`); `SYS_QRAND` exposes the qseed-mixed pool to capability-holding services only. No seed → services honestly report `prng`, never fake quantum provenance.
-- **Four ring-3 services** — `ghostd` (a 256-oscillator associative memory that recalls patterns from ~15%-corrupted probes), `paradoxd` (a fixed-point paradox resolver whose phase transitions are gated on `ghostd`'s field), `swarm_svc` (a COM2 serial bridge emitting a Lamport-signed, host-verifiable boot attestation), plus a framebuffer mode that renders the live memory field
+- **A ring-3 service society** — the boot roster is ~18 capability-gated citizens (roster in `kernel/src/citizens.c`), each granted only its declared authority. The foundational four: `ghostd` (a 256-oscillator associative memory that recalls patterns from ~15%-corrupted probes), `paradoxd` (a fixed-point paradox resolver whose phase transitions are gated on `ghostd`'s field), `swarm_svc` (a COM2 serial bridge emitting a Lamport-signed, host-verifiable boot attestation), plus a framebuffer mode that renders the live memory field. Later citizens (`fieldsyncd`, `httpd`, `qsh`, `quantumd`, `kannakad`, `qsv`, `qpud`, `agentd`, …) are covered in the sections below
 - **Interactive shell** — `qsh`, a ring-3 shell on the serial console (pipe commands into `-serial stdio`, or type on the PS/2 keyboard under a graphical boot): `ps` lists the live process table (the shell sees *itself* running), `free`/`uptime` report kernel stats, `date` reports the wall-clock time from the CMOS RTC, `qrand`/`qseed` draw from the quantum pool, and `ghost` queries `ghostd`'s field over capability IPC. The console is itself a capability-guarded device (capless callers get EPERM), and after `exit` the watchdog restarts the shell — CI drives a full scripted session and asserts every one of those behaviours. A `quiet` boot token (`-append quiet`) silences the demo kernel's steady-state chatter for a clean interactive prompt ([docs/CONSOLE_SHELL.md](docs/CONSOLE_SHELL.md))
 - **A filesystem** — a read-only ustar initrd built from `rootfs/` at compile time and embedded in the kernel image, served through `SYS_OPEN`/`SYS_READ`/`SYS_CLOSE`/`SYS_READDIR` with per-process fd tables. The shell greets with `/etc/motd` read through the VFS and browses it with `ls`/`cat` — all CI-gated ([docs/INITRD_VFS.md](docs/INITRD_VFS.md))
 - **Programs run off the filesystem** — `run /bin/hello` from the shell loads an ELF from the initrd into a fresh address space (`SYS_SPAWN`, capability-gated — only the shell may start programs), passes it an argument vector, and reports its exit code (`SYS_WAITPID`): the full boot → shell → exec → exit loop, CI-gated ([docs/PROGRAM_EXECUTION.md](docs/PROGRAM_EXECUTION.md))
 - **Persistent storage** — a polled ATA disk driver, a writable RAM filesystem overlay (`write`/`rm` from the shell, capability-gated), and `sync`, which serializes the overlay to disk as a ustar archive behind a checksummed superblock. Files written and synced in one boot are restored at the next — CI proves it by booting the *same* disk image twice and reading back in boot 2 what boot 1 wrote ([docs/PERSISTENT_STORAGE.md](docs/PERSISTENT_STORAGE.md))
-- **Networking** — a full IPv4 stack built from the NIC up: PCI enumeration, an RTL8139 driver (interrupt-driven receive, DMA ring), Ethernet/ARP, IPv4 + UDP, a DHCP client, ICMP, and a DNS resolver, then ring-3 access three ways: `SYS_RESOLVE` (kernel-side hostname lookup), **`SYS_UDP` — real UDP sockets**, and **`SYS_TCP` — a real TCP client**, so **the shell fetches a web page**. CI boots with a NIC on QEMU's user-mode network and proves the whole path end to end — ARP, the `10.0.2.15` DHCP lease, an ICMP ping, `nslookup`/`udping example.com`, and then `http`: a full three-way handshake, bidirectional data, and FIN teardown, proven **hermetically** against a loopback HTTP server (SLIRP forwards the guest's connection to the runner's `127.0.0.1`, no external network) plus a live `http example.com`. TCP is an honest client-only slice (no server, one connection, stop-and-wait) — the boundaries are documented ([docs/NETWORKING.md](docs/NETWORKING.md))
+- **Networking** — a full IPv4 stack built from the NIC up: PCI enumeration, an RTL8139 driver (interrupt-driven receive, DMA ring), Ethernet/ARP, IPv4 + UDP, a DHCP client, ICMP, and a DNS resolver, then ring-3 access three ways: `SYS_RESOLVE` (kernel-side hostname lookup), **`SYS_UDP` — real UDP sockets**, and **`SYS_TCP` — a real TCP client**, so **the shell fetches a web page**. CI boots with a NIC on QEMU's user-mode network and proves the whole path end to end — ARP, the `10.0.2.15` DHCP lease, an ICMP ping, `nslookup`/`udping example.com`, and then `http`: a full three-way handshake, bidirectional data, and FIN teardown, proven **hermetically** against a loopback HTTP server (SLIRP forwards the guest's connection to the runner's `127.0.0.1`, no external network) plus a live `http example.com`. TCP is an honest stop-and-wait slice — two static TCBs (one client, one server), single-segment, in-order receive — and the boundaries are documented ([docs/NETWORKING.md](docs/NETWORKING.md))
 - **A real-bootloader boot path** — `make iso` builds a GRUB ISO (BIOS/CSM, USB-flashable) with two entries: the default **console** image lands on an on-screen VGA text console — the kernel log, `qsh`, and even panic banners render on the machine's own display, so a laptop with no serial port gets a fully interactive shell on its own keyboard and screen — and a **graphical wave field** entry keeps the 1024x768 live-field boot. CI boots the ISO with `-cdrom` (the real GRUB handoff, not QEMU's `-kernel` shortcut) to the shell + a citizen gate, and separately drives `qsh` purely via injected PS/2 scancodes with no serial input at all ([docs/CONSOLE_SHELL.md](docs/CONSOLE_SHELL.md))
 - **Associative memory as a syscall** — `SYS_IMPRINT`/`SYS_RECALL` (epic #95): capability-scoped kernel field regions a process can store byte patterns into and recall associatively against — ranked Q15 wave-resonance scoring, one bounded integer pass, no floats in the kernel. From the shell: `imprint the cat sat on the mat`, then `recall the cxt sxt on thx mxt` recovers the exact stored text. CI proves the noisy-probe recall, the capless-caller EPERM (by attack), cross-region isolation, and that a degenerate probe can't fault the kernel ([docs/RUNTIME.md](docs/RUNTIME.md))
 - **…and those memories survive reboot** (epic #96): `sync` serializes the field to a checksummed section of the QDSK disk volume; the next boot restores it before services start, and the shell inherits its region exactly once, audibly. CI proves it in three boots: imprint+sync, then recall-from-corrupted-probe in a boot that never typed the pattern, then a deliberately corrupted blob that must cold-start honestly while the filesystem still restores ([docs/PERSISTENT_STORAGE.md](docs/PERSISTENT_STORAGE.md))
 - **Two kernels, one field** (epic #97): two QuantumOS instances couple their `ghostd` oscillator fields over UDP — distributed Kuramoto phase synchronization between running kernels. To get there, QuantumOS gained a static-IP path and an **ARP responder** (SLIRP always answered for the guest; two guests on a raw L2 must do it themselves). A `fieldsyncd` service exchanges 256-phase snapshots each second; the cross-node order parameter R_x climbs from divergent (each node seeded from its own quantum entropy) to locked. CI boots **two guests on one wire** and asserts both fields start uncorrelated and synchronize — while each node's own associative recall keeps passing ([docs/NETWORKING.md](docs/NETWORKING.md))
-- **Honest experiments** — alternate schedulers (quantum-lottery, resonant) live behind build flags and are measured against round-robin at boot; negative results are reported plainly
+- **Serves a page, then serves agents** (epics #98/#99/#100): TCP `listen`/`accept` + a ring-3 `httpd` make QuantumOS *serve* a live status page; a host-side **MCP server** (`scripts/qos_mcp.py`) exposes a running kernel to any MCP-speaking agent as 21 tools — boot, script the shell, imprint/recall the field, run citizens, fetch over the guest's own TCP, read the audit ledger — every result carrying the verified Lamport boot identity. And the whole thing **boots in a browser**: the real 64-bit kernel under `qemu-system-x86_64` compiled to WebAssembly at [flaukowski.github.io/QuantumOS](https://flaukowski.github.io/QuantumOS/)
+- **Structural authority — conscience before wallet** (Phase D, epics #133/#135/#137/#144): a capability **authority ledger** records every grant, denial, spawn, and revocation, kernel-written and durable across reboots, so a citizen cannot forge or suppress its own entry; **explicit intent manifests** bind a per-pid allow-set at spawn and enforce real quotas (spawn count, CPU ticks, quantum submissions); **one-hop capability delegation** (`SYS_CAP_DERIVE`) lets an agent hand a *narrowed* authority to a sub-agent, cascade-revoked when the delegator dies. Authority *is* the capability set, and every attempt to exceed it is provable
+- **A quantum stack that never lies about precision** (epics #148/#149/#150): `qsv`, an *exact* Gaussian-integer state-vector engine in ring 3 (zero rounding — its unitarity is an integer identity), gated in CI against an independent host mirror by SHA-256 digest; a capability-gated kernel **QPU job broker** (`SYS_QPU`) that brokers *opaque* circuits under a per-manifest quota; and a host gateway dispatching **PennyLane (incl. cuQuantum GPU), CUDA-Q, and real qBraid QPUs**, every backend cross-oracled against the exact engine to ≤1e-9
+- **An agent society** (epics #139/#171–#178): N kernels synchronize one field over a multicast L2 (min-pairwise Kuramoto verdict); and an `agentd` orchestrator delegates narrowed field capabilities to sub-agents it spawns itself over **spawn-time parent↔child IPC channels** — the society *self-assembles*, reaches content consensus by digest, divides labor across private field workspaces, and exchanges verified results with a second VM's society
+- **Honest experiments** — alternate schedulers (quantum-lottery, resonant) live behind build flags and are measured against round-robin at boot; negative results are reported plainly (the resonant scheduler *loses* to round-robin — the verdict ships in the log)
 
-Everything in the Vision below that is not in this list is aspiration, not implementation — the roadmap tracks the difference.
+Everything in the Vision below that is not in this list is aspiration, not implementation — the roadmap tracks the difference. The architecture behind each item above is recorded as an [Architecture Decision Record](docs/adr/) with `file:line` evidence and honest limits.
 
 ## 🌟 Vision
 
@@ -141,7 +145,7 @@ This builds the kernel and boots it in headless QEMU to validate the build chain
 ### First Boot
 When QuantumOS boots, you'll see:
 ```
-[BOOT] QuantumOS v0.1 booting...
+[BOOT] QuantumOS v0.4.0 booting...
 [BOOT] Multiboot information validated
 [BOOT] Starting early initialization...
 [BOOT] Early initialization complete
@@ -373,12 +377,24 @@ Target architecture — today the HAL is x86-64 only:
 - [x] Inter-process communication (capability-checked `SYS_SEND_TO`, targeted replies)
 - [x] User-space services framework (four ring-3 services with watchdog restart)
 
-### 🔄 **v0.3 - Quantum Integration** (In Progress)
+### ✅ **v0.3 - Field memory & agent surface** (Done)
 - [x] Real-QPU boot-entropy handoff (`qseed=` from Rigetti via qBraid)
 - [x] Experimental quantum-lottery + resonant schedulers (behind build flags, measured against round-robin)
-- [ ] Quantum scheduler service (always-on, workload-aware)
-- [ ] Quantum error correction
-- [ ] Quantum-native applications
+- [x] Associative memory as a kernel syscall, persistent across reboot, coupled across VMs
+- [x] TCP server + `httpd`; MCP server; the browser demo
+
+### ✅ **v0.4 - Agent-native** (Done — first tagged release)
+- [x] Capability authority ledger, intent manifests + enforced quotas, one-hop delegation
+- [x] Quantum stack (exact `qsv` engine + `SYS_QPU` broker + PennyLane/CUDA-Q/qBraid gateway)
+- [x] N-way field societies + the self-assembling agent society (`agentd` + spawn channels)
+- [x] Adversarial bug-hunt campaign (~31 bugs, 0 false positives) and dead-code payoff
+
+See [CHANGELOG.md](CHANGELOG.md) for the full per-arc history and [docs/adr/](docs/adr/) for the architecture behind each milestone.
+
+### 🔭 **Next** (planned — see [docs/adr/](docs/adr/))
+- [ ] Authenticate the swarm plane (host-admitted keys + HMAC over the field wire) — ADR-0019
+- [ ] Freeze the v1 agent-surface contracts (syscall ABI + MCP schemas + wire format) — ADR-0020
+- [ ] Honest memory to the 1 GB window (dynamic PMM sized from the multiboot map) — ADR-0021
 
 ### 🌟 **v1.0 - Production Ready** (Future)
 - [ ] Complete microkernel architecture
@@ -390,12 +406,13 @@ Target architecture — today the HAL is x86-64 only:
 
 We believe the future of computing is collaborative, and we welcome contributions from everyone! Whether you're a kernel developer, quantum computing researcher, or just curious about OS design, there's a place for you in QuantumOS.
 
-### 🎯 **Current High-Priority Issues**
-- [**#1**](https://github.com/flaukowski/QuantumOS/issues/1) - Process Management System
-- [**#3**](https://github.com/flaukowski/QuantumOS/issues/3) - Capability-Based Security System
-- [**#4**](https://github.com/flaukowski/QuantumOS/issues/4) - Quantum Resource Management
-- [**#5**](https://github.com/flaukowski/QuantumOS/issues/5) - Inter-Process Communication (IPC) System
-- [**#6**](https://github.com/flaukowski/QuantumOS/issues/6) - User-Space Services Framework
+### 🎯 **Where to start**
+The v0.1–v0.4 foundations (process management, capabilities, quantum resources, IPC, the
+services framework, and the whole agent-native stack) are **done and CI-gated** — see
+[CHANGELOG.md](CHANGELOG.md). Good next directions are tracked as Proposed
+[ADRs](docs/adr/) (authenticate the swarm plane, the v1 contract freeze, honest memory) and
+in the [open issues](https://github.com/flaukowski/QuantumOS/issues). Pick one, or open a new
+issue to propose your own.
 
 ### 🛠️ **How to Contribute**
 1. **Fork the repository**
@@ -424,12 +441,16 @@ QuantumOS has a comprehensive testing framework:
 # Quick validation (build + API consistency check)
 make validate
 
-# CI smoke test (build + QEMU boot + banner check)
+# CI smoke test — the ~60-gate suite that boots the kernel in headless QEMU
+# and asserts an un-echoable runtime signal for every feature above
 make ci-smoke
 
-# Run kernel tests (coming soon)
+# Boot the in-kernel test citizen and grep its PASS/FAIL
 make test
 ```
+
+The gate discipline — every feature proven by an un-echoable runtime signal, never a
+crash-free boot — is recorded in [ADR-0016](docs/adr/0016-anti-vacuous-ci-gates.md).
 
 ### For AI Contributors
 We have specialized validation for AI-assisted development:
@@ -446,11 +467,17 @@ We have specialized validation for AI-assisted development:
 
 ## 📖 Documentation
 
-- [**Microkernel Design**](docs/MICROKERNEL_DESIGN.md) - System design, philosophy, and microkernel architecture
-- [**Kernel Roadmap**](docs/KERNEL_ROADMAP.md) - Implementation roadmap
-- [**Quantum Scheduler**](docs/QUANTUM_SCHEDULER.md) - Quantum resource management
-- [**ghostmagicOS Integration**](docs/GHOSTOS_INTEGRATION.md) - Resonant scheduler and field dynamics
-- [**Bootstrap Guide**](BOOTSTRAP_GUIDE.md) - Getting started guide
+- [**Architecture Decision Records**](docs/adr/) — **start here**: 21 ADRs recording the as-built
+  architecture and the next phases, each with `file:line` evidence and honest limits
+- [**Changelog**](CHANGELOG.md) — the full per-arc history of all 126 merged PRs
+- [**Contributing**](CONTRIBUTING.md) — build, gate, and PR workflow
+- **Subsystem docs** (as-built): [Runtime & field memory](docs/RUNTIME.md),
+  [Networking](docs/NETWORKING.md), [Persistent storage](docs/PERSISTENT_STORAGE.md),
+  [Console & shell](docs/CONSOLE_SHELL.md), [Program execution](docs/PROGRAM_EXECUTION.md),
+  [initrd VFS](docs/INITRD_VFS.md), [Microkernel design](docs/MICROKERNEL_DESIGN.md)
+
+> Older design documents under `docs/` predate the implementation and describe intent, not the
+> shipped system — the ADRs above are the authoritative as-built record where they disagree.
 
 ## 🏆 Acknowledgments
 

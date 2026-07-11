@@ -1,5 +1,11 @@
 # Microkernel Core Design
 
+> **Note.** The later sections (frame-allocator rover, capability high-water mark, copy-in/out
+> guard, trust-core) are current and PR-maintained. The early syscall table and some API shapes
+> are illustrative and predate the shipped ABI — the authoritative syscall table lives in
+> `kernel/include/kernel/syscall.h` / `user/usys.h` and [ADR-0001](adr/0001-capability-based-microkernel.md);
+> the deleted zero-copy shared-memory API is gone (PR #180).
+
 ## Core Responsibilities
 
 The QuantumOS microkernel provides only what cannot be safely implemented in user space:
