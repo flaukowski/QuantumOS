@@ -1,7 +1,16 @@
 # 21. Honest Memory to the 1 GB Identity Window
 
 Date: 2026-07-11
-Status: Proposed
+Status: Proposed (defect fixes landed; dynamic 1 GB sizing still open)
+
+> **Update (2026-07-11).** The two confirmed latent **defects** below shipped as a focused
+> hardening increment — the PMM now reserves the kernel heap's backing frames
+> (`[__heap_start, __heap_end)`) and rounds the bitmap size up, and `boot_validate_multiboot`
+> refuses the Multiboot2 magic (the kernel is Multiboot1-only). Both are gated: the boot
+> self-tests `pmm_heap_reservation_selftest` / `boot_validate_selftest` panic the boot before
+> `QuantumOS ready` if reverted, surfaced as the `PMMHEAP:` and `MB2REJECT:` markers in
+> `make ci-smoke` and the integration `SHELL_GATES`. The **dynamic PMM sizing from the multiboot
+> memory map + the 1 GB clamp** (the feature proper) remains Proposed and open.
 
 ## Context
 

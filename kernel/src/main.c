@@ -79,13 +79,19 @@ static void ipc_subsystem_init(void);
 static void process_subsystem_init(void);
 static void scheduler_subsystem_init(void);
 static void parse_boot_cmdline(uint32_t info_addr);
+static int boot_validate_selftest(void);
 
 // Kernel main entry point
 void kernel_main(uint32_t magic, uint32_t info_addr) {
     current_boot_state = BOOT_STATE_KERNEL_ENTRY;
 
-    // Validate multiboot
+    // Validate multiboot. Give a Multiboot2 handoff its own honest banner instead
+    // of the generic "invalid" — the kernel is Multiboot1-only (see ADR-0021), and
+    // a future UEFI/Limine bring-up should see exactly why it was refused.
     if (!boot_validate_multiboot(magic, info_addr)) {
+        if (magic == MULTIBOOT2_MAGIC) {
+            boot_panic("Multiboot2 handoff unsupported (kernel is Multiboot1-only)");
+        }
         boot_panic("Invalid multiboot information");
         return; // Never reached
     }
@@ -345,6 +351,24 @@ static void core_services_init(void) {
         boot_panic("frame-allocator rover self-test failed");
     }
     boot_log("PMMROVER: frame allocator distinct + leak-free under the search rover");
+
+    // Heap-reservation gate (ADR-0021): the kernel heap's backing frames must be
+    // reserved in the PMM so the allocator can never hand a live-heap frame to a
+    // page table or ELF segment. Reverting the reservation trips this before
+    // "QuantumOS ready".
+    if (pmm_heap_reservation_selftest() != 0) {
+        boot_panic("PMM heap-reservation self-test failed");
+    }
+    boot_log("PMMHEAP: heap range reserved; allocator never hands a heap frame");
+
+    // Boot-validation gate (ADR-0021): the kernel is Multiboot1-only; the MB2
+    // magic must be refused (a v2 info block parsed as v1 loses the cmdline and
+    // wild-writes the framebuffer). Driven with a dummy info_addr since no shipped
+    // loader exercises the MB2 branch.
+    if (boot_validate_selftest() != 0) {
+        boot_panic("boot-validation self-test failed");
+    }
+    boot_log("MB2REJECT: multiboot2 magic refused, multiboot1 accepted");
 
     // ELF-loader hardening gate (adversarial bug-hunt of the proc/mem core):
     // three malformed spawns must be REJECTED with zero frame leak. Runs before
@@ -711,9 +735,15 @@ static void parse_boot_cmdline(uint32_t info_addr) {
 
 // Boot validation
 bool boot_validate_multiboot(uint32_t magic, uint32_t info_addr) {
-    /* boot.S carries a Multiboot v1 header; accept v2 as well in case a
-     * v2-capable loader is used later. */
-    if (magic != MULTIBOOT1_MAGIC && magic != MULTIBOOT2_MAGIC) {
+    /* The kernel carries only a Multiboot v1 header (boot.S), so ONLY the v1
+     * bootloader magic is accepted. A Multiboot2 magic (MULTIBOOT2_MAGIC) is
+     * refused on purpose: every consumer of info_addr parses the v1 fixed layout
+     * (cmdline word, framebuffer offset 88, ...), so treating a v2 info block as
+     * v1 would silently drop the cmdline and wild-write the framebuffer. Re-accept
+     * v2 only once a real MB2 tag parser exists. See ADR-0021.
+     * This function is a PURE predicate — it must never dereference info_addr, so
+     * boot_validate_selftest() can call it with a dummy address. */
+    if (magic != MULTIBOOT1_MAGIC) {
         return false;
     }
 
@@ -721,8 +751,29 @@ bool boot_validate_multiboot(uint32_t magic, uint32_t info_addr) {
         return false;
     }
 
-    // TODO: More thorough validation
+    // TODO: More thorough validation — keep the no-deref contract (or update the
+    // dummy info_addr in boot_validate_selftest) if this ever inspects info_addr.
     return true;
+}
+
+// Boot-validation gate (ADR-0021): the Multiboot2-magic rejection lives on a
+// branch no shipped loader exercises (QEMU/GRUB always hand us MB1 0x2BADB002),
+// so it cannot be proven by "the machine booted". Drive the real predicate with a
+// NON-ZERO dummy info_addr — boot_validate_multiboot never dereferences it — so
+// the MB2 case isn't masked by the info_addr==0 short-circuit (calling it with 0
+// would return false even if MB2 were still accepted: a fake-green on revert). The
+// MB1-accept assertion is the vacuity self-check. Returns 0 on pass.
+static int boot_validate_selftest(void) {
+    if (!boot_validate_multiboot(MULTIBOOT1_MAGIC, 0x1000)) {
+        return -1; /* vacuity: a real MB1 handoff must still be accepted */
+    }
+    if (boot_validate_multiboot(MULTIBOOT2_MAGIC, 0x1000)) {
+        return -2; /* the fix: an MB2 magic must be refused */
+    }
+    if (boot_validate_multiboot(MULTIBOOT1_MAGIC, 0)) {
+        return -3; /* a null info block is still invalid */
+    }
+    return 0;
 }
 
 // Boot logging

@@ -467,6 +467,30 @@ ci-smoke: kernel
 		exit 1; \
 	fi
 	@echo "SUCCESS: frame-allocator rover gate passed (distinct + leak-free allocation)"
+	@# Heap-reservation gate (ADR-0021): the kernel heap's backing frames must be
+	@# reserved so the allocator can never hand one out. The self-test panics the
+	@# boot before this marker if the reservation is missing (revert-confirmed).
+	@if ! grep -q "PMMHEAP: heap range reserved; allocator never hands a heap frame" /tmp/qemu-boot.log 2>/dev/null; then \
+		echo "ERROR: heap-reservation gate missing (PMMHEAP)"; \
+		echo "Boot log:"; \
+		cat /tmp/qemu-boot.log 2>/dev/null || true; \
+		echo ""; \
+		echo "=== Smoke Test FAILED ==="; \
+		exit 1; \
+	fi
+	@echo "SUCCESS: heap-reservation gate passed (heap frames reserved from the PMM)"
+	@# Boot-validation gate (ADR-0021): the kernel is Multiboot1-only; a Multiboot2
+	@# magic must be refused. Self-test drives the real predicate with a dummy
+	@# info_addr (revert-confirmed: re-accepting MB2 panics the boot).
+	@if ! grep -q "MB2REJECT: multiboot2 magic refused, multiboot1 accepted" /tmp/qemu-boot.log 2>/dev/null; then \
+		echo "ERROR: boot-validation gate missing (MB2REJECT)"; \
+		echo "Boot log:"; \
+		cat /tmp/qemu-boot.log 2>/dev/null || true; \
+		echo ""; \
+		echo "=== Smoke Test FAILED ==="; \
+		exit 1; \
+	fi
+	@echo "SUCCESS: boot-validation gate passed (multiboot2 magic refused)"
 	@# Capability high-water-mark gate (hot-path optimization): the per-gated-
 	@# syscall cap lookups scan only [0, cap_hwm) not all 1024 slots. The self-test
 	@# proves the hwm covers every allocated slot AND that the lookup honors the
