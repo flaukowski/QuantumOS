@@ -1,0 +1,53 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "quantumos-host-tools"
+dynamic = ["version"]
+description = "Host-side toolkit for QuantumOS: MCP server, attested VM bridge (QosVM/QosSociety), Lamport attestation verifier, and quantum gateway mirrors"
+readme = "scripts/README-package.md"
+license = "GPL-2.0-only"
+requires-python = ">=3.10"
+authors = [{ name = "flaukowski" }]
+keywords = ["quantumos", "mcp", "agents", "operating-system", "capability-security", "qemu"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Programming Language :: Python :: 3",
+    "Topic :: System :: Operating System Kernels",
+    "Topic :: System :: Emulators",
+]
+# qos_bridge is stdlib-only BY CONTRACT (guest CI has no pip); the mcp dependency
+# serves qos_mcp only. Keeping it a hard dep because the MCP server is the headline.
+dependencies = ["mcp>=1.0"]
+
+[project.optional-dependencies]
+quantum = ["pennylane>=0.45"]   # qsv_gateway host dispatch
+qbraid = ["qbraid"]             # qbraid_boot real-QPU entropy handoff
+
+[project.urls]
+Homepage = "https://github.com/flaukowski/QuantumOS"
+"Live demo" = "https://flaukowski.github.io/QuantumOS/"
+Changelog = "https://github.com/flaukowski/QuantumOS/blob/main/CHANGELOG.md"
+
+[project.scripts]
+qos-mcp = "qos_mcp:main"
+qos-verify-attestation = "verify_attestation:main"
+qos-qbraid-boot = "qbraid_boot:main"
+
+[tool.setuptools]
+package-dir = { "" = "scripts" }
+py-modules = [
+    "qos_bridge",
+    "qos_mcp",
+    "qpu_circuit",
+    "qsv_mirror",
+    "qsv_gateway",
+    "verify_attestation",
+    "qbraid_boot",
+    "swarm_pingpong",
+]
+
+[tool.setuptools.dynamic]
+version = { file = "VERSION" }

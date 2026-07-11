@@ -24,6 +24,13 @@
 #include <kernel/resonant_fixed.h>
 #endif
 
+// Single-sourced version string: the build injects -DQOS_VERSION="vX.Y.Z" from
+// the repo-root VERSION file (see the Makefile). The fallback keeps a
+// version-less local build honest rather than baking a stale literal.
+#ifndef QOS_VERSION
+#define QOS_VERSION "v0.0-dev"
+#endif
+
 // Boot splash dispatch: framebuffer when available, else VGA text
 static void splash_begin(void) {
     if (fb_available())
@@ -87,7 +94,7 @@ void kernel_main(uint32_t magic, uint32_t info_addr) {
     boot_config.magic = magic;
     boot_config.boot_flags = *(uint32_t *)(uintptr_t)info_addr;
 
-    boot_log("QuantumOS v0.1 booting...");
+    boot_log("QuantumOS " QOS_VERSION " booting...");
     boot_log("Multiboot information validated");
 
     // Parse the boot command line for a quantum entropy seed

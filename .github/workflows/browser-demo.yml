@@ -14,12 +14,19 @@ on:
     paths:
       - "web/**"
       - "kernel/**"
+      # The kernel image embeds the ring-3 citizen ELFs and the initrd, so a
+      # user/ or rootfs/ change alters what boots in the browser demo — without
+      # these a user-only merge would silently leave Pages stale.
+      - "user/**"
+      - "rootfs/**"
       - "Makefile"
       - ".github/workflows/browser-demo.yml"
   pull_request:
     paths:
       - "web/**"
       - "kernel/**"
+      - "user/**"
+      - "rootfs/**"
       - "Makefile"
       - ".github/workflows/browser-demo.yml"
 

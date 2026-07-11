@@ -331,5 +331,10 @@ def qos_shutdown() -> dict:
     return _vm.shutdown()
 
 
-if __name__ == "__main__":
+def main() -> None:
+    """Console-script entry point (``qos-mcp``): serve the MCP tools over stdio."""
     mcp.run()
+
+
+if __name__ == "__main__":
+    main()
