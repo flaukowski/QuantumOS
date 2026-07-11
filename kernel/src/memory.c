@@ -53,14 +53,17 @@ mem_result_t pmm_init(uint64_t total_memory) {
     pmm.used_frames = 0;
     pmm.highest_frame = total_frames - 1;
 
-    // Allocate frame bitmap
-    size_t bitmap_size = total_frames / 8;
+    // Allocate frame bitmap. Round UP: total_frames/8 truncates, so a frame count
+    // not divisible by 8 would leave the top few frames unrepresented (harmless at
+    // 128MB where 32768/8 is exact, but a latent gap once total_memory varies).
+    size_t bitmap_size = (total_frames + 7) / 8;
     pmm.frame_bitmap = (uint8_t *)ALIGN_UP((uintptr_t)&__end, PAGE_SIZE);
 
     // Initialize bitmap (all frames initially free)
     memset(pmm.frame_bitmap, 0, bitmap_size);
 
-    // Reserve frames used by kernel
+    // Reserve frames used by kernel (image + this bitmap, which self-reserves via
+    // kernel_end below regardless of its size).
     uint64_t kernel_end = (uint64_t)pmm.frame_bitmap + bitmap_size;
     uint64_t kernel_frames = (kernel_end + PAGE_SIZE - 1) / PAGE_SIZE;
 
@@ -71,6 +74,29 @@ mem_result_t pmm_init(uint64_t total_memory) {
         pmm.frame_bitmap[byte_index] |= (1 << bit_index);
         pmm.free_frames--;
         pmm.used_frames++;
+    }
+
+    // Reserve the kernel heap's backing frames. kheap_init (below) builds the
+    // heap DIRECTLY on link.ld's `ram` region [__heap_start, __heap_end) — those
+    // physical frames are identity-mapped and live, but they sit far above the
+    // kernel image, so the loop above never covered them. Left free, the low-first
+    // allocator rover would eventually hand a live-heap frame to a page table or
+    // ELF segment and the caller's memset would shred a kblock header (reachable
+    // under a large-residency spawn storm). Reserve [heap_lo, heap_hi) explicitly.
+    // The loop is bounded by total_frames so it can never write a bit past the
+    // bitmap — the exact out-of-bounds class this reservation exists to prevent.
+    uint64_t heap_lo = (uintptr_t)__heap_start / PAGE_SIZE;
+    uint64_t heap_hi = ((uintptr_t)__heap_end + PAGE_SIZE - 1) / PAGE_SIZE;
+    for (uint64_t i = heap_lo; i < heap_hi && i < total_frames; i++) {
+        uint32_t byte_index = (uint32_t)i / 8;
+        uint8_t bit_index = (uint32_t)i % 8;
+        // Guard the counters so free+used==total holds even if this range ever
+        // overlapped an already-reserved frame (it does not at 128MB).
+        if (!(pmm.frame_bitmap[byte_index] & (1 << bit_index))) {
+            pmm.frame_bitmap[byte_index] |= (1 << bit_index);
+            pmm.free_frames--;
+            pmm.used_frames++;
+        }
     }
 
     boot_log("Physical memory manager initialized");
@@ -237,6 +263,61 @@ int pmm_alloc_selftest(void) {
         if (!ok || pmm_get_free_frames() != base) {
             return -6;
         }
+    }
+    return 0;
+}
+
+// Heap-reservation gate (ADR-0021): pmm_init must reserve the kernel heap's
+// backing frames [__heap_start, __heap_end) so the low-first allocator rover can
+// never hand a live-heap frame to a page table / ELF segment (whose memset would
+// shred a kblock header). Proven three ways, all at the shipped -m 128M:
+//   1. positive — every heap frame's bitmap bit is SET;
+//   2. vacuity  — the frames JUST below and AT the heap end are CLEAR, so the
+//      reservation is bounded to the heap, not a constant mark-everything (and the
+//      exclusive end / round-up did not over-reserve);
+//   3. behavioral — aim the rover straight into the heap and allocate one frame;
+//      a correct reservation makes the allocator SKIP the reserved run and return
+//      a frame outside [heap_lo, heap_hi). Reverting the reservation flips 1 and 3.
+// Returns 0 on pass, negative on the first failed invariant.
+int pmm_heap_reservation_selftest(void) {
+    uint64_t heap_lo = (uintptr_t)__heap_start / PAGE_SIZE;
+    uint64_t heap_hi = ((uintptr_t)__heap_end + PAGE_SIZE - 1) / PAGE_SIZE;
+    uint32_t total = pmm_get_total_frames();
+    if (heap_lo >= heap_hi || heap_hi > total || heap_lo == 0) {
+        return -1; /* geometry sanity: the heap must be a real range below RAM top */
+    }
+
+    // 1. positive: every heap frame is reserved.
+    for (uint64_t i = heap_lo; i < heap_hi; i++) {
+        if (!(pmm.frame_bitmap[i / 8] & (1u << (i % 8)))) {
+            return -2;
+        }
+    }
+    // 2. vacuity: the reservation is BOUNDED — the frame just below the heap and
+    // the frame at the (exclusive) heap end are still free.
+    if (pmm.frame_bitmap[(heap_lo - 1) / 8] & (1u << ((heap_lo - 1) % 8))) {
+        return -3;
+    }
+    if (heap_hi < total && (pmm.frame_bitmap[heap_hi / 8] & (1u << (heap_hi % 8)))) {
+        return -4;
+    }
+
+    // 3. behavioral: point the rover at the first heap frame and allocate. The
+    // allocator must step over the whole reserved run and return a frame outside
+    // the heap; without the reservation it would return heap_lo itself.
+    uint32_t base = pmm_get_free_frames();
+    uint32_t saved_hint = pmm_alloc_hint;
+    pmm_alloc_hint = (uint32_t)heap_lo;
+    void *probe = pmm_alloc_frame();
+    int ok = 0;
+    if (probe) {
+        uint64_t pf = (uint64_t)(uintptr_t)probe / PAGE_SIZE;
+        ok = (pf < heap_lo || pf >= heap_hi);
+        pmm_free_frame(probe);
+    }
+    pmm_alloc_hint = saved_hint;
+    if (!ok || pmm_get_free_frames() != base) {
+        return -5;
     }
     return 0;
 }
