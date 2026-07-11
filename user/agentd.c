@@ -369,6 +369,68 @@ static int do_delegate(void) {
     }
     printf("AGENT: division of labor %d/%d - every specialist published in its own region\n",
            AGENT_SUBS, AGENT_SUBS);
+
+    /* SOCIETY OF SOCIETIES (epic #178): hand this society's AGGREGATE to
+     * fieldsyncd, which broadcasts it to coupled peer kernels (and prints any
+     * peer society's aggregate it receives, for host-side verification). The
+     * aggregate is fnv1a over the three specialist results, salted with the
+     * boot identity (qseed) so two VMs' aggregates provably differ — the host
+     * knows both qseeds and recomputes both expected values. Inside
+     * do_delegate so DEMO OK stays a conjunction over this step too. */
+    unsigned int agg = 2166136261u;
+    for (int i = 0; i < AGENT_SUBS; i++) {
+        unsigned ws = 4u + (unsigned)i;
+        unsigned int rd = fnv1a(AGENT_PHRASE, AGENT_PHRASE_LEN);
+        rd = (rd ^ (unsigned int)('0' + ws)) * 16777619u;
+        char rs[12];
+        snprintf(rs, sizeof(rs), "w%08x", rd);
+        for (unsigned n = 0; n < 9; n++) {
+            agg = (agg ^ (unsigned char)rs[n]) * 16777619u;
+        }
+    }
+    /* Identity salt: FNV-1a over the qseed's 8 LE bytes — NOT hi32^lo32,
+     * which collapses to ZERO for any qseed with equal halves (both CI
+     * society qseeds are palindromic; the gate's vacuity self-check caught
+     * exactly that). */
+    unsigned long long qs = (unsigned long long)qseed_value();
+    unsigned char qb[8];
+    for (unsigned i = 0; i < 8; i++) {
+        qb[i] = (unsigned char)(qs >> (8u * i));
+    }
+    agg ^= fnv1a(qb, 8);
+
+    /* fieldsyncd's pid comes from the uncapped SYSINFO_PS text (the qtop
+     * pattern): one "PS: <pid> <name> STATE" line per live process. */
+    static char ps[2048];
+    long pn = sysinfo(SYSINFO_PS, ps, sizeof(ps) - 1);
+    ps[(pn > 0) ? pn : 0] = '\0';
+    long fs_pid = 0;
+    for (long o = 0; ps[o]; o++) {
+        if ((o == 0 || ps[o - 1] == '\n') && ps[o] == 'P' && ps[o + 1] == 'S' && ps[o + 2] == ':' &&
+            ps[o + 3] == ' ') {
+            long p = 0, k = o + 4;
+            while (ps[k] >= '0' && ps[k] <= '9') {
+                p = p * 10 + (ps[k] - '0');
+                k++;
+            }
+            if (ps[k] == ' ' && ps[k + 1] == 'f' && ps[k + 2] == 'i' && ps[k + 3] == 'e' &&
+                ps[k + 4] == 'l' && ps[k + 5] == 'd' && ps[k + 6] == 's' && ps[k + 7] == 'y') {
+                fs_pid = p;
+                break;
+            }
+        }
+    }
+    if (fs_pid == 0) {
+        write_str("AGENT BROKEN aggregate: fieldsyncd not in PS");
+        return 0;
+    }
+    char am[12];
+    snprintf(am, sizeof(am), "A%08x", agg);
+    if (send_to(fs_pid, am, 9) != 0) {
+        printf("AGENT BROKEN aggregate send_to(%ld)\n", fs_pid);
+        return 0;
+    }
+    printf("AGENT: aggregate a%08x handed to fieldsyncd (qseed-salted)\n", agg);
     return 1;
 }
 

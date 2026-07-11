@@ -940,6 +940,17 @@ jobs:
         echo "Using kernel: $KERNEL_ELF"
         QOS_KERNEL="$KERNEL_ELF" make ci-smoke-society-gate
 
+    # Society of societies (epic #178): two kernels, each running its OWN
+    # complete agent society (agentdemo token), coupled AND exchanging
+    # qseed-salted society aggregates over the FSYP wire — host-verified
+    # cross-appearance. Separate gate so the demo-free society timing above
+    # stays untouched; single-sourced timeout in the Makefile.
+    - name: Society of societies (epic #178)
+      run: |
+        KERNEL_ELF=$(find build/ -name "kernel.elf32" | head -1)
+        echo "Using kernel: $KERNEL_ELF"
+        QOS_KERNEL="$KERNEL_ELF" make ci-smoke-society-agents-gate
+
     # N-way society (epic #139): three kernels mean-field-couple on a shared
     # mcast L2. Separate single-sourced timeout; the gate FAILS LOUD if host
     # multicast is unavailable (never a silent green — a skipped coupling gate

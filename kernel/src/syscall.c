@@ -2451,6 +2451,11 @@ void user_httpd_init(void) {
     boot_log("epic98: httpd (ring 3) serving the status page on :8080");
 }
 
+/* fieldsyncd's pid, remembered for the agent demo (epic #178): agentd hands
+ * its society's aggregate to fieldsyncd over an IPC pair minted in
+ * user_agent_demo_init (agentdemo boots only). */
+static uint32_t g_fieldsyncd_pid;
+
 /* Bring up fieldsyncd — the UDP field-coupling bridge (epic #97). It holds
  * the network cap (grant_net, for SYS_UDP) and an IPC send-cap to ghostd
  * (with a reply cap back), so it can pull phase snapshots from the local
@@ -2483,6 +2488,7 @@ void user_fieldsync_demo_init(uint32_t ghostd_pid) {
     cap_create(fs_pid, CAP_RESOURCE_IPC, ghostd_pid, CAP_READ | CAP_WRITE, 0, &cap);
     cap_create(ghostd_pid, CAP_RESOURCE_IPC, fs_pid, CAP_READ | CAP_WRITE, 0, &cap);
     service_monitor(sid, true);
+    g_fieldsyncd_pid = fs_pid;
     boot_log("epic97: fieldsyncd (ring 3) bridges ghostd's field to a UDP peer");
 }
 
@@ -2874,6 +2880,13 @@ void user_agent_demo_init(void) {
         .field_region = 3,
         .field_region_span = 4,
         .grant_field_delegable = 1,
+        /* SYS_QSEED (epic #178): the society's published aggregate is salted
+         * with the boot identity (qseed) so two coupled VMs' aggregates
+         * provably DIFFER and the host can verify cross-appearance. Manifest
+         * budget: quantum 1 + spawn 1 + FIELD:3-6 4 + QPU 1 = 7 of 8 rows —
+         * ONE row of headroom left; a 9th would hit the fail-closed guard
+         * (epic #177) and be dropped loudly. Budget before adding grants. */
+        .grant_quantum_pool = 1,
     };
 
     uint32_t ag_sid = 0, ag_pid = 0;
@@ -2886,6 +2899,17 @@ void user_agent_demo_init(void) {
     if (ag_pid == 0) {
         boot_log("Warning: agentd (society orchestrator) failed to start");
         return;
+    }
+
+    /* Society-of-societies wiring (epic #178): agentd hands its aggregate to
+     * fieldsyncd over this pair (agentd discovers the pid via SYSINFO_PS, the
+     * qtop pattern); fieldsyncd broadcasts it to configured peers as an FSYP
+     * frame and prints received peer aggregates for host-side verification.
+     * Minted ONLY in agentdemo boots — every other boot is unchanged. */
+    if (g_fieldsyncd_pid != 0) {
+        uint32_t cap = CAP_ID_INVALID;
+        cap_create(ag_pid, CAP_RESOURCE_IPC, g_fieldsyncd_pid, CAP_READ | CAP_WRITE, 0, &cap);
+        cap_create(g_fieldsyncd_pid, CAP_RESOURCE_IPC, ag_pid, CAP_READ | CAP_WRITE, 0, &cap);
     }
 
     boot_log(
