@@ -137,12 +137,24 @@ typedef struct {
      * epic #95 rule). Inheritance is consumed once per boot per region;
      * watchdog rebirths and successors always scrub. qsh only. */
     uint8_t field_inherit;
-    /* Grant CAP_GRANT alongside grant_field (epic #137): the field cap over
-     * field_region is minted CAP_READ|CAP_WRITE|CAP_GRANT so this citizen —
-     * and ONLY this citizen — may cap_derive a NARROWED slice of that region
-     * to a sub-agent via SYS_CAP_DERIVE. Keeps the CAP_GRANT blast radius to a
-     * single auditable delegator; qsh deliberately does NOT set it. */
+    /* Grant CAP_GRANT alongside grant_field (epic #137): the field cap(s)
+     * over the granted region span are minted CAP_READ|CAP_WRITE|CAP_GRANT so
+     * this citizen — and ONLY this citizen — may cap_derive a NARROWED slice
+     * of those regions to sub-agents via SYS_CAP_DERIVE. Keeps the CAP_GRANT
+     * blast radius to a single auditable delegator (one delegator, possibly
+     * over several regions since epic #177); qsh deliberately does NOT set
+     * it. */
     uint8_t grant_field_delegable;
+    /* Field region SPAN (epic #177): the grant covers regions
+     * [field_region, field_region + span). 0 or 1 = the classic single
+     * region, so every zero-initialized def keeps its exact behavior. Each
+     * region in the span gets its own cap + manifest row + scrub-at-mint
+     * (field_inherit consulted per-region). start_slot refuses the WHOLE
+     * grant if the span exceeds FIELD_REGION_COUNT, and drops manifest rows
+     * fail-closed past MANIFEST_MAX_ENTRIES — a span makes the row count
+     * def-dependent, so defs combining a span with many grants must budget
+     * rows. Only agentd (regions 3-6) sets a span. */
+    uint8_t field_region_span;
     /* Manifest spawn quota (epic #135): successful SYS_SPAWNs allowed per
      * incarnation (a watchdog rebirth re-binds the manifest, resetting the
      * counter — a soft, per-incarnation bound). 0 = bound but unlimited.

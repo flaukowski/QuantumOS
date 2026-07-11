@@ -32,7 +32,12 @@
 
 #include <kernel/types.h>
 
-#define FIELD_REGION_COUNT 4 /* fixed regions, statically allocated */
+/* 8, not 4: regions 0=ghostd/qsh, 1=kannakad, 2=delegation-test, 3=agentd
+ * (shared knowledge), 4-6=the division-of-labor specialists' private
+ * workspaces (epic #177), 7 spare. Growing this grows FIELD_BLOB_SECTORS —
+ * which stays inside the on-disk FIELD_HOME_RESERVE_SECTORS span (ramfs.c),
+ * so the audit ledger's frozen home does not move. */
+#define FIELD_REGION_COUNT 8 /* fixed regions, statically allocated */
 #define FIELD_SLOTS 8        /* pattern slots per region */
 #define FIELD_PAT_MAX 64     /* max pattern/probe bytes */
 #define FIELD_RANK_MAX 8     /* max rankings a recall may request */
@@ -154,8 +159,8 @@ void field_region_scrub(uint32_t region);
 #define FIELD_BLOB_MAGIC 0x314C4651u /* 'QFL1' little-endian */
 #define FIELD_BLOB_VERSION 1u
 #define FIELD_SLOT_REC_BYTES 76u
-#define FIELD_BLOB_BYTES (24u + FIELD_REGION_COUNT * FIELD_SLOTS * FIELD_SLOT_REC_BYTES) /* 2456 */
-#define FIELD_BLOB_SECTORS ((FIELD_BLOB_BYTES + 511u) / 512u)                            /* 5 */
+#define FIELD_BLOB_BYTES (24u + FIELD_REGION_COUNT * FIELD_SLOTS * FIELD_SLOT_REC_BYTES) /* 4888 */
+#define FIELD_BLOB_SECTORS ((FIELD_BLOB_BYTES + 511u) / 512u)                            /* 10 */
 
 /* Serialize every region into buf (FIELD_BLOB_SECTORS * 512 bytes; fully
  * zeroed first — sector padding must never leak kernel memory). Returns

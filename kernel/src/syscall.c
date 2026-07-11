@@ -2865,10 +2865,14 @@ void user_agent_demo_init(void) {
         /* Every agentd spawn mints a parent<->child IPC pair (epic #175):
          * the roster of its society IS its spawn returns. */
         .grant_spawn_channel = 1,
-        /* Sole CAP_GRANT holder for region 3: READ|WRITE|GRANT, so it can imprint,
-         * recall, and delegate a narrowed READ slice to each sub-agent. */
+        /* Sole CAP_GRANT holder for regions 3-6 (epic #177): region 3 is the
+         * shared knowledge it imprints and delegates READ-narrowed; regions
+         * 4-6 are the specialists' private workspaces, delegated
+         * READ|WRITE-narrowed, one each. Manifest rows: spawn 1 + FIELD 4 +
+         * QPU 1 = 6 of MANIFEST_MAX_ENTRIES 8. */
         .grant_field = 1,
         .field_region = 3,
+        .field_region_span = 4,
         .grant_field_delegable = 1,
     };
 

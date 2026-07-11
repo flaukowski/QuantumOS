@@ -206,43 +206,56 @@ int ramfs_get(int idx, const char **name_out, const uint8_t **data_out, uint32_t
 #define QDSK_AUDIT_CSUM_OFF 52  /* u32: additive checksum over the blob */
 #define TAR_BLOCK_SZ 512
 
-/* The field blob lives at a FIXED home at the TOP of the disk (just
- * below the RW self-test scratch sector), away from the growing
- * archive: a crash between sync A and sync B must never leave the old
- * superblock pointing at field sectors a LARGER archive of sync B has
- * already overwritten. Constant location also makes the corruption CI
- * gate a deterministic dd offset. */
-static uint32_t field_home_lba(void) {
-    return ata_sector_count() - 1 - FIELD_BLOB_SECTORS;
+/* The audit-ledger blob home is FROZEN at its legacy absolute offset from
+ * the disk top (1 scratch sector + the legacy 5-sector field slot + 21
+ * audit sectors = 27). The ledger's on-disk format does NOT change when
+ * the FIELD blob grows, so pinning its home lets the durable authority
+ * ledger survive field-geometry upgrades on existing disks — a moving
+ * home would fail the restore's descriptor==recomputed-home check and
+ * discard a perfectly valid ledger as collateral damage (epic #177). */
+#define AUDIT_HOME_TOP_OFFSET 27u
+_Static_assert(AUDIT_HOME_TOP_OFFSET == 1u + 5u + AUDIT_BLOB_SECTORS,
+               "audit home drifted from its frozen legacy derivation");
+static uint32_t audit_home_lba(void) {
+    return ata_sector_count() - AUDIT_HOME_TOP_OFFSET;
 }
 
-/* The audit-ledger blob lives at a FIXED home just BELOW the field blob
- * (so both sit above the growing archive and below the RW self-test
- * scratch). Constant location keeps a torn sync detect-and-cold-start
- * and makes the corruption CI gate a deterministic dd offset, exactly as
- * for the field blob. Audit is now the LOWEST fixed home. */
-static uint32_t audit_home_lba(void) {
-    return field_home_lba() - AUDIT_BLOB_SECTORS;
+/* The field blob lives BELOW the audit blob inside a RESERVED growth span:
+ * FIELD_REGION_COUNT bumps grow FIELD_BLOB_SECTORS, and without the
+ * reserve every bump would relocate both homes (restore rejects a
+ * descriptor that no longer names the recomputed home, so BOTH sections
+ * would cold-start). With the reserve only the field section itself
+ * honestly cold-starts across a field-geometry change, at the descriptor
+ * geometry guard below — the audit home never moves. The legacy field
+ * sectors just under the scratch are orphaned until the next sync.
+ * Constant location keeps the corruption CI gate a deterministic dd
+ * offset. */
+#define FIELD_HOME_RESERVE_SECTORS 16u
+_Static_assert(FIELD_BLOB_SECTORS <= FIELD_HOME_RESERVE_SECTORS,
+               "field blob outgrew its reserved span - widening relocates homes on disk!");
+static uint32_t field_home_lba(void) {
+    return audit_home_lba() - FIELD_HOME_RESERVE_SECTORS;
 }
 
 /* Smallest disk that can hold the superblock + a minimal archive + both
- * fixed homes + the scratch sector. Below this, audit_home_lba() would
- * unsigned-underflow to a wild LBA; we skip audit persistence entirely
- * (leaving the descriptors zero so restore cold-starts) rather than
- * issue a write off the end of a degenerate volume. */
+ * fixed homes (audit at top-27, field in the reserve below it) + the
+ * scratch sector. Below this the home LBAs would unsigned-underflow to
+ * wild values; we skip BOTH blob persists entirely (leaving the
+ * descriptors zero so restore cold-starts) rather than issue writes off
+ * the end of a degenerate volume. */
 static int audit_disk_fits(void) {
-    return ata_sector_count() >= 1u + FIELD_BLOB_SECTORS + AUDIT_BLOB_SECTORS + 2u;
+    return ata_sector_count() >= AUDIT_HOME_TOP_OFFSET + FIELD_HOME_RESERVE_SECTORS + 2u;
 }
 
-/* Shared bounce for the blob (5 sectors). Boot restore is
- * single-threaded and sync runs cli'd in syscall context, so one static
- * buffer serves both — and unlike a kmalloc, it cannot fail. */
+/* Shared bounce for the field blob (FIELD_BLOB_SECTORS sectors). Boot
+ * restore is single-threaded and sync runs cli'd in syscall context, so
+ * one static buffer serves both — and unlike a kmalloc, it cannot fail. */
 static uint8_t field_blob_buf[FIELD_BLOB_SECTORS * ATA_SECTOR_SIZE];
 
-/* Shared bounce for the audit-ledger blob (11 sectors). Same rationale as
- * field_blob_buf: one static buffer serves sync and restore and cannot
- * fail like a kmalloc; a 5632-byte stack local would risk the guard-page-
- * less kernel stack. */
+/* Shared bounce for the audit-ledger blob (AUDIT_BLOB_SECTORS = 21
+ * sectors, 10752 bytes). Same rationale as field_blob_buf: one static
+ * buffer serves sync and restore and cannot fail like a kmalloc; a
+ * stack local this size would risk the guard-page-less kernel stack. */
 static uint8_t audit_blob_buf[AUDIT_BLOB_SECTORS * ATA_SECTOR_SIZE];
 
 /* Simple additive checksum over the archive. Written into the
@@ -384,13 +397,13 @@ int persist_sync(void) {
 
     uint32_t tar_sectors = tar_bytes / ATA_SECTOR_SIZE;
     /* Fit check: superblock + archive must end BELOW the LOWEST fixed home.
-     * The audit blob now sits just below the field blob, so it (not the
-     * field home) is the floor — otherwise a large overlay could grow over
-     * the audit blob, and since the archive is written FIRST, the later
-     * audit write would then scribble the archive tail and cold-start the
-     * fs section at restore. On a disk too small for the audit blob, fall
-     * back to the field home (audit persistence is skipped there anyway). */
-    uint32_t tar_floor = audit_disk_fits() ? audit_home_lba() : field_home_lba();
+     * The field blob now sits in the reserve below the audit blob, so the
+     * field home is the floor — otherwise a large overlay could grow over
+     * it, and since the archive is written FIRST, the later blob writes
+     * would then scribble the archive tail and cold-start the fs section
+     * at restore. On a disk too small for the fixed homes, both blob
+     * persists are skipped, so only the scratch sector bounds the archive. */
+    uint32_t tar_floor = audit_disk_fits() ? field_home_lba() : ata_sector_count() - 1;
     if (1 + tar_sectors > tar_floor) {
         boot_log("SYNC: archive does not fit on disk — not flushed");
         return -1;
@@ -437,12 +450,21 @@ int persist_sync(void) {
     }
     kfree(buf);
 
-    /* Field section (epic #96): every region, at the fixed home. */
+    /* Field section (epic #96): every region, at the fixed home. Guarded
+     * like audit below: on a degenerate disk both homes underflow, so both
+     * persists are skipped (descriptors stay zero, restore cold-starts). */
+    uint32_t field_lba = 0, field_bytes = 0;
     uint32_t field_slots = field_blob_write(field_blob_buf);
     uint32_t field_csum = archive_checksum(field_blob_buf, FIELD_BLOB_BYTES);
-    if (ata_write(field_home_lba(), field_blob_buf, FIELD_BLOB_SECTORS) != 0) {
-        boot_log("SYNC: field write failed — not flushed");
-        return -1;
+    if (audit_disk_fits()) {
+        if (ata_write(field_home_lba(), field_blob_buf, FIELD_BLOB_SECTORS) != 0) {
+            boot_log("SYNC: field write failed — not flushed");
+            return -1;
+        }
+        field_lba = field_home_lba();
+        field_bytes = FIELD_BLOB_BYTES;
+    } else {
+        field_csum = 0;
     }
 
     /* Audit section (durable authority ledger): the whole ledger at its
@@ -474,8 +496,8 @@ int persist_sync(void) {
     put_u32(sb + QDSK_TARBYTES_OFF, tar_bytes);
     put_u32(sb + QDSK_FILECOUNT_OFF, nfiles);
     put_u32(sb + QDSK_CHECKSUM_OFF, csum);
-    put_u32(sb + QDSK_FIELD_LBA_OFF, field_home_lba());
-    put_u32(sb + QDSK_FIELD_BYTES_OFF, FIELD_BLOB_BYTES);
+    put_u32(sb + QDSK_FIELD_LBA_OFF, field_lba);
+    put_u32(sb + QDSK_FIELD_BYTES_OFF, field_bytes);
     put_u32(sb + QDSK_FIELD_CSUM_OFF, field_csum);
     put_u32(sb + QDSK_AUDIT_LBA_OFF, audit_lba);
     put_u32(sb + QDSK_AUDIT_BYTES_OFF, audit_bytes);

@@ -65,9 +65,15 @@ void _start(void) {
 
     send_msg("ready", 5);
 
+    /* The go message is "g<region-digit>" (epic #177): the digit names THIS
+     * specialist's private workspace region. Zero buf each round so buf[1]
+     * can only have come from the go message itself. */
     char buf[16];
     int got_go = 0;
     for (long spins = 0; spins < 100000000L && !got_go; spins++) {
+        for (unsigned b = 0; b < sizeof(buf); b++) {
+            buf[b] = 0;
+        }
         if (recv_msg(buf, sizeof(buf)) != 0 && buf[0] == 'g') {
             got_go = 1;
         } else {
@@ -81,9 +87,15 @@ void _start(void) {
             yield();
         }
     }
+    unsigned ws = (unsigned)buf[1] - '0'; /* workspace region digit */
+    if (ws < 4 || ws > 6) {
+        snprintf(line, sizeof(line), "AGENTSUB BROKEN bad workspace digit %u", ws);
+        write_str(line);
+        exit_(1);
+    }
 
     /* Delegated READ must recall the EXACT phrase from this sub's own noisy
-     * probe; withheld WRITE must be EPERM (-4). */
+     * probe; the shared region's withheld WRITE must be EPERM (-4). */
     field_recall_out_t rout;
     for (unsigned i = 0; i < sizeof(rout); i++) {
         ((unsigned char *)&rout)[i] = 0;
@@ -96,6 +108,10 @@ void _start(void) {
         }
     }
 
+    /* The shared-knowledge slice must stay READ-only: an imprint into region
+     * 3 must be EXACTLY EPERM. (Since #177 this deny comes from the
+     * exact-region authorize() — the sub DOES hold a field-write cap now,
+     * just not for region 3 — not from the old capless cap_find path.) */
     field_imprint_req_t ireq;
     for (unsigned i = 0; i < sizeof(ireq); i++) {
         ((unsigned char *)&ireq)[i] = 0;
@@ -107,21 +123,61 @@ void _start(void) {
     ireq.pattern[2] = 'w';
     long w = imprint_(&ireq);
 
-    if (content_ok && w == -4) {
+    /* DIVISION OF LABOR (epic #177): publish this specialist's DISTINCT
+     * result into its own workspace — the delegated READ|WRITE must work. The
+     * result is derived from the shared phrase + the workspace digit, so the
+     * orchestrator can recompute and verify it independently. */
+    unsigned int rd = fnv1a(AGENT_PHRASE, AGENT_PHRASE_LEN);
+    rd = (rd ^ (unsigned int)('0' + ws)) * 16777619u; /* FNV-1a continued: || digit */
+    char result[12];
+    snprintf(result, sizeof(result), "w%08x", rd);
+    for (unsigned i = 0; i < sizeof(ireq); i++) {
+        ((unsigned char *)&ireq)[i] = 0;
+    }
+    ireq.region = ws;
+    ireq.len = 9;
+    for (unsigned n = 0; n < 9; n++) {
+        ireq.pattern[n] = (unsigned char)result[n];
+    }
+    long pub = imprint_(&ireq);
+
+    /* ISOLATION probe: the NEXT sibling workspace (4->5, 5->6, 6->4 — all
+     * unsigned, never a negative modulo operand) must refuse this
+     * specialist's write with EXACTLY EPERM. The target is asserted to be a
+     * genuine sibling before probing, so a formula regression fails loudly
+     * instead of "passing" against some other region's deny. */
+    unsigned sib = 4u + ((ws - 4u + 1u) % 3u);
+    if (sib < 4 || sib > 6 || sib == ws) {
+        snprintf(line, sizeof(line), "AGENTSUB BROKEN sibling formula ws=%u sib=%u", ws, sib);
+        write_str(line);
+        exit_(1);
+    }
+    for (unsigned i = 0; i < sizeof(ireq); i++) {
+        ((unsigned char *)&ireq)[i] = 0;
+    }
+    ireq.region = sib;
+    ireq.len = 3;
+    ireq.pattern[0] = 'x';
+    ireq.pattern[1] = 'x';
+    ireq.pattern[2] = 'x';
+    long iso = imprint_(&ireq);
+
+    if (content_ok && w == -4 && pub == 0 && iso == -4) {
         /* Ack carries evidence: the digest of what THIS sub actually recalled,
          * for the orchestrator's independent consensus check. */
         unsigned int dig = fnv1a(rout.winner, rout.winner_len);
         snprintf(line, sizeof(line),
-                 "AGENTSUB: recalled exact phrase from own noisy probe, write narrowed "
+                 "AGENTSUB: shared recall OK, published %s in region %u, sibling %u refused "
                  "(pid=%u digest=%08x)",
-                 self, dig);
+                 result, ws, sib, self, dig);
         write_str(line);
         char ack[12];
         snprintf(ack, sizeof(ack), "p%08x", dig);
         send_msg(ack, 9);
     } else {
-        snprintf(line, sizeof(line), "AGENTSUB BROKEN recall=%d content_ok=%d imprint=%d", (int)r,
-                 content_ok, (int)w);
+        snprintf(line, sizeof(line),
+                 "AGENTSUB BROKEN recall=%d content_ok=%d shared_imprint=%d publish=%d iso=%d",
+                 (int)r, content_ok, (int)w, (int)pub, (int)iso);
         write_str(line);
     }
 
