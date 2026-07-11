@@ -478,6 +478,18 @@ void user_swarm_demo_init(uint32_t ghostd_pid) {
     cap_create(swarm_pid, CAP_RESOURCE_IPC, ghostd_pid, CAP_READ | CAP_WRITE, 0, &cap);
     cap_create(ghostd_pid, CAP_RESOURCE_IPC, swarm_pid, CAP_READ | CAP_WRITE, 0, &cap);
 
+    /* swarm_svc -> fieldsyncd: a ONE-WAY IPC send-cap (ADR-0019) so the host can
+     * admit the swarm-plane session key over COM2 and swarm_svc forwards it to
+     * fieldsyncd. One-way (WRITE only, no reverse cap) is deliberate: a second
+     * cap on fieldsyncd's side would make its untargeted send to ghostd
+     * first-match ambiguously. Like the ghostd IPC caps, this is NOT re-minted
+     * on a fieldsyncd watchdog rebirth (a documented existing limitation; the
+     * host re-admits the key). g_fieldsyncd_pid was stashed by
+     * user_fieldsync_demo_init above. */
+    if (g_fieldsyncd_pid != 0) {
+        cap_create(swarm_pid, CAP_RESOURCE_IPC, g_fieldsyncd_pid, CAP_WRITE, 0, &cap);
+    }
+
     service_monitor(sid, true);
 
     boot_log("ghostOS: swarm-svc (ring 3) bridging COM2, wired to ghostd");

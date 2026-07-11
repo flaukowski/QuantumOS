@@ -663,6 +663,8 @@ jobs:
       run: make ci-smoke-2net
     - name: Two kernels couple their oscillator fields over UDP (epic #97)
       run: make ci-smoke-fieldsync
+    - name: Swarm-plane key channel — host admits a session key to fieldsyncd (ADR-0019)
+      run: make ci-smoke-keyadmit
 
   integration:
     name: Integration Tests

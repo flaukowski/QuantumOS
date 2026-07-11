@@ -2086,6 +2086,14 @@ ci-smoke-qsubmit: kernel
 	@echo "=== QuantumOS COM2 Quantum-Submit Test (epic #149 B1) ==="
 	QOS_KERNEL=$(BUILD_DIR)/kernel.elf32 python3 scripts/test_qos_qsubmit.py
 
+# Swarm-plane key channel (ADR-0019 increment B): the host admits the group
+# session key over the attested COM2 channel; swarm_svc forwards it to
+# fieldsyncd over the boot-minted IPC send-cap. Proves the key reaches
+# fieldsyncd end to end (non-vacuous: no key installed before the admit).
+ci-smoke-keyadmit: kernel
+	@echo "=== QuantumOS swarm-plane key-admit Test (ADR-0019) ==="
+	QOS_KERNEL=$(BUILD_DIR)/kernel.elf32 python3 scripts/test_qos_keyadmit.py
+
 # Agent society (epic #131): boots TWO attested QuantumOS VMs coupled into one
 # holographic field and proves they synchronize (R_x >= 0.80 from a divergent
 # start) under the Python harness — the MCP-driven generalization of
