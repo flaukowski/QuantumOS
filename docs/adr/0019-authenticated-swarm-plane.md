@@ -73,6 +73,54 @@ negotiable — the adversarial panel killed the naive version on each:
   consistent, but it concentrates trust.
 - MAX_PEERS 4 still bounds the society; authentication does not lift the scaling wall.
 
+## Implementation plan (2026-07-11, panel-reconciled)
+
+A 3-lens implementation-design panel resolved the wiring against the real code. Key finding:
+`fieldsyncd.c`'s `peer_pk[]` is a **packed IP** array (a review trap — "pk" = packed, not public
+key), and there is **zero** pre-existing key infrastructure. It was renamed `peer_ip` and the
+FSYN/FSYP frame ABIs were locked with static asserts as a prep step (this increment).
+
+**First increment — authenticated FSYN only:**
+- **Frame** grows to **296 B**: `magic(4) | seq(4) | phase[256] | tag[32]`, `_Static_assert(==296)`;
+  receiver tightens the accept from `n >= sizeof` to exact `n == 296`.
+- **Key store**: `peer_key[GHOST_MAX_PEERS][32]`, `peer_key_ok[]`, `peer_last_seq[]` in lockstep
+  with `peer_ip[]`.
+- **MAC**: add RFC-2104 **HMAC-SHA256** on the shipped integer `user/sha256.h` (NOT bare
+  `sha256(key||msg)`, NOT SipHash); `tag = HMAC(peer_key[i], magic||seq||phase)` over the leading
+  264 B; **constant-time** compare on ingress.
+- **Seq (blockers)**: a per-sender **monotonic transmit counter** (bumped once per send cycle,
+  NOT content-derived — FSYP is an idempotent resend that reuses its value, so a content-tied seq
+  would be rejected by the strictly-greater check). Seed `tx_seq = (uint32_t)ticks()` at `_start`
+  **and on watchdog rebirth** (SYS_TICKS survives rebirth and climbs 100×/s, so it is always above
+  the peer's last-seen seq — otherwise a reborn node's seq-from-0 is rejected forever). Receiver
+  requires strictly-greater; a key (re)install resets that peer's watermark.
+- **Key distribution**: host-admitted **group key over the attested COM2 channel**. `swarm_svc`
+  (sole COM2 holder) gets `SWARM_OP_KEY`; it discovers `fieldsyncd`'s pid via the uncapped
+  `SYSINFO_PS` scan (agentd precedent) and pushes the key with a **one-way TARGETED `send_to`**
+  (a bidirectional IPC pair would break `fieldsyncd`'s untargeted first-match send to ghostd).
+  A new `service_definition_t.ipc_peer` makes `start_slot` **re-mint** that cap on watchdog
+  rebirth (declarative `grant_*` caps name fixed ids and are re-minted; pid-named IPC caps are
+  not — the ADR-0014 gap this fixes). `fieldsyncd`'s IPC drain buffer widens (16→≥40 B) and
+  `note_key` is wired into **both** recv sites (main-loop drain + snapshot reply-wait) since the
+  key can race the snapshot reply.
+- **Host**: new `QosVM.admit_key` (model on `status()`) + `QosSociety` admits the group key to
+  every member **before** awaiting sync (fail-closed: no key → no `FIELDSYNC: frame from`).
+- **Reject accounting**: ring-3 **saturating counter** + one gate-greppable console line — never a
+  per-frame print, never a ring-3 write to the kernel authority ledger.
+- **Untouched**: `ghostd.c` and the kernel net layer (the MAC is stripped at the `fieldsyncd`
+  boundary before the `GHOST_COUPLE` IPC).
+
+**Gate**: an attacker VM on the society mcast L2 forges an FSYN and **spoofs a configured peer's
+source IP** (mandatory — `in_peer_set` already drops non-configured sources, so an un-spoofed
+injector is vacuous); lacking the key its tag fails the constant-time compare, so it never reaches
+a ghostd slot / never prints. Positive path still synchronizes. Revert-confirm: stub the MAC check
+to always-pass → the same spoofed frame now couples.
+
+**Deferred to later increments**: FSYP society-aggregate auth (print-only today, so a spoof only
+prints — reuse `reserved0` as seq + 32 B tag → 48 B); COM2 DATA-reply auth (host nonce + per-reply
+HMAC); insider hardening (pairwise keys + sender-IP binding); a sliding replay window; the IPC/net
+deny-audit ride-alongs.
+
 ## Evidence (baseline the phase builds on)
 - Verified threat: user/fieldsyncd.c:100-107 (source-IP-only filter), ghostd.c:736-743
   (peer slot overwrite), scripts/qos_bridge.py:1402-1403 (unlinked confession)
