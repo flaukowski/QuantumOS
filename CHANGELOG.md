@@ -45,8 +45,10 @@ also gates `release`.
 The frozen surface now also pins ring-crossing struct **field offsets**
 (`__builtin_offsetof` for every field of the six `udp`/`cap_derive`/`qpu_*`
 twins, cross-checked user↔kernel) — so a size-preserving field reorder, which
-the size check alone would miss, reddens the gate (221 golden entries). The
-device-ID / audit-durable-format sections follow next.
+the size check alone would miss, reddens the gate. The capability resource-type
+namespace (`cap_resource_type_t`) and the arg-page field offsets are frozen too
+(232 golden entries); the device-ID and audit-durable-format sections follow
+next.
 
 ## [0.5.0] — 2026-07-11 — Agent-reachable QPU, hardening, dead-code payoff
 

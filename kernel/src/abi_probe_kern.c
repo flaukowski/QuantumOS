@@ -120,6 +120,16 @@ __attribute__((used, section(".abi_ents"))) const struct abi_ent abi_kern[] = {
     ABI("kern:enum:CAP_PROCESS", CAP_PROCESS),
     ABI("kern:enum:CAP_PERM_ALL", CAP_PERM_ALL),
 
+    /* --- capability resource-type namespace (which class a cap guards) --- */
+    ABI("kern:enum:CAP_RESOURCE_MEMORY", CAP_RESOURCE_MEMORY),
+    ABI("kern:enum:CAP_RESOURCE_IPC", CAP_RESOURCE_IPC),
+    ABI("kern:enum:CAP_RESOURCE_DEVICE", CAP_RESOURCE_DEVICE),
+    ABI("kern:enum:CAP_RESOURCE_QUANTUM", CAP_RESOURCE_QUANTUM),
+    ABI("kern:enum:CAP_RESOURCE_PROCESS", CAP_RESOURCE_PROCESS),
+    ABI("kern:enum:CAP_RESOURCE_SERVICE", CAP_RESOURCE_SERVICE),
+    ABI("kern:enum:CAP_RESOURCE_FIELD", CAP_RESOURCE_FIELD),
+    ABI("kern:enum:CAP_RESOURCE_TYPE_COUNT", CAP_RESOURCE_TYPE_COUNT),
+
     /* --- ring-crossing struct sizes, emitted under the user-facing logical name
      * (value is the kernel _k_t size) so the twin check lines up 1:1 --- */
     ABI("kern:size:udp_req_t", sizeof(udp_req_k_t)),
