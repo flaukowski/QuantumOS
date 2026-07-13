@@ -560,6 +560,27 @@ jobs:
     - name: Boot at -m 512M and assert dynamic sizing + high-memory reachability
       run: make ci-smoke-mem512
 
+  scheduler-baseline:
+    name: Scheduler perf/stability baseline (ADR-0022 prereq 2, report-only)
+    runs-on: ubuntu-latest
+    needs: [build]
+    # ADR-0022 prerequisite 2: RECORD the scheduler baseline (preempt/switch per
+    # 1000 guest ticks, max reschedule gap, run-count spread) so a future scheduler-
+    # constant change is measured, not blind (ADR-0016). REPORT-ONLY in this PR: it
+    # asserts only a non-vacuous liveness floor (the scheduler is multiplexing a real
+    # roster), so it reddens on a dead/wedged scheduler but arms no perf band yet.
+    # A follow-up arms the calibration-selected scalar (preempt-per-1000-ticks) with a
+    # SCHED_QUANTUM_TICKS revert-confirm. Not a release blocker.
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+    - name: Install dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y build-essential qemu-system-x86 nasm python3
+    - name: Boot and record the scheduler baseline (liveness floor asserted)
+      run: make ci-smoke-sched
+
   quiet-boot:
     name: Quiet-Boot Test (clean interactive console)
     runs-on: ubuntu-latest

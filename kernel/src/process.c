@@ -15,6 +15,7 @@
 #include <kernel/types.h>
 #include <kernel/capability.h>
 #include <kernel/manifest.h>
+#include <kernel/interrupts.h> /* timer_get_ticks() for the ADR-0022 sched timing seam */
 #include <kernel/qpu.h>
 #include <kernel/quantum.h>
 #include <kernel/gdt.h>
@@ -702,13 +703,19 @@ status_t process_switch_to(process_t *process) {
     /* Update statistics */
     process_statistics.context_switches++;
 
-    /* Update timing */
-    uint64_t now = 0; /* TODO: Get system time */
+    /* Update timing. `now` is the PIT tick count (10 ms/tick at TIMER_DEFAULT_HZ);
+     * this was a dead `0` stub, so runtime_last/runtime_total/last_scheduled were
+     * always 0. Making it live is the ADR-0022 prerequisite-2 fairness/tail seam:
+     * last_scheduled feeds max(now - last_scheduled) (the reschedule-gap tail) and
+     * sched_picks the run-count spread. Measurement-only — no scheduling decision
+     * depends on these; they only record when/how often a process was picked. */
+    uint64_t now = timer_get_ticks();
     if (old_process) {
         old_process->runtime_last = now - old_process->last_scheduled;
         old_process->runtime_total += old_process->runtime_last;
     }
     process->last_scheduled = now;
+    process->sched_picks++;
 
     return STATUS_SUCCESS;
 }

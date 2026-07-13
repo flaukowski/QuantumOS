@@ -99,7 +99,9 @@ typedef struct process {
     uint64_t creation_time;  /* When process was created */
     uint64_t runtime_total;  /* Total runtime in nanoseconds */
     uint64_t runtime_last;   /* Runtime of last quantum */
-    uint64_t last_scheduled; /* Last time process was scheduled */
+    uint64_t last_scheduled; /* Timer tick at which the process was last picked (ADR-0022) */
+    uint64_t
+        sched_picks; /* Count of times the scheduler has picked this process (ADR-0022 fairness) */
 
     /* IPC integration - queues managed internally by PID via ipc_process_init() */
     uint32_t port_count; /* Number of owned IPC ports */

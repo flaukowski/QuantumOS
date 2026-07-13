@@ -291,6 +291,8 @@
 #define SYSINFO_QUIET 3      /* no buffer; returns 1 if the kernel booted `quiet` */
 #define SYSINFO_PEER 4       /* no buffer; arg2 = index; returns packed peer= IP (0=oob) */
 #define SYSINFO_PEER_COUNT 5 /* no buffer; returns the configured peer count (epic #139) */
+#define SYSINFO_SCHED                                                                              \
+    6 /* scheduler baseline line: "SCHED: switches=.. preempt=.. ticks=.. maxgap=.. spread=.. runnable=.." (ADR-0022) */
 
 /* Bytes SYS_CONS will move per call at most (bounds the kernel bounce buffer). */
 #define CONS_MAX_BYTES 256

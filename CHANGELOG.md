@@ -141,6 +141,45 @@ the `mem256` `PMMHIGH`-live check while sizing still passes (the two gates are
 independent). Every "un-fakeable gate" named in the ADR-0021 design is now live.
 Build clean under `-Werror`; format/cppcheck/api-consistency green.
 
+### ADR-0022 prereq-2 — scheduler perf/stability baseline (report-only + calibration)
+
+ADR-0022 deferred the COM2-latency fix behind two prerequisites; prereq 1 (the
+latency gate) shipped. This is prereq 2: a scheduler perf/stability baseline so a
+future scheduler-constant change is *measured*, not blind (ADR-0016). **Measurement-
+only** — it changes no timer HZ / `SCHED_QUANTUM_TICKS` / service model.
+
+An adversarial design panel refuted the naive metric: aggregate context switches are
+dominated by voluntary `yield()`s (every long-lived citizen busy-yields with a non-
+blocking recv, resetting the quantum counter thousands of times per 10 ms tick), so
+`switch_count/tick` is both quantum-insensitive (a gate on it is vacuous) and host-
+throughput dependent (CI-flaky). The fix is a **dedicated `preempt_count`** in the
+scheduler, incremented only at the timer-quantum-expiry reschedule in `scheduler_tick`
+(never on `SYS_YIELD`), which is 1/quantum-paced by construction. Exposed as a new
+`SYSINFO_SCHED` sub-op (no new syscall — no ADR-0020 golden churn) on one atomic line
+`SCHED: switches=.. preempt=.. ticks=.. maxgap=.. spread=.. runnable=..`, driven by a
+qsh `sched` command and `QosVM.sched()`. The dead `now = 0 /* TODO */` timing stub in
+`process_switch_to` is made live (`timer_get_ticks()`), and a per-PCB `sched_picks`
+counter added, so the line also carries the fairness/tail snapshot (max reschedule gap,
+run-count spread) over the runnable roster.
+
+`scripts/test_qos_sched.py` (gate `make ci-smoke-sched`, CI job `scheduler-baseline`)
+is **report-only**: it records the tick-normalized baseline and asserts only a non-
+vacuous **liveness floor** (≥100 switches and ≥12 runnable over the window), so it
+reddens on a dead/wedged scheduler but arms no perf band yet. Empirical calibration
+(WSL, 3 runs each) **selected the gated scalar** for the follow-up — preemptions per
+1000 guest ticks tracks 1/quantum almost exactly and host-invariantly:
+
+| `SCHED_QUANTUM_TICKS` | preempt/1000t (idle, load) | switch/1000t |
+|---|---|---|
+| 5 (default) | 199.5–200.0 | ~520 |
+| 20 | 49.9, 49.8 | ~131 |
+| 80 | harness times out (system too sluggish to fill the tick window) |
+
+So a 4× quantum change moves the metric 4× with <0.5 % variance — the follow-up arms a
+floor of ~100 (= q5-median × 0.5), revert-confirmed by a `SCHED_QUANTUM_TICKS` bump to
+20 (q=80 grinds the harness itself, so 20 is the practical lever). Build clean under
+`-Werror`; format/cppcheck/api-consistency green.
+
 ## [0.5.0] — 2026-07-11 — Agent-reachable QPU, hardening, dead-code payoff
 
 Post-v0.4.0 increments landed autonomously through the panel → gate (revert-and-confirm)

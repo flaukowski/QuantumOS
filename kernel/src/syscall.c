@@ -561,6 +561,31 @@ static uint64_t sys_sysinfo(uint32_t pid, uint64_t op, uint64_t user_ptr, uint64
         o = fmt_dec(tmp, o, sizeof(tmp), pmm_get_total_frames());
         o = fmt_str(tmp, o, sizeof(tmp), "\r\n");
         produced = o;
+    } else if (op == SYSINFO_SCHED) {
+        /* ADR-0022 prereq-2 scheduler baseline, one atomic line (this syscall runs
+         * cli'd on one CPU). `now` is read ONCE so ticks= and the fairness gap base
+         * are coherent. switches= is total context switches (yield-dominated),
+         * preempt= is timer-quantum expiries only (the quantum-sensitive metric),
+         * maxgap/spread/runnable are the fairness/tail snapshot. All read-only. */
+        uint64_t now = timer_get_ticks();
+        uint64_t max_gap = 0, spread = 0;
+        uint32_t runnable = 0;
+        scheduler_get_fairness(now, &max_gap, &spread, &runnable);
+        size_t o = 0;
+        o = fmt_str(tmp, o, sizeof(tmp), "SCHED: switches=");
+        o = fmt_dec(tmp, o, sizeof(tmp), scheduler_get_switches());
+        o = fmt_str(tmp, o, sizeof(tmp), " preempt=");
+        o = fmt_dec(tmp, o, sizeof(tmp), scheduler_get_preempts());
+        o = fmt_str(tmp, o, sizeof(tmp), " ticks=");
+        o = fmt_dec(tmp, o, sizeof(tmp), now);
+        o = fmt_str(tmp, o, sizeof(tmp), " maxgap=");
+        o = fmt_dec(tmp, o, sizeof(tmp), max_gap);
+        o = fmt_str(tmp, o, sizeof(tmp), " spread=");
+        o = fmt_dec(tmp, o, sizeof(tmp), spread);
+        o = fmt_str(tmp, o, sizeof(tmp), " runnable=");
+        o = fmt_dec(tmp, o, sizeof(tmp), runnable);
+        o = fmt_str(tmp, o, sizeof(tmp), "\r\n");
+        produced = o;
     } else {
         return SYSCALL_EINVAL;
     }
