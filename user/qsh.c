@@ -1146,6 +1146,18 @@ static void cmd_ps(void) {
     }
 }
 
+/* Scheduler baseline (ADR-0022 prereq-2): print one SCHED: line — total switches,
+ * timer-quantum preemptions, current tick, and the fairness/tail snapshot. Argument-
+ * free (no agent-controlled bytes reach the SCHED: line) so it is not a marker-spoof
+ * surface for the latency/baseline harness. */
+static void cmd_sched(void) {
+    static char buf[256];
+    long n = sysinfo(SYSINFO_SCHED, buf, sizeof(buf));
+    if (n > 0) {
+        out_bytes(buf, n);
+    }
+}
+
 static void cmd_free(void) {
     char buf[128];
     long n = sysinfo(SYSINFO_MEM, buf, sizeof(buf));
@@ -1347,6 +1359,8 @@ static void execute(const char *line) {
         out("qsh: \r\n");
     } else if (is_cmd(line, "ps")) {
         cmd_ps();
+    } else if (is_cmd(line, "sched")) {
+        cmd_sched();
     } else if ((a = arg_of(line, "ls")) != 0) {
         cmd_ls(a);
     } else if (is_cmd(line, "ls")) {

@@ -91,6 +91,8 @@
 #define SYSINFO_QUIET 3
 #define SYSINFO_PEER 4       /* epic #97/#139: arg2 = index; packed peer IP, 0 = oob */
 #define SYSINFO_PEER_COUNT 5 /* epic #139: configured peer count */
+#define SYSINFO_SCHED                                                                              \
+    6 /* ADR-0022: scheduler baseline line (switches/preempt/ticks/maxgap/spread/runnable) */
 
 static inline long usys0(long n) {
     long r;

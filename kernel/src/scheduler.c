@@ -28,6 +28,14 @@
 
 static uint64_t switch_count = 0;
 static uint32_t quantum_counter = 0;
+/* Timer-quantum PREEMPTIONS only (ADR-0022 prereq-2): incremented exclusively on
+ * the quantum-expiry path in scheduler_tick, NEVER on a voluntary SYS_YIELD. This
+ * is the distinction that makes the scheduler baseline non-vacuous: switch_count is
+ * dominated by voluntary yields (citizens busy-yield every loop pass, resetting
+ * quantum_counter before it reaches SCHED_QUANTUM_TICKS), so switch_count/tick is
+ * insensitive to the quantum. preempt_count is 1/quantum-paced by construction and
+ * so is the quantity a SCHED_QUANTUM_TICKS change actually moves. */
+static uint64_t preempt_count = 0;
 
 /* PID of the idle process (created second in process_init) */
 #define IDLE_PROCESS_ID (KERNEL_PROCESS_ID + 1)
@@ -132,6 +140,11 @@ void scheduler_tick(cpu_state_t *state) {
     if (++quantum_counter < SCHED_QUANTUM_TICKS) {
         return;
     }
+    /* The quantum expired: this is a genuine timer preemption (the process ran a
+     * full SCHED_QUANTUM_TICKS slice without yielding). Count it here, on the
+     * expiry path ONLY, so preempt_count excludes the voluntary SYS_YIELD calls
+     * that also route through scheduler_reschedule (ADR-0022 prereq-2). */
+    preempt_count++;
     scheduler_reschedule(state);
 }
 
@@ -215,6 +228,58 @@ void scheduler_kill_current(cpu_state_t *state) {
 
 uint64_t scheduler_get_switches(void) {
     return switch_count;
+}
+
+uint64_t scheduler_get_preempts(void) {
+    return preempt_count;
+}
+
+/* ADR-0022 prereq-2 fairness/tail snapshot over the runnable ring-3 citizens
+ * (state READY or RUNNING, excluding the kernel and idle processes):
+ *   *max_gap    = max(now - last_scheduled)         -- worst reschedule-gap tail
+ *   *spread     = max(sched_picks) - min(sched_picks) -- run-count fairness spread
+ *   *runnable_n = count of such processes            -- the ~9 long-lived roster at rest
+ * `now` is passed in (read once by the caller via timer_get_ticks) so the gap is
+ * coherent with the tick count reported on the same line. Read-only: it inspects
+ * process state and counters and changes no scheduling decision. */
+void scheduler_get_fairness(uint64_t now, uint64_t *max_gap, uint64_t *spread,
+                            uint32_t *runnable_n) {
+    uint64_t gap = 0;
+    uint64_t min_picks = (uint64_t)-1;
+    uint64_t max_picks = 0;
+    uint32_t n = 0;
+    for (uint32_t pid = 0; pid < MAX_PROCESSES; pid++) {
+        process_t *p = process_get_by_pid(pid);
+        if (!p) {
+            continue;
+        }
+        if (p->state != PROCESS_STATE_READY && p->state != PROCESS_STATE_RUNNING) {
+            continue;
+        }
+        if (pid == IDLE_PROCESS_ID || pid == KERNEL_PROCESS_ID) {
+            continue;
+        }
+        n++;
+        uint64_t g = now - p->last_scheduled; /* now is monotonic >= last_scheduled */
+        if (g > gap) {
+            gap = g;
+        }
+        if (p->sched_picks < min_picks) {
+            min_picks = p->sched_picks;
+        }
+        if (p->sched_picks > max_picks) {
+            max_picks = p->sched_picks;
+        }
+    }
+    if (max_gap) {
+        *max_gap = gap;
+    }
+    if (spread) {
+        *spread = (n > 0) ? (max_picks - min_picks) : 0;
+    }
+    if (runnable_n) {
+        *runnable_n = n;
+    }
 }
 
 status_t kernel_thread_create(const char *name, void (*entry)(void), uint8_t priority,

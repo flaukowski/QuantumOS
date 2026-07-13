@@ -31,6 +31,18 @@ status_t kernel_thread_create(const char *name, void (*entry)(void), uint8_t pri
 /* Number of context switches performed by the scheduler */
 uint64_t scheduler_get_switches(void);
 
+/* Timer-quantum PREEMPTIONS only (ADR-0022 prereq-2): switches caused by a
+ * quantum expiry, excluding voluntary SYS_YIELD. This is the quantum-sensitive,
+ * host-invariant quantity a scheduler baseline is built on (see scheduler.c). */
+uint64_t scheduler_get_preempts(void);
+
+/* ADR-0022 prereq-2 fairness/tail snapshot over the runnable ring-3 citizens.
+ * Writes max reschedule gap (max now - last_scheduled), the run-count spread
+ * (max - min sched_picks), and the runnable count. Read-only; `now` is the
+ * caller's single timer_get_ticks() read (kept coherent with its tick report). */
+void scheduler_get_fairness(uint64_t now, uint64_t *max_gap, uint64_t *spread,
+                            uint32_t *runnable_n);
+
 /* Timer callback (exposed for diagnostics/testing) */
 void scheduler_tick(cpu_state_t *state);
 

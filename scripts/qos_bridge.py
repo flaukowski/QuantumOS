@@ -1290,6 +1290,24 @@ class QosVM:
         return {"uptime": uptime, "mem": mem, "processes": procs,
                 "date": md.group(1) if md else None, "identity": self.identity()}
 
+    def sched(self, deadline_s=12.0):
+        """One scheduler-baseline sample (ADR-0022 prerequisite 2): the SCHED: line
+        from the argument-free qsh `sched` command, parsed into counters. `switches`
+        is total context switches (yield-dominated), `preempt` is timer-quantum
+        expiries only (the quantum-sensitive metric), `ticks` the current PIT tick,
+        and maxgap/spread/runnable the fairness/tail snapshot over the runnable
+        citizens. Argument-free -> no agent bytes reach the parsed line. Raises
+        QosError if the line never appears."""
+        self._ensure_verified()
+        text = self._collect(["sched"], deadline_s, "sched")
+        m = re.search(
+            r"^SCHED: switches=(\d+) preempt=(\d+) ticks=(\d+) maxgap=(\d+) spread=(\d+) runnable=(\d+)",
+            text, re.M)
+        if not m:
+            raise QosError("sched: SCHED line not found in qsh output")
+        return {"switches": int(m.group(1)), "preempt": int(m.group(2)), "ticks": int(m.group(3)),
+                "maxgap": int(m.group(4)), "spread": int(m.group(5)), "runnable": int(m.group(6))}
+
     def qrand(self, deadline_s=8.0):
         """Draw 64 bits of quantum-seeded entropy via the qsh `qrand` command
         (SYS_QRAND, capability-gated in the guest). Returns lowercase hex."""
