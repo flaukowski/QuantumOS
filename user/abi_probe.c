@@ -166,6 +166,11 @@ __attribute__((used, section(".abi_ents"))) const struct abi_ent abi_user[] = {
     ABI("user:const:USER_ARGS_MAX", USER_ARGS_MAX),
     ABI("user:const:USER_ARGS_STRBYTES", USER_ARGS_STRBYTES),
 
+    /* --- arg-page field offsets (the read-offset math is the contract) --- */
+    ABI("user:off:user_args_t.argc", __builtin_offsetof(user_args_t, argc)),
+    ABI("user:off:user_args_t.argv_off", __builtin_offsetof(user_args_t, argv_off)),
+    ABI("user:off:user_args_t.strings", __builtin_offsetof(user_args_t, strings)),
+
     /* --- field bounds --- */
     ABI("user:const:FIELD_PAT_MAX", FIELD_PAT_MAX),
     ABI("user:const:FIELD_RANK_MAX", FIELD_RANK_MAX),
