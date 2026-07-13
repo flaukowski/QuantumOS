@@ -19,10 +19,15 @@ void _start(void) {
         exit_(1);
     }
 
-    char buf[120];
+    /* Zero-init and receive into all but the last byte: recv_msg returns the
+     * sender pid (not a length) and does not NUL-terminate, so a reply shorter
+     * than the buffer would leave write_str reading past it into this process's
+     * own uninitialized stack. The zeroed tail + reserved terminator bound the
+     * subsequent write_str to the actual reply. */
+    char buf[120] = {0};
     long spins = 0;
     while (spins < 100000) {
-        long sender = recv_msg(buf, sizeof(buf));
+        long sender = recv_msg(buf, sizeof(buf) - 1);
         if (sender != 0) {
             write_str("ipc-client: got reply ->");
             write_str(buf);

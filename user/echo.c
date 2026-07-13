@@ -13,12 +13,17 @@
 void _start(void) {
     write_str("echo-service: online in ring 3, awaiting IPC");
 
-    char buf[120];
+    /* Zero-init and receive into all but the last byte: recv_msg returns the
+     * sender pid (not a length) and does not NUL-terminate, so the "echo: <req>"
+     * copy below (which walks buf until a NUL) would otherwise splice this
+     * service's own uninitialized stack into the reply. The zeroed tail +
+     * reserved terminator bound the copy to the actual request. */
+    char buf[120] = {0};
     int handled = 0;
     long spins = 0;
 
     while (handled < 2 && spins < 100000) {
-        long sender = recv_msg(buf, sizeof(buf));
+        long sender = recv_msg(buf, sizeof(buf) - 1);
         if (sender == 0) {
             yield(); /* mailbox empty — let the client run */
             spins++;
