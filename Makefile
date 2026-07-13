@@ -484,6 +484,10 @@ ci-smoke: kernel
 		exit 1; \
 	fi
 	@echo "SUCCESS: heap-reservation gate passed (heap frames reserved from the PMM)"
+	@# Physical-ceiling clamp gate (ADR-0021): the PMM clamps a synthetic > 1 GB
+	@# frame count to PMM_MAX_FRAMES; reverting the clamp panics the boot here.
+	@grep -q "PMMCLAMP: frame count clamps to the 1 GB identity ceiling" /tmp/qemu-boot.log 2>/dev/null || (echo "ERROR: 1GB-clamp gate missing (PMMCLAMP)"; cat /tmp/qemu-boot.log 2>/dev/null || true; echo "=== Smoke Test FAILED ==="; exit 1)
+	@echo "SUCCESS: 1GB-clamp gate passed (frame count clamps to the identity ceiling)"
 	@# Boot-validation gate (ADR-0021): the kernel is Multiboot1-only; a Multiboot2
 	@# magic must be refused. Self-test drives the real predicate with a dummy
 	@# info_addr (revert-confirmed: re-accepting MB2 panics the boot).
