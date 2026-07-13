@@ -77,6 +77,39 @@ proven load-bearing on the `-m 128M` leg without any > 1 GB RAM (revert-confirme
 removing the clamp panics the boot and reddens the gate). The mmap-driven dynamic
 sizing + high-memory feature legs follow in subsequent increments.
 
+### ADR-0021 dynamic-PMM — mmap-driven sizing (PR-3)
+
+The `128 * 1024 * 1024` hardcode (and its `TODO: Get actual memory size from
+multiboot`) is gone: `memory_init` now takes the RAM total as a parameter
+(`memory_init(void)` -> `memory_init(uint64_t total_memory)`), sized from a real
+parse of the Multiboot1 memory map. `multiboot_parse_memory()`
+(`kernel/src/main.c`) treats the e820 map as **untrusted** bootloader input — the
+whole mmap buffer must sit inside the 1 GB identity map with no overflow; each
+entry's size must be `>= 20` and advance the cursor without walking past the
+window (iteration-capped at 1024); only type-1 available regions count; each
+region end is overflow-checked and the RAM total is the **MAX** region end (never
+a sum), clamped to `PMM_PHYS_CEIL`. It falls back to `mem_upper`, then **panics**
+if neither is present rather than sizing a wild bitmap, and runs only *after*
+`boot_validate_multiboot` confirms the MB1 magic (parsing a v2 block at v1 offsets
+would wild-read like the closed framebuffer bug). Byte-wise `mb_rd32`/`mb_rd64`
+avoid unaligned access on the untrusted buffer.
+
+The parsed total flows `kernel_main` -> `boot_config.total_memory` ->
+`memory_init` -> `pmm_init`. The frame bitmap is now sized for the **1 GB maximum
+(fixed 32 KB)** rather than detected RAM, so it always covers the fixed
+kernel-image/heap reservations no matter what the mmap reported — structurally
+ruling out a small-RAM overrun; frames above the detected total stay
+free-but-unreachable (the alloc scan is bounded by `total_frames`).
+
+A one-line greppable `PMMSIZE=<hex>` boot marker reports the derived frame count.
+New `ci-smoke` gate asserts it lands in the 128 MB-class window `[0x7F00, 0x8000]`
+— observed `0x7FE0` at `-m 128M` (QEMU reserves ~128 KB at the top of RAM, which
+is exactly why the count is *not* the naive `0x8000` a hardcode would give).
+Revert-confirmed: forcing a 2 GB total clamps to `0x40000` and still boots to
+`QuantumOS ready` (the clamp survives), but trips the gate with `frame count
+262144 outside window` — the gate has teeth. The `-m 256M/512M` scaling legs (the
+true hardcode-vs-live differential) follow in PR-4.
+
 ## [0.5.0] — 2026-07-11 — Agent-reachable QPU, hardening, dead-code payoff
 
 Post-v0.4.0 increments landed autonomously through the panel → gate (revert-and-confirm)
