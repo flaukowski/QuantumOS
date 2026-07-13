@@ -488,6 +488,21 @@ ci-smoke: kernel
 	@# frame count to PMM_MAX_FRAMES; reverting the clamp panics the boot here.
 	@grep -q "PMMCLAMP: frame count clamps to the 1 GB identity ceiling" /tmp/qemu-boot.log 2>/dev/null || (echo "ERROR: 1GB-clamp gate missing (PMMCLAMP)"; cat /tmp/qemu-boot.log 2>/dev/null || true; echo "=== Smoke Test FAILED ==="; exit 1)
 	@echo "SUCCESS: 1GB-clamp gate passed (frame count clamps to the identity ceiling)"
+	@# PMM sizing gate (ADR-0021 PR-3): prove total_frames is DERIVED from the real
+	@# multiboot memory map, not a hardcode. At -m 128M QEMU's e820 reports a 128
+	@# MB-class usable region (~0x7FE0 frames; the top ~128 KB is reserved), so the
+	@# count must land in [0x7F00, 0x8000] (~1 MB tolerance for QEMU e820 skew):
+	@# below that rejects a zero/panic parse, above rejects the >1 GB clamp ceiling.
+	@grep -q "PMMSIZE=" /tmp/qemu-boot.log 2>/dev/null || (echo "ERROR: PMM sizing marker missing (PMMSIZE)"; cat /tmp/qemu-boot.log 2>/dev/null || true; echo "=== Smoke Test FAILED ==="; exit 1)
+	@PMMHEX=$$(grep -oE "PMMSIZE=[0-9A-Fa-f]{16}" /tmp/qemu-boot.log | head -1 | sed 's/PMMSIZE=//'); \
+	PMMDEC=$$((0x$$PMMHEX)); \
+	if [ "$$PMMDEC" -lt 32512 ] || [ "$$PMMDEC" -gt 32768 ]; then \
+		echo "ERROR: PMM frame count $$PMMDEC (0x$$PMMHEX) outside 128 MB-class window [32512,32768] (PMMSIZE)"; \
+		cat /tmp/qemu-boot.log 2>/dev/null || true; \
+		echo "=== Smoke Test FAILED ==="; \
+		exit 1; \
+	fi; \
+	echo "SUCCESS: PMM sizing gate passed (total_frames=0x$$PMMHEX derived from multiboot mmap)"
 	@# Boot-validation gate (ADR-0021): the kernel is Multiboot1-only; a Multiboot2
 	@# magic must be refused. Self-test drives the real predicate with a dummy
 	@# info_addr (revert-confirmed: re-accepting MB2 panics the boot).
