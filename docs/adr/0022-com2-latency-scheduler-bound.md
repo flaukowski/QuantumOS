@@ -1,15 +1,30 @@
 # 22. COM2 Round-Trip Latency Is Scheduler-Cadence-Bound
 
 Date: 2026-07-11
-Status: Proposed (root cause measured; a fix is DEFERRED — **prerequisite 1, the latency gate, now shipped**)
+Status: Accepted (2026-07-13; the deferral decision + both prerequisites are complete — the latency fix itself remains a deliberately deferred future epic)
 
 > **Update (2026-07-11).** Prerequisite 1 below — a bounded latency assertion — **shipped** as
 > `ci-smoke-latency` (`scripts/test_qos_latency.py`, via the new `QosVM.ping()` one-hop primitive).
 > It asserts a bounded PING/PONG median (the pure transport + scheduler-cadence floor) and records the
 > STATUS baseline; it is revert-confirmed against the real regression source — bumping
 > `SCHED_QUANTUM_TICKS` reddens it. This gives any future latency-reduction work a proven guard and a
-> recorded baseline (~0.45 s PING / ~0.90 s STATUS on the dev box). Prerequisite 2 (a scheduler perf
-> baseline) and the fix itself remain open.
+> recorded baseline (~0.45 s PING / ~0.90 s STATUS on the dev box).
+>
+> **Update (2026-07-13) — Accepted, both prerequisites complete.** Prerequisite 2 (the scheduler
+> perf/stability baseline) shipped as `ci-smoke-latency`'s sibling `ci-smoke-sched`
+> (`scripts/test_qos_sched.py`, CI job `scheduler-baseline`). A design panel refuted the naive metric —
+> aggregate context switches are voluntary-yield-dominated, so `switch_count/tick` is both quantum-
+> insensitive and host-throughput-dependent. The kernel instead grew a **dedicated `preempt_count`**
+> incremented only at timer-quantum expiry (never on `SYS_YIELD`), exposed via a `SYSINFO_SCHED` sub-op
+> / qsh `sched` command / `QosVM.sched()`, alongside a made-live `last_scheduled` and a per-PCB
+> `sched_picks` for the fairness/tail snapshot. Calibration (WSL) confirmed **preemptions-per-1000-
+> guest-ticks ≈ 1000/quantum, host-invariant** (~200 at q=5 idle+load with <0.5 % variance, ~50 at
+> q=20); the gate asserts that scalar in `[100, 600]` plus a liveness floor, revert-confirmed by a
+> `SCHED_QUANTUM_TICKS` 5→20 bump (rate drops to ~50, reddens the floor). Both prerequisites the fix was
+> gated on now exist. **The latency fix itself (the I/O-priority-boost epic, or a measured quantum
+> reduction) stays deferred** — it is now unblocked, with a proven latency gate AND a proven scheduler
+> baseline to measure it against, but remains a future epic per this ADR's decision, not an autonomous
+> increment.
 
 ## Context
 

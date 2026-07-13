@@ -180,6 +180,21 @@ floor of ~100 (= q5-median × 0.5), revert-confirmed by a `SCHED_QUANTUM_TICKS` 
 20 (q=80 grinds the harness itself, so 20 is the practical lever). Build clean under
 `-Werror`; format/cppcheck/api-consistency green.
 
+### ADR-0022 prereq-2 — arm the scheduler gate, **ADR Accepted**
+
+`scripts/test_qos_sched.py` flips from report-only to a real gate: it asserts
+**preemptions-per-1000-guest-ticks in `[100, 600]`** (the PR-1-calibrated scalar; ~200 at
+the default quantum) on top of the liveness floor. Everything asserted is a delta over
+guest ticks, so the band is host-CPU-invariant — a slow CI runner reads the same rate.
+The floor catches a *coarsened* round-robin cadence (the scheduler getting more sluggish —
+ADR-0022's regression direction); the loose ceiling catches pathological thrash without
+reddening on the intended future fix (a *smaller* quantum raises the rate). **Revert-
+confirmed** on WSL: at the default `SCHED_QUANTUM_TICKS=5` the gate is green (rate 199.9);
+bumping it to 20 drops the rate to 49.9 and reddens the floor; restoring returns it to
+green. This completes ADR-0022's second prerequisite, so the ADR flips to **Accepted** —
+the deferral decision and both prerequisites (latency gate + scheduler baseline) are done;
+the latency fix itself stays a deliberately deferred, now-unblocked future epic.
+
 ## [0.5.0] — 2026-07-11 — Agent-reachable QPU, hardening, dead-code payoff
 
 Post-v0.4.0 increments landed autonomously through the panel → gate (revert-and-confirm)
