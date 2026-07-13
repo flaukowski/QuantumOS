@@ -27,6 +27,22 @@ surface (`user/usys.h`):
   upcoming ABI freeze probe can `#include` and compiler-measure them. ABI-neutral
   (identical structs, `_Static_assert`s moved with them).
 
+### Added — v1 golden ABI freeze gate (ADR-0020)
+
+`contracts/abi/v1.golden` freezes the guest+kernel ABI contract — the 35 syscall
+numbers, the sub-op namespaces, the errno table, capability permission bits, and
+the ring-crossing struct sizes — and CI diffs it on every push/PR. The values are
+**compiler-measured**, not parsed from source: two probe TUs (`user/abi_probe.c`,
+`kernel/src/abi_probe_kern.c`) emit the contract into a `.abi_ents` section under
+the real build flags, and `scripts/extract-abi.py` reads it back with `objcopy`.
+The gate cross-checks that the user/kernel twins agree, diffs against the
+committed golden (an intended change is a visible golden diff, never silently
+regenerated — `make regen-abi-golden` is human-only), and a teeth-check compiles
+a mutated `SYS_QPU` and asserts the gate reddens, so a broken generator can't ship
+vacuously green. New CI job `abi-golden` (gcc + binutils, no boot, no pip) that
+also gates `release`. Struct offsets and the device-ID / audit-format sections
+follow in a subsequent increment.
+
 ## [0.5.0] — 2026-07-11 — Agent-reachable QPU, hardening, dead-code payoff
 
 Post-v0.4.0 increments landed autonomously through the panel → gate (revert-and-confirm)

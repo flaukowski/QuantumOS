@@ -2361,3 +2361,41 @@ info:
 
 # Default target
 .DEFAULT_GOAL := all
+
+# ---------------------------------------------------------------------------
+# v1 ABI freeze gate (ADR-0020). Two probe TUs (user/abi_probe.c,
+# kernel/src/abi_probe_kern.c) emit the guest+kernel ABI contract into a
+# .abi_ents section under the REAL build flags; scripts/extract-abi.py reads it
+# back with objcopy and diffs it against the committed contracts/abi/v1.golden.
+# The gate NEVER regenerates the golden (that is regen-abi-golden, human-only),
+# so an intended ABI change is a visible golden diff in the PR. Timeout in ONE
+# place (the #93 desync lesson); no kernel prereq (fast static lane).
+# ---------------------------------------------------------------------------
+ABI_GOLDEN_GATE_TIMEOUT ?= 60s
+ABI_GOLDEN := contracts/abi/v1.golden
+ABI_PROBE_USER := $(BUILD_DIR)/abi/abi_probe_user.o
+ABI_PROBE_KERN := $(BUILD_DIR)/abi/abi_probe_kern.o
+
+$(ABI_PROBE_USER): $(USER_DIR)/abi_probe.c $(USER_DIR)/usys.h
+	@mkdir -p $(dir $@)
+	$(CC) $(USER_CFLAGS) -c $< -o $@
+
+$(ABI_PROBE_KERN): $(KERNEL_DIR)/src/abi_probe_kern.c
+	@mkdir -p $(dir $@)
+	$(CC) $(CFLAGS) -c $< -o $@
+
+.PHONY: regen-abi-golden ci-smoke-abi-golden-gate ci-smoke-abi-golden-selftest
+
+# HUMAN-ONLY: regenerate the committed golden after an intended ABI change.
+regen-abi-golden: $(ABI_PROBE_USER) $(ABI_PROBE_KERN)
+	python3 scripts/extract-abi.py emit --out $(ABI_GOLDEN) $(ABI_PROBE_USER) $(ABI_PROBE_KERN)
+
+# CI: diff extracted-vs-committed; NEVER writes the golden.
+ci-smoke-abi-golden-gate: $(ABI_PROBE_USER) $(ABI_PROBE_KERN)
+	timeout -k 5 $(ABI_GOLDEN_GATE_TIMEOUT) python3 scripts/extract-abi.py check --golden $(ABI_GOLDEN) $(ABI_PROBE_USER) $(ABI_PROBE_KERN)
+
+# CI teeth-check: a mutated ABI value MUST redden the gate.
+ci-smoke-abi-golden-selftest: $(ABI_PROBE_KERN)
+	@mkdir -p $(BUILD_DIR)/abi
+	$(CC) $(USER_CFLAGS) -DSYS_QPU_OVERRIDE=36 -c $(USER_DIR)/abi_probe.c -o $(BUILD_DIR)/abi/abi_probe_user_mut.o
+	@if timeout -k 5 $(ABI_GOLDEN_GATE_TIMEOUT) python3 scripts/extract-abi.py check --golden $(ABI_GOLDEN) $(BUILD_DIR)/abi/abi_probe_user_mut.o $(ABI_PROBE_KERN) >/dev/null 2>&1; then echo "TEETH-CHECK FAILED: a mutated SYS_QPU did NOT redden the gate"; exit 1; else echo "teeth-check OK: the mutation reddened the gate"; fi

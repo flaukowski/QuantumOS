@@ -18,6 +18,15 @@
  */
 #include "usys.h"
 
+/* Teeth-check hook (inert in a normal build): the ABI gate's --selftest
+ * recompiles this probe with -DSYS_QPU_OVERRIDE=<n> and asserts the gate
+ * reddens, proving a CHANGED ABI value is actually caught (not just an added or
+ * removed name). #undef-then-#define avoids a redefinition diagnostic. */
+#ifdef SYS_QPU_OVERRIDE
+#undef SYS_QPU
+#define SYS_QPU SYS_QPU_OVERRIDE
+#endif
+
 /* A wrong data model (ILP32/LLP64) would silently mis-measure every size; fail
  * the compile loudly instead of emitting a plausible-but-wrong 24. */
 _Static_assert(sizeof(long) == 8 && sizeof(void *) == 8, "wrong data model / ABI");
@@ -27,10 +36,10 @@ struct abi_ent {
     unsigned long long value;
 };
 
-#define ABI(n, v) {n, (unsigned long long)(v)}
+#define ABI(n, v)                                                                                  \
+    { n, (unsigned long long)(v) }
 
-__attribute__((used, section(".abi_ents")))
-const struct abi_ent abi_user[] = {
+__attribute__((used, section(".abi_ents"))) const struct abi_ent abi_user[] = {
     /* --- syscall numbers (1..35) --- */
     ABI("user:num:SYS_WRITE", SYS_WRITE),
     ABI("user:num:SYS_GETPID", SYS_GETPID),
