@@ -400,8 +400,13 @@ int pmm_highmem_selftest(void) {
 
     uint32_t base = pmm_get_free_frames();
     uint32_t saved_hint = pmm_alloc_hint;
-    // Aim the rover near the top so the allocation comes from high RAM.
-    pmm_alloc_hint = total - 4;
+    // Aim the rover near the top so the allocation comes from high RAM AND, on the
+    // 256M/512M legs, from the actual top of RAM (the strong differential proof).
+    // Clamp to the first high frame (index 0x8000 = 128 MB): when total is only a
+    // few frames above 0x8000, (total - 4) would fall BELOW 0x8000, the rover would
+    // return a LOW frame, and the >= 128 MB assertion below would spuriously fail —
+    // boot-panicking a legitimate memory size (total_frames in {0x8001,0x8002,0x8003}).
+    pmm_alloc_hint = ((total - 4) < 0x8000) ? 0x8000 : (total - 4);
     void *frame = pmm_alloc_frame();
     pmm_alloc_hint = saved_hint;
     if (!frame) {
