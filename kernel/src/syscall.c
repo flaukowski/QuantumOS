@@ -14,6 +14,7 @@
 #include <kernel/audit.h>
 #include <kernel/manifest.h>
 #include <kernel/qpu.h>
+#include <kernel/syscall_abi.h> /* ring-crossing _k_t twins (ADR-0020) */
 #include <kernel/process.h>
 #include <kernel/scheduler.h>
 #include <kernel/gdt.h>
@@ -816,14 +817,7 @@ static uint64_t sys_resolve(uint32_t pid, uint64_t host_ptr, uint64_t out_ptr) {
  * struct (usys wrappers cap out at 3 registers — the socketcall
  * pattern). The layout must match user/usys.h's udp_req_t exactly:
  * 24 bytes, buf at offset 16, no padding either side. */
-typedef struct __attribute__((packed)) {
-    int64_t sock;
-    uint8_t ip[4];
-    uint16_t port;
-    uint16_t len;
-    uint64_t buf;
-} udp_req_k_t;
-_Static_assert(sizeof(udp_req_k_t) == 24, "udp_req_t ABI drift");
+/* udp_req_k_t: defined in <kernel/syscall_abi.h>. */
 
 /* Map a net_udp_* result onto the syscall ABI. */
 static uint64_t udp_map_err(long r) {
@@ -1558,14 +1552,7 @@ static uint64_t sys_manifest(uint32_t pid, uint64_t user_ptr, uint64_t len) {
  *
  * The request must match user/usys.h cap_derive_req_t byte-for-byte (24 B, no
  * shared header across the ring). */
-typedef struct __attribute__((packed)) {
-    uint32_t resource_type; /* which of MY OWN caps (by type+id, not a handle) */
-    uint32_t resource_id;
-    uint32_t permissions; /* the narrowed subset to hand over */
-    uint32_t target_pid;  /* the sub-agent (must be an IPC peer) */
-    uint64_t expiration;  /* 0 = none/inherit (cap_derive clamps <= parent) */
-} cap_derive_req_k_t;
-_Static_assert(sizeof(cap_derive_req_k_t) == 24, "cap_derive_req ABI drift");
+/* cap_derive_req_k_t: defined in <kernel/syscall_abi.h>. */
 
 static uint64_t cap_derive_errno(cap_result_t r) {
     switch (r) {
@@ -1672,35 +1659,8 @@ static uint64_t sys_cap_derive(uint32_t pid, uint64_t req_ptr) {
  * qsub quota, copies OPAQUE payloads in/out of the fixed job table, and records
  * the exercised authority in the durable ledger. Request/result structs must
  * match user/usys.h byte-for-byte (twin _Static_asserts on both sides). */
-typedef struct {
-    uint32_t circuit_len;
-    uint8_t circuit[QPU_CIRCUIT_MAX];
-} qpu_submit_req_k_t;
-_Static_assert(sizeof(qpu_submit_req_k_t) == 260, "qpu_submit_req ABI drift");
-
-typedef struct {
-    uint32_t job_id;
-    uint32_t owner_pid;
-    uint32_t circuit_len;
-    uint8_t circuit[QPU_CIRCUIT_MAX];
-} qpu_fetch_out_k_t;
-_Static_assert(sizeof(qpu_fetch_out_k_t) == 268, "qpu_fetch_out ABI drift");
-
-typedef struct {
-    uint32_t job_id;
-    uint32_t status;
-    uint32_t result_len;
-    uint8_t result[QPU_RESULT_MAX];
-} qpu_complete_req_k_t;
-_Static_assert(sizeof(qpu_complete_req_k_t) == 140, "qpu_complete_req ABI drift");
-
-typedef struct {
-    uint32_t state;
-    uint32_t status;
-    uint32_t result_len;
-    uint8_t result[QPU_RESULT_MAX];
-} qpu_poll_out_k_t;
-_Static_assert(sizeof(qpu_poll_out_k_t) == 140, "qpu_poll_out ABI drift");
+/* qpu_submit_req_k_t / qpu_fetch_out_k_t / qpu_complete_req_k_t /
+ * qpu_poll_out_k_t: defined in <kernel/syscall_abi.h>. */
 
 /* Copy a whole struct in from ring 3 (mapping-validated: an in-range but
  * unmapped pointer returns 0/EFAULT rather than faulting the kernel — #158). */

@@ -21,6 +21,11 @@ surface (`user/usys.h`):
 - Annotated the intentional errno-band overlaps as frozen-v1 decisions:
   `svc_restarts()` returns `-1` (not-a-service) sharing `SYSCALL_EINVAL`, and
   `qseed_value()` returns a raw u64 not partitioned from the negative-errno band.
+- Split the 6 kernel-side ring-crossing `_k_t` twins (`udp_req_k_t`,
+  `cap_derive_req_k_t`, the four `qpu_*_k_t`) out of `kernel/src/syscall.c` into a
+  new kernel-internal header `kernel/include/kernel/syscall_abi.h`, so the
+  upcoming ABI freeze probe can `#include` and compiler-measure them. ABI-neutral
+  (identical structs, `_Static_assert`s moved with them).
 
 ## [0.5.0] — 2026-07-11 — Agent-reachable QPU, hardening, dead-code payoff
 
