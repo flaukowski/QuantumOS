@@ -118,7 +118,7 @@ OBJECTS = $(KERNEL_SOURCES:$(KERNEL_DIR)/src/%.c=$(BUILD_DIR)/%.o) \
 -include $(OBJECTS:.o=.d)
 
 # Targets
-.PHONY: all clean kernel run debug dump test test-list test-coverage ci-smoke ci-smoke-disk ci-smoke-disk-upgrade ci-smoke-net ci-smoke-http ci-smoke-httpd ci-smoke-quiet ci-smoke-resonant ci-smoke-qseed ci-smoke-swarm ci-smoke-mcp ci-smoke-mcp-gate ci-smoke-qsubmit ci-smoke-society ci-smoke-society-gate ci-smoke-society-agents ci-smoke-society-agents-gate ci-smoke-society3 ci-smoke-society3-gate ci-smoke-iso ci-smoke-kbd ci-smoke-noserial ci-smoke-screen swarm-pingpong
+.PHONY: all clean kernel run debug dump test test-list test-coverage ci-smoke ci-smoke-mem256 ci-smoke-mem512 ci-smoke-disk ci-smoke-disk-upgrade ci-smoke-net ci-smoke-http ci-smoke-httpd ci-smoke-quiet ci-smoke-resonant ci-smoke-qseed ci-smoke-swarm ci-smoke-mcp ci-smoke-mcp-gate ci-smoke-qsubmit ci-smoke-society ci-smoke-society-gate ci-smoke-society-agents ci-smoke-society-agents-gate ci-smoke-society3 ci-smoke-society3-gate ci-smoke-iso ci-smoke-kbd ci-smoke-noserial ci-smoke-screen swarm-pingpong
 
 all: kernel
 
@@ -503,6 +503,17 @@ ci-smoke: kernel
 		exit 1; \
 	fi; \
 	echo "SUCCESS: PMM sizing gate passed (total_frames=0x$$PMMHEX derived from multiboot mmap)"
+	@# High-memory gate (ADR-0021 PR-4): on the -m 128M leg there is no RAM above
+	@# 128 MB, so the reachability self-test must report the SKIP branch — proving
+	@# the guard ran (not a vacuous always-pass). The -m 256M/512M legs
+	@# (ci-smoke-mem256/mem512) assert the live "writeback verified" branch instead.
+	@grep -q "PMMHIGH: skipped (no RAM above 128 MB on this boot)" /tmp/qemu-boot.log 2>/dev/null || (echo "ERROR: high-memory skip gate missing (PMMHIGH)"; cat /tmp/qemu-boot.log 2>/dev/null || true; echo "=== Smoke Test FAILED ==="; exit 1)
+	@echo "SUCCESS: high-memory gate passed (skip path exercised at 128M)"
+	@# Residency-storm gate (ADR-0021 PR-4): a 1024-frame drain aimed at the heap
+	@# must never surrender a reserved frame. Reverting the heap reservation trips
+	@# this (the storm hands out a heap frame and the self-test panics the boot).
+	@grep -q "PMMSTORM: heap survives a 1024-frame drain" /tmp/qemu-boot.log 2>/dev/null || (echo "ERROR: residency-storm gate missing (PMMSTORM)"; cat /tmp/qemu-boot.log 2>/dev/null || true; echo "=== Smoke Test FAILED ==="; exit 1)
+	@echo "SUCCESS: residency-storm gate passed (heap survives a bulk drain)"
 	@# Boot-validation gate (ADR-0021): the kernel is Multiboot1-only; a Multiboot2
 	@# magic must be refused. Self-test drives the real predicate with a dummy
 	@# info_addr (revert-confirmed: re-accepting MB2 panics the boot).
@@ -1230,6 +1241,57 @@ ci-smoke: kernel
 	@echo "SUCCESS: NIC-less boot degrades honestly (no rtl8139 reported)"
 	@echo ""
 	@echo "=== Smoke Test PASSED ==="
+
+# CI Smoke Test (ADR-0021 PR-4 differential sizing, -m 256M): boot at 256 MB and
+# prove (1) the PMM sized itself from the LARGER map — total_frames ~doubles vs
+# the 128M leg, which a 128 MB hardcode could never do; (2) the high-memory
+# reachability self-test took its LIVE branch — a top-of-pool frame at >= 128 MB
+# was allocated AND written/read-back through the boot.S identity map. Together
+# with ci-smoke (128M) and ci-smoke-mem512 this is the true hardcode-vs-live
+# differential: a hardcode prints 0x7FE0 at EVERY -m and never PMMHIGH-live.
+ci-smoke-mem256: kernel
+	@echo "=== ADR-0021 differential sizing gate: -m 256M ==="
+	@test -f $(BUILD_DIR)/kernel.elf32 || (echo "ERROR: kernel not built" && exit 1)
+	@timeout 14s qemu-system-x86_64 -kernel $(BUILD_DIR)/kernel.elf32 -append quiet -serial stdio -m 256M -display none -no-reboot 2>&1 | tee /tmp/qemu-mem256.log || true
+	@grep -q "QuantumOS ready" /tmp/qemu-mem256.log 2>/dev/null || (echo "ERROR: kernel did not reach 'QuantumOS ready' at -m 256M"; cat /tmp/qemu-mem256.log 2>/dev/null || true; echo "=== mem256 FAILED ==="; exit 1)
+	@grep -q "PMMSIZE=" /tmp/qemu-mem256.log 2>/dev/null || (echo "ERROR: PMMSIZE marker missing at -m 256M"; echo "=== mem256 FAILED ==="; exit 1)
+	@PMMHEX=$$(grep -oE "PMMSIZE=[0-9A-Fa-f]{16}" /tmp/qemu-mem256.log | head -1 | sed 's/PMMSIZE=//'); \
+	PMMDEC=$$((0x$$PMMHEX)); \
+	if [ "$$PMMDEC" -lt 65280 ] || [ "$$PMMDEC" -gt 65536 ]; then \
+		echo "ERROR: -m 256M frame count $$PMMDEC (0x$$PMMHEX) outside 256 MB-class window [65280,65536] — sizing did not track -m"; \
+		cat /tmp/qemu-mem256.log 2>/dev/null || true; \
+		echo "=== mem256 FAILED ==="; \
+		exit 1; \
+	fi; \
+	echo "SUCCESS: -m 256M sized to 0x$$PMMHEX (~2x the 128M leg — sizing tracks real RAM)"
+	@grep -q "PMMHIGH: high-frame alloc + identity writeback verified" /tmp/qemu-mem256.log 2>/dev/null || (echo "ERROR: high-memory LIVE gate missing at -m 256M (PMMHIGH writeback)"; cat /tmp/qemu-mem256.log 2>/dev/null || true; echo "=== mem256 FAILED ==="; exit 1)
+	@echo "SUCCESS: high-memory writeback verified at -m 256M (identity map reaches >= 128 MB RAM)"
+	@grep -q "PMMSTORM: heap survives a 1024-frame drain" /tmp/qemu-mem256.log 2>/dev/null || (echo "ERROR: residency-storm gate missing at -m 256M (PMMSTORM)"; echo "=== mem256 FAILED ==="; exit 1)
+	@echo "=== mem256 differential gate PASSED ==="
+
+# CI Smoke Test (ADR-0021 PR-4 differential sizing, -m 512M): as ci-smoke-mem256
+# but at 512 MB — total_frames must ~quadruple the 128M leg (~0x1FFE0), and the
+# high-memory writeback must verify a frame near 512 MB is reachable through the
+# 1 GB identity map. Confirms sizing scales linearly with real RAM, not a step.
+ci-smoke-mem512: kernel
+	@echo "=== ADR-0021 differential sizing gate: -m 512M ==="
+	@test -f $(BUILD_DIR)/kernel.elf32 || (echo "ERROR: kernel not built" && exit 1)
+	@timeout 14s qemu-system-x86_64 -kernel $(BUILD_DIR)/kernel.elf32 -append quiet -serial stdio -m 512M -display none -no-reboot 2>&1 | tee /tmp/qemu-mem512.log || true
+	@grep -q "QuantumOS ready" /tmp/qemu-mem512.log 2>/dev/null || (echo "ERROR: kernel did not reach 'QuantumOS ready' at -m 512M"; cat /tmp/qemu-mem512.log 2>/dev/null || true; echo "=== mem512 FAILED ==="; exit 1)
+	@grep -q "PMMSIZE=" /tmp/qemu-mem512.log 2>/dev/null || (echo "ERROR: PMMSIZE marker missing at -m 512M"; echo "=== mem512 FAILED ==="; exit 1)
+	@PMMHEX=$$(grep -oE "PMMSIZE=[0-9A-Fa-f]{16}" /tmp/qemu-mem512.log | head -1 | sed 's/PMMSIZE=//'); \
+	PMMDEC=$$((0x$$PMMHEX)); \
+	if [ "$$PMMDEC" -lt 130816 ] || [ "$$PMMDEC" -gt 131072 ]; then \
+		echo "ERROR: -m 512M frame count $$PMMDEC (0x$$PMMHEX) outside 512 MB-class window [130816,131072] — sizing did not track -m"; \
+		cat /tmp/qemu-mem512.log 2>/dev/null || true; \
+		echo "=== mem512 FAILED ==="; \
+		exit 1; \
+	fi; \
+	echo "SUCCESS: -m 512M sized to 0x$$PMMHEX (~4x the 128M leg — sizing tracks real RAM)"
+	@grep -q "PMMHIGH: high-frame alloc + identity writeback verified" /tmp/qemu-mem512.log 2>/dev/null || (echo "ERROR: high-memory LIVE gate missing at -m 512M (PMMHIGH writeback)"; cat /tmp/qemu-mem512.log 2>/dev/null || true; echo "=== mem512 FAILED ==="; exit 1)
+	@echo "SUCCESS: high-memory writeback verified at -m 512M (identity map reaches ~512 MB RAM)"
+	@grep -q "PMMSTORM: heap survives a 1024-frame drain" /tmp/qemu-mem512.log 2>/dev/null || (echo "ERROR: residency-storm gate missing at -m 512M (PMMSTORM)"; echo "=== mem512 FAILED ==="; exit 1)
+	@echo "=== mem512 differential gate PASSED ==="
 
 # CI Smoke Test (persistence): the epic #71 capstone. Boot the SAME disk image
 # TWICE. Boot 1 attaches a freshly-zeroed image, writes a file to the overlay,
@@ -2376,7 +2438,7 @@ info:
 	@echo "  Objects: $(OBJECTS)"
 
 # Phony targets
-.PHONY: all clean kernel run run-iso debug dump test test-list test-coverage ci-smoke ci-smoke-resonant ci-smoke-qseed ci-smoke-iso ci-smoke-kbd ci-smoke-noserial ci-smoke-screen validate info install-deps help
+.PHONY: all clean kernel run run-iso debug dump test test-list test-coverage ci-smoke ci-smoke-mem256 ci-smoke-mem512 ci-smoke-resonant ci-smoke-qseed ci-smoke-iso ci-smoke-kbd ci-smoke-noserial ci-smoke-screen validate info install-deps help
 
 # Default target
 .DEFAULT_GOAL := all

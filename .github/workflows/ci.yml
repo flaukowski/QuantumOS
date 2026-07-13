@@ -523,6 +523,43 @@ jobs:
     - name: Boot a qseed handoff and assert provenance + the errno-collision gate
       run: make ci-smoke-qseed
 
+  pmm-differential-256:
+    name: PMM dynamic-sizing differential (-m 256M, ADR-0021)
+    runs-on: ubuntu-latest
+    needs: [build]
+    # ADR-0021 PR-4: boot at 256 MB and prove the PMM sized itself from the LARGER
+    # multiboot map (total_frames ~doubles the 128M leg — a 128 MB hardcode can't)
+    # AND that a top-of-pool frame is reachable through the boot.S 1 GB identity map
+    # (sentinel writeback). This is the true hardcode-vs-live differential: the
+    # -m 128M ci-smoke leg alone can't distinguish a 128 MB hardcode from a live
+    # parse (both look 128 MB-class there).
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+    - name: Install dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y build-essential qemu-system-x86 nasm
+    - name: Boot at -m 256M and assert dynamic sizing + high-memory reachability
+      run: make ci-smoke-mem256
+
+  pmm-differential-512:
+    name: PMM dynamic-sizing differential (-m 512M, ADR-0021)
+    runs-on: ubuntu-latest
+    needs: [build]
+    # As pmm-differential-256 but at 512 MB (total_frames ~quadruples the 128M leg),
+    # confirming the sizing scales linearly with real RAM and the identity map
+    # reaches ~512 MB physical, not a fixed step.
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+    - name: Install dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y build-essential qemu-system-x86 nasm
+    - name: Boot at -m 512M and assert dynamic sizing + high-memory reachability
+      run: make ci-smoke-mem512
+
   quiet-boot:
     name: Quiet-Boot Test (clean interactive console)
     runs-on: ubuntu-latest
@@ -1010,7 +1047,7 @@ jobs:
   release:
     name: Release Preparation
     runs-on: ubuntu-latest
-    needs: [build, security, code-quality, documentation, integration, abi-golden]
+    needs: [build, security, code-quality, documentation, integration, abi-golden, pmm-differential-256, pmm-differential-512]
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
 
     steps:

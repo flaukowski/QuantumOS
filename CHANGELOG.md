@@ -110,6 +110,37 @@ Revert-confirmed: forcing a 2 GB total clamps to `0x40000` and still boots to
 262144 outside window` — the gate has teeth. The `-m 256M/512M` scaling legs (the
 true hardcode-vs-live differential) follow in PR-4.
 
+### ADR-0021 dynamic-PMM — high-memory proof + differential CI (PR-4), **Accepted**
+
+Completes the feature and flips ADR-0021 to Accepted. Two new boot self-tests
+(`kernel/src/memory.c`, wired after `PMMCLAMP`):
+- `pmm_highmem_selftest` (`PMMHIGH`) — the load-bearing proof that dynamic sizing
+  is safe above 128 MB. On RAM past 128 MB it allocates a top-of-pool frame,
+  asserts its physical address is genuinely high (`>= 128 MB`, `< 1 GB`), and —
+  the real proof — writes two distinct sentinels through the returned identity VA
+  and reads them back, so a `boot.S` that mapped only 128 MB (or a wrong/stale
+  map) faults or mismatches here instead of silently handing out an unreachable
+  frame. On the `-m 128M` leg there is no high frame, so it reports the **skip**
+  branch (proving the guard ran — not a vacuous always-pass).
+- `pmm_residency_storm_selftest` (`PMMSTORM`) — extends the single-shot heap
+  reservation proof to a bulk drain: 1024 frames pulled with the rover aimed
+  straight at the reserved kernel heap, asserting none land in
+  `[__heap_start, __heap_end)`. Catches a multi-allocation rover regression that
+  the single-shot `PMMHEAP` check could miss.
+
+New differential CI legs `make ci-smoke-mem256` / `ci-smoke-mem512` (CI jobs
+`pmm-differential-256/512`, both gating `release`) boot at 256/512 MB and assert
+the frame count lands in that size's window (`~0xFFE0` / `~0x1FFE0`, i.e. it
+~doubles / ~quadruples the 128 MB leg's `0x7FE0`) **and** that the `PMMHIGH`
+writeback took its live branch. This is the true hardcode-vs-live differential
+that the `-m 128M` leg alone cannot show: a 128 MB hardcode prints `0x8000` at
+every `-m` and never the live `PMMHIGH`. Revert-confirmed two ways — re-hardcoding
+`memory_init` to 128 MB reddens the `mem256` sizing window (`0x8000` outside
+`[65280,65536]`); broadening the high-memory guard so 256 MB wrongly skips reddens
+the `mem256` `PMMHIGH`-live check while sizing still passes (the two gates are
+independent). Every "un-fakeable gate" named in the ADR-0021 design is now live.
+Build clean under `-Werror`; format/cppcheck/api-consistency green.
+
 ## [0.5.0] — 2026-07-11 — Agent-reachable QPU, hardening, dead-code payoff
 
 Post-v0.4.0 increments landed autonomously through the panel → gate (revert-and-confirm)
