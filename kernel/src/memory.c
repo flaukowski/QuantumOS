@@ -48,6 +48,21 @@ mem_result_t pmm_init(uint64_t total_memory) {
 
     // Calculate total frames
     uint64_t total_frames = total_memory / PAGE_SIZE;
+    // Clamp to the 1 GB identity-map ceiling BEFORE narrowing to uint32 and
+    // before the bitmap is sized: every frame the allocator can ever hand out
+    // must be mappable through boot.S's identity map (ADR-0021).
+    if (total_frames == 0) {
+        boot_panic("PMM: zero usable RAM");
+    }
+    if (total_frames > PMM_MAX_FRAMES) {
+        total_frames = PMM_MAX_FRAMES;
+    }
+    // Floor: the kernel heap's backing frames [__heap_start, __heap_end) are a
+    // fixed static-layout range; a machine reporting less RAM than that would let
+    // kheap_init build the heap on unbacked physical memory. Fail loudly.
+    if (total_frames < ((uintptr_t)__heap_end + PAGE_SIZE - 1) / PAGE_SIZE) {
+        boot_panic("PMM: RAM below the static kernel-layout floor");
+    }
     pmm.total_frames = (uint32_t)total_frames;
     pmm.free_frames = (uint32_t)total_frames;
     pmm.used_frames = 0;
@@ -59,6 +74,14 @@ mem_result_t pmm_init(uint64_t total_memory) {
     size_t bitmap_size = (total_frames + 7) / 8;
     pmm.frame_bitmap = (uint8_t *)ALIGN_UP((uintptr_t)&__end, PAGE_SIZE);
 
+    // The bitmap sits just past the kernel image, inside the 16 MB kernel region
+    // below the stack/heap origin at 0x01100000 (link.ld). Assert it cannot grow
+    // into that region, so the unstated "__end + bitmap < ram-origin" invariant
+    // fails loudly rather than silently corrupting the stack.
+    if ((uintptr_t)pmm.frame_bitmap + bitmap_size > 0x01100000UL) {
+        boot_panic("PMM: frame bitmap overruns the kernel region");
+    }
+
     // Initialize bitmap (all frames initially free)
     memset(pmm.frame_bitmap, 0, bitmap_size);
 
@@ -67,7 +90,7 @@ mem_result_t pmm_init(uint64_t total_memory) {
     uint64_t kernel_end = (uint64_t)pmm.frame_bitmap + bitmap_size;
     uint64_t kernel_frames = (kernel_end + PAGE_SIZE - 1) / PAGE_SIZE;
 
-    for (uint64_t i = 0; i < kernel_frames; i++) {
+    for (uint64_t i = 0; i < kernel_frames && i < total_frames; i++) {
         uint32_t frame = i;
         uint32_t byte_index = frame / 8;
         uint8_t bit_index = frame % 8;
@@ -135,7 +158,7 @@ void *pmm_alloc_frame(void) {
             // Advance the rover past this frame (wrap to 0 at the end).
             pmm_alloc_hint = (i + 1 < total) ? (i + 1) : 0;
 
-            void *frame_addr = (void *)(uintptr_t)(i * PAGE_SIZE);
+            void *frame_addr = (void *)((uintptr_t)i * PAGE_SIZE);
             irq_restore(flags);
             return frame_addr;
         }
