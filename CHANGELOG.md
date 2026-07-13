@@ -5,6 +5,23 @@ All notable changes to QuantumOS. The project uses semantic-ish milestone versio
 groupings of the 126 merged PRs (#7–#183), recorded here so the history reads honestly.
 Full per-PR provenance: `git log` and the PR list on GitHub.
 
+## [Unreleased]
+
+### ADR-0020 v1 contract freeze — pre-freeze corrections (guest syscall ABI)
+
+Groundwork before the golden-diff ABI freeze gate lands, so v1 pins a *correct*
+surface (`user/usys.h`):
+- Corrected the `field_info_` errno docstring: it cited Linux `-14 EFAULT` / `-22
+  EINVAL`; the syscall actually returns QuantumOS `SYSCALL_EFAULT` (-2) /
+  `SYSCALL_EINVAL` (-1).
+- Added 5 symmetric user-side twin-ABI `_Static_assert`s (`udp_req_t`=24,
+  `field_imprint_req_t`=76, `field_recall_req_t`=76, `field_recall_out_t`=136,
+  `user_args_t`=516) so a struct-size drift fails BOTH ring builds, not just the
+  kernel's.
+- Annotated the intentional errno-band overlaps as frozen-v1 decisions:
+  `svc_restarts()` returns `-1` (not-a-service) sharing `SYSCALL_EINVAL`, and
+  `qseed_value()` returns a raw u64 not partitioned from the negative-errno band.
+
 ## [0.5.0] — 2026-07-11 — Agent-reachable QPU, hardening, dead-code payoff
 
 Post-v0.4.0 increments landed autonomously through the panel → gate (revert-and-confirm)

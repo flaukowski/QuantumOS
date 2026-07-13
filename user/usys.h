@@ -132,7 +132,10 @@ static inline void heartbeat(void) {
     usys0(SYS_HEARTBEAT);
 }
 /* Restart count of the calling process's service slot, or -1 if the
- * caller is not a registered service. Used to detect a watchdog rebirth. */
+ * caller is not a registered service. Used to detect a watchdog rebirth.
+ * The not-a-service -1 intentionally shares the value of SYSCALL_EINVAL(-1);
+ * this overlap is a frozen v1 decision (ADR-0020) — a non-service caller
+ * knows its own status, so the collision is unambiguous in context. */
 static inline long svc_restarts(void) {
     return usys0(SYS_SVC_RESTARTS);
 }
@@ -168,7 +171,11 @@ static inline long qrand_seed_present(void) {
     return usys2(SYS_QRAND, 0, 0);
 }
 /* The boot qseed value the kernel accepted (0 = none), or negative errno
- * (-4 EPERM) if the caller holds no quantum-pool read capability. */
+ * (-4 EPERM) if the caller holds no quantum-pool read capability. The value
+ * is a RAW qseed and is NOT partitioned from the negative-errno band — a seed
+ * with the high bit set is indistinguishable from an errno by value alone.
+ * This is intentional and frozen (v1, ADR-0020): a capability holder only ever
+ * sees the seed here (EPERM is the sole error), so it treats it as opaque. */
 static inline long qseed_value(void) {
     return usys0(SYS_QSEED);
 }
@@ -288,6 +295,7 @@ typedef struct {
     unsigned short len;
     void *buf;
 } udp_req_t;
+_Static_assert(sizeof(udp_req_t) == 24, "udp_req twin ABI drift");
 
 static inline long udp_(long op, udp_req_t *req) {
     return usys2(SYS_UDP, op, (long)req);
@@ -354,6 +362,9 @@ typedef struct {
     unsigned int winner_len;
     unsigned char winner[FIELD_PAT_MAX];
 } field_recall_out_t;
+_Static_assert(sizeof(field_imprint_req_t) == 76, "field imprint req twin ABI drift");
+_Static_assert(sizeof(field_recall_req_t) == 76, "field recall req twin ABI drift");
+_Static_assert(sizeof(field_recall_out_t) == 136, "field recall out twin ABI drift");
 
 static inline long imprint_(field_imprint_req_t *req) {
     return usys1(SYS_IMPRINT, (long)req);
@@ -365,7 +376,7 @@ static inline long recall_(field_recall_req_t *req, field_recall_out_t *out) {
 /* SYS_FIELD_INFO read-only enumeration twins (epic #127 B1). Byte-identical to
  * the kernel field_*_info_k_t (40 / 332 bytes); _Static_asserted so any drift
  * fails BOTH builds. field_info_(region, out) returns 0, or -4 EPERM (capless /
- * wrong region), -14 EFAULT (bad out), -22 EINVAL (bad region). */
+ * wrong region), -2 EFAULT (bad out), -1 EINVAL (bad region). */
 typedef struct {
     unsigned int slot;
     unsigned int len;
@@ -525,6 +536,7 @@ typedef struct {
     unsigned argv_off[USER_ARGS_MAX]; /* byte offset of each arg within strings */
     char strings[USER_ARGS_STRBYTES];
 } user_args_t;
+_Static_assert(sizeof(user_args_t) == 516, "user args twin ABI drift");
 
 /* Read this process's argument vector. Stores up to `max` pointers into
  * argv[] (each valid for the life of the process) and returns the true
