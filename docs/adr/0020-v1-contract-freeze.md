@@ -1,7 +1,7 @@
 # 20. Freeze the v1 Agent-Surface Contracts
 
 Date: 2026-07-11
-Status: Proposed
+Status: Accepted (guest syscall ABI frozen 2026-07-13, PRs #206–#211; MCP-schema and COM2/attestation lanes deferred)
 
 ## Context
 
@@ -13,7 +13,7 @@ early ossifies known mistakes into the published surface. This ADR decides *what
 freeze, *when*, and *what to fix first* — and records why the freeze is sequenced
 after ADR-0019 rather than bundled with the release.
 
-## Decision (proposed)
+## Decision
 
 Freeze the v1 contracts as committed golden diffs, but only after the pre-freeze
 fixes land and ADR-0019 finishes changing the wire.
@@ -48,6 +48,45 @@ fixes land and ADR-0019 finishes changing the wire.
 - **Ship machine-readable agent docs in the package.** The surface's user is an
   agent; a tool-by-tool contract (args, error shapes, the *verified ≠ live* stance)
   lets an LLM operate the OS from docs alone.
+
+## As-built (2026-07-13) — the guest syscall ABI is frozen and CI-enforced
+
+The freeze shipped as six increments (PRs #206–#211), each through the recon →
+panel → gate → merge pipeline:
+
+- **Pre-freeze fixes (#206):** corrected the `field_info_` errno docstring, added
+  five symmetric user-side twin `_Static_assert`s, and annotated the intentional
+  `svc_restarts`/`qseed` errno-band overlaps as frozen-v1 decisions. (The other
+  named pre-freeze items — deleting `cap_transfer`, adding `qos_qpu_submit`, the
+  browser-demo path filter — had already landed with the ADR-0019 arc / #185.)
+- **Struct refactor (#207):** the six kernel `_k_t` twins split into
+  `kernel/include/kernel/syscall_abi.h` so the freeze probe can `#include` them.
+- **The golden gate (#208):** `contracts/abi/v1.golden`, compiler-measured via two
+  probe TUs (`user/abi_probe.c`, `kernel/src/abi_probe_kern.c`) that emit an
+  `.abi_ents` section read back with `objcopy`, diffed by the new `abi-golden` CI
+  job. Never regenerated in the same step (`make regen-abi-golden` is human-only);
+  a `SYS_QPU` mutation teeth-check proves the gate reddens; a twin cross-check
+  proves the user and kernel sides agree.
+- **Coverage (#209/#210/#211):** ring-crossing struct **field offsets** (a
+  size-preserving reorder reddens the gate), the **capability** resource-type
+  namespace + permission bits, the **device-ID** namespace (the `resource_id` a
+  `CAP_RESOURCE_DEVICE` cap names), and the arg-page field offsets — **237 golden
+  entries** covering the whole security-observable guest contract.
+
+Contract (a), the syscall ABI, is therefore **frozen and Accepted**. The rest is
+scoped as follow-ups, not part of this closure:
+
+- **MCP tool schemas (contract b):** need their own pip-provisioned CI lane (the
+  integration job is stdlib-only by contract). Deferred.
+- **COM2 frame + attestation (contract c):** ADR-0019 is now complete, so this is
+  unblocked; deferred to a follow-up golden.
+- **Durable audit/manifest record sizes:** intentionally *not* in the golden yet.
+  Freezing `audit_entry_t` (40 B) ties into the ADR-0009 actor-bearing-record
+  reservation — a future `SYS_CAP_REVOKE` may need an actor field, changing the
+  durable on-disk geometry. Recommended resolution (freeze at 40 and let the golden
+  make a future reservation a conscious red-CI change, rather than reserve
+  durable-format space speculatively for an unbuilt syscall) is left open pending
+  an explicit call.
 
 ## Consequences
 
