@@ -1,3 +1,8 @@
+kern:devid:DEVICE_ID_COM2 = 760
+kern:devid:DEVICE_ID_CONSOLE = 1016
+kern:devid:DEVICE_ID_DISK = 496
+kern:devid:DEVICE_ID_NET = 33081
+kern:devid:DEVICE_ID_QPU = 20816
 kern:enum:CAP_DEVICE = 64
 kern:enum:CAP_EXECUTE = 4
 kern:enum:CAP_GRANT = 8
