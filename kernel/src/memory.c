@@ -380,6 +380,115 @@ int pmm_heap_reservation_selftest(void) {
     return 0;
 }
 
+// High-memory reachability proof (ADR-0021 PR-4). See memory.h. This is the
+// load-bearing proof that dynamic sizing is SAFE above 128 MB: it is not enough
+// that the allocator's bookkeeping counts a high frame free -- the frame must be
+// reachable through the supervisor identity map (boot.S maps the full 1 GB) or a
+// page table / ELF segment placed there faults on first touch. So the test WRITES
+// two distinct sentinels through the returned identity pointer and reads them
+// back. Guarded on RAM actually extending past 128 MB; the -m 128M ci-smoke leg
+// takes the skip branch (which proves the guard ran, so the pass is not vacuous).
+int pmm_highmem_selftest(void) {
+    uint32_t total = pmm_get_total_frames();
+    // A "high" frame sits at physical >= 128 MB (frame index >= 0x8000). With no
+    // such frame there is nothing to prove; report the skip so the gate can see
+    // the guard ran rather than a silent always-pass.
+    if (total <= 0x8000) {
+        boot_log("PMMHIGH: skipped (no RAM above 128 MB on this boot)");
+        return 0;
+    }
+
+    uint32_t base = pmm_get_free_frames();
+    uint32_t saved_hint = pmm_alloc_hint;
+    // Aim the rover near the top so the allocation comes from high RAM.
+    pmm_alloc_hint = total - 4;
+    void *frame = pmm_alloc_frame();
+    pmm_alloc_hint = saved_hint;
+    if (!frame) {
+        return -1;
+    }
+    uint64_t phys = (uint64_t)(uintptr_t)frame;
+    // Must be a genuinely high frame, and below the 1 GB identity ceiling (the
+    // clamp guarantees the upper bound; assert it rather than trust it).
+    if (phys < 0x8000000ULL || phys >= PMM_PHYS_CEIL) {
+        pmm_free_frame(frame);
+        return -2;
+    }
+    // The real proof: the identity map reaches this high physical frame. A boot.S
+    // that mapped only 128 MB would #PF here; a wrong/stale map would read back
+    // garbage. Two distinct sentinels rule out a stuck line aliasing a low frame.
+    volatile uint64_t *p = (volatile uint64_t *)(uintptr_t)phys;
+    const uint64_t s1 = 0xA5A5C0DE5AA5F00DULL;
+    const uint64_t s2 = 0x5A5A3F21A55A0FF2ULL;
+    *p = s1;
+    uint64_t r1 = *p;
+    *p = s2;
+    uint64_t r2 = *p;
+    pmm_free_frame(frame);
+    if (r1 != s1 || r2 != s2) {
+        return -3;
+    }
+    if (pmm_get_free_frames() != base) {
+        return -4;
+    }
+    boot_log("PMMHIGH: high-frame alloc + identity writeback verified");
+    return 0;
+}
+
+// Residency-storm proof (ADR-0021 PR-4). See memory.h. The heap-reservation
+// self-test proves ONE allocation aimed at the heap skips the reserved run; this
+// proves the invariant holds under a bulk drain -- no frame in a large batch,
+// pulled with the rover aimed straight at the heap, ever lands in the reserved
+// [heap_lo, heap_hi). The pointer array is file-scope static (8 KB) because the
+// 8 KB boot stack cannot hold it.
+#define PMM_STORM_FRAMES 1024
+static void *pmm_storm_batch[PMM_STORM_FRAMES];
+int pmm_residency_storm_selftest(void) {
+    uint64_t heap_lo = (uintptr_t)__heap_start / PAGE_SIZE;
+    uint64_t heap_hi = ((uintptr_t)__heap_end + PAGE_SIZE - 1) / PAGE_SIZE;
+    uint32_t total = pmm_get_total_frames();
+    if (heap_lo >= heap_hi || heap_hi > total) {
+        return -1; // geometry sanity
+    }
+    uint32_t base = pmm_get_free_frames();
+    // Keep the drain from exhausting the pmm (can't happen at any supported -m).
+    if (base < PMM_STORM_FRAMES + 64) {
+        return -2;
+    }
+    uint32_t saved_hint = pmm_alloc_hint;
+    // Aim the rover straight at the heap so the very first allocation must skip
+    // the reserved run.
+    pmm_alloc_hint = (uint32_t)heap_lo;
+    int n = 0;
+    int bad = 0;
+    for (; n < PMM_STORM_FRAMES; n++) {
+        void *f = pmm_alloc_frame();
+        if (!f) {
+            bad = -3;
+            break;
+        }
+        pmm_storm_batch[n] = f;
+        uint64_t fn = (uint64_t)(uintptr_t)f / PAGE_SIZE;
+        if (fn >= heap_lo && fn < heap_hi) {
+            bad = -4; // a reserved heap frame was handed out under pressure
+            n++;      // include it in the free loop below
+            break;
+        }
+    }
+    for (int i = 0; i < n; i++) {
+        pmm_free_frame(pmm_storm_batch[i]);
+    }
+    pmm_alloc_hint = saved_hint;
+    if (bad != 0) {
+        return bad;
+    }
+    if (pmm_get_free_frames() != base) {
+        return -5;
+    }
+    boot_log("PMMSTORM: heap survives a 1024-frame drain (no reserved frame handed out)");
+    return 0;
+}
+
 // Virtual memory management
 mem_result_t vmm_init(void) {
     boot_log("Initializing virtual memory manager...");

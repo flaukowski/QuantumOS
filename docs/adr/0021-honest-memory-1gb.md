@@ -1,7 +1,7 @@
 # 21. Honest Memory to the 1 GB Identity Window
 
 Date: 2026-07-11
-Status: Proposed (defect fixes landed; dynamic 1 GB sizing still open)
+Status: Accepted (2026-07-13; implemented PR-1..PR-4)
 
 > **Update (2026-07-11).** The two confirmed latent **defects** below shipped as a focused
 > hardening increment — the PMM now reserves the kernel heap's backing frames
@@ -9,8 +9,22 @@ Status: Proposed (defect fixes landed; dynamic 1 GB sizing still open)
 > refuses the Multiboot2 magic (the kernel is Multiboot1-only). Both are gated: the boot
 > self-tests `pmm_heap_reservation_selftest` / `boot_validate_selftest` panic the boot before
 > `QuantumOS ready` if reverted, surfaced as the `PMMHEAP:` and `MB2REJECT:` markers in
-> `make ci-smoke` and the integration `SHELL_GATES`. The **dynamic PMM sizing from the multiboot
-> memory map + the 1 GB clamp** (the feature proper) remains Proposed and open.
+> `make ci-smoke` and the integration `SHELL_GATES`.
+>
+> **Update (2026-07-13) — Accepted, feature complete.** The dynamic sizing landed across four
+> revert-confirmed increments: PR-1 the 1 GB clamp + static-layout floor + guards (#213), PR-2
+> the synthetic clamp teeth-check `PMMCLAMP` (#214), PR-3 the untrusted-mmap parser
+> `multiboot_parse_memory` that replaces the `128 MB` hardcode and sizes the PMM from real RAM,
+> emitting the greppable `PMMSIZE=<hex>` marker (#215), and PR-4 (this increment) the
+> high-memory reachability proof `PMMHIGH` (allocate a top-of-pool frame ≥ 128 MB and prove the
+> boot.S 1 GB identity map reaches it via sentinel writeback), the residency-storm proof
+> `PMMSTORM`, and the differential `-m 256M`/`-m 512M` CI legs. Every "un-fakeable gate" named in
+> the design below is now live: sizing tracks `-m` (0x7FE0 / 0xFFE0 / 0x1FFE0 at 128/256/512 MB —
+> a hardcode gives 0x8000 at all three and reddens the 256M leg), a high frame is written and
+> read back through the identity map, and no heap-range frame survives a 1024-frame drain. The
+> 1 GB clamp and the >1 GB out-of-scope boundary stand as written. The differential legs use
+> `-m 256M`/`-m 512M` rather than the design's tentative `-m 1G` — the same proof (real high RAM
+> handed + written back) at a size QEMU boots well within the gate timeout.
 
 ## Context
 

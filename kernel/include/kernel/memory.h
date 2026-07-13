@@ -100,6 +100,19 @@ int pmm_alloc_selftest(void);
 // heap's backing frames so the allocator can never hand one out. 0 on pass.
 int pmm_heap_reservation_selftest(void);
 int pmm_clamp_selftest(void);
+// High-memory reachability self-test (ADR-0021): on a machine with RAM above
+// 128 MB, allocate a frame from the top of the pool, assert its physical address
+// is genuinely high (>= 128 MB, < 1 GB) AND that the boot.S identity map actually
+// reaches it -- by writing a sentinel through the identity VA and reading it back
+// -- then free it. On <= 128 MB (the -m 128M ci-smoke leg) there is no high frame,
+// so it reports the skip. Returns 0 on pass, negative on the first failed check.
+int pmm_highmem_selftest(void);
+// Residency-storm self-test (ADR-0021): drain a large batch of frames with the
+// rover aimed straight at the reserved kernel heap; assert NONE land in
+// [__heap_start, __heap_end), then free them and assert the free count is
+// restored. Extends the single-shot heap-reservation proof to a bulk drain.
+// Returns 0 on pass, negative on the first failed check.
+int pmm_residency_storm_selftest(void);
 
 // Virtual memory management
 mem_result_t vmm_init(void);

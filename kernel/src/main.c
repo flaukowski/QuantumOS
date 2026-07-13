@@ -378,6 +378,22 @@ static void core_services_init(void) {
     }
     boot_log("PMMCLAMP: frame count clamps to the 1 GB identity ceiling");
 
+    // High-memory reachability gate (ADR-0021 PR-4): on RAM above 128 MB, prove a
+    // top-of-pool frame is not just counted free but actually REACHABLE through
+    // the boot.S 1 GB identity map (sentinel writeback), so dynamic sizing can
+    // hand out high frames safely. On the -m 128M leg there is no high frame and
+    // it reports the skip (the -m 256M/512M CI legs exercise the live path).
+    if (pmm_highmem_selftest() != 0) {
+        boot_panic("PMM high-memory reachability self-test failed");
+    }
+
+    // Residency-storm gate (ADR-0021 PR-4): extend the heap-reservation proof to a
+    // bulk drain — a 1024-frame storm aimed at the heap must never surrender a
+    // reserved frame. Emits PMMSTORM; reverting the heap reservation trips it.
+    if (pmm_residency_storm_selftest() != 0) {
+        boot_panic("PMM residency-storm self-test failed");
+    }
+
     // Boot-validation gate (ADR-0021): the kernel is Multiboot1-only; the MB2
     // magic must be refused (a v2 info block parsed as v1 loses the cmdline and
     // wild-writes the framebuffer). Driven with a dummy info_addr since no shipped
