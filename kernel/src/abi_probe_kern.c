@@ -20,6 +20,10 @@
 #include <kernel/audit.h>
 #include <kernel/qpu.h>
 #include <kernel/capability.h>
+#include <kernel/net.h>
+#include <kernel/console.h>
+#include <kernel/ata.h>
+#include <kernel/com2_uart.h>
 
 _Static_assert(sizeof(long) == 8 && sizeof(void *) == 8, "wrong data model / ABI");
 
@@ -129,6 +133,13 @@ __attribute__((used, section(".abi_ents"))) const struct abi_ent abi_kern[] = {
     ABI("kern:enum:CAP_RESOURCE_SERVICE", CAP_RESOURCE_SERVICE),
     ABI("kern:enum:CAP_RESOURCE_FIELD", CAP_RESOURCE_FIELD),
     ABI("kern:enum:CAP_RESOURCE_TYPE_COUNT", CAP_RESOURCE_TYPE_COUNT),
+
+    /* --- device-id namespace (the resource_id a CAP_RESOURCE_DEVICE cap names) --- */
+    ABI("kern:devid:DEVICE_ID_NET", DEVICE_ID_NET),
+    ABI("kern:devid:DEVICE_ID_QPU", DEVICE_ID_QPU),
+    ABI("kern:devid:DEVICE_ID_COM2", DEVICE_ID_COM2),
+    ABI("kern:devid:DEVICE_ID_CONSOLE", DEVICE_ID_CONSOLE),
+    ABI("kern:devid:DEVICE_ID_DISK", DEVICE_ID_DISK),
 
     /* --- ring-crossing struct sizes, emitted under the user-facing logical name
      * (value is the kernel _k_t size) so the twin check lines up 1:1 --- */

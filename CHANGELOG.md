@@ -46,9 +46,10 @@ The frozen surface now also pins ring-crossing struct **field offsets**
 (`__builtin_offsetof` for every field of the six `udp`/`cap_derive`/`qpu_*`
 twins, cross-checked user↔kernel) — so a size-preserving field reorder, which
 the size check alone would miss, reddens the gate. The capability resource-type
-namespace (`cap_resource_type_t`) and the arg-page field offsets are frozen too
-(232 golden entries); the device-ID and audit-durable-format sections follow
-next.
+namespace (`cap_resource_type_t`), the arg-page field offsets, and the device-ID
+namespace (`net`/`qpu`/`com2`/`console`/`disk` — the `resource_id` a
+`CAP_RESOURCE_DEVICE` capability names) are frozen too (237 golden entries). The
+audit-durable-format section and the ADR Proposed→Accepted flip follow next.
 
 ## [0.5.0] — 2026-07-11 — Agent-reachable QPU, hardening, dead-code payoff
 
