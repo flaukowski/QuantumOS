@@ -1,26 +1,24 @@
 #!/usr/bin/env python3
 """
-Scheduler perf/stability baseline recorder (ADR-0022, prerequisite 2) — REPORT-ONLY.
+Scheduler perf/stability baseline gate (ADR-0022, prerequisite 2).
 
 ADR-0022 root-caused the agent-tool latency floor to the scheduler cadence and DEFERS
 the fix behind two prerequisites. Prereq 1 (the COM2 latency gate, test_qos_latency.py)
 shipped. This is prereq 2: a perf/stability baseline so a future scheduler-constant
 change (the deferred fix) is MEASURED, not blind (ADR-0016 anti-vacuous discipline).
 
-WHY REPORT-ONLY (PR-1): the design panel's red-team refuted the naive metric. Aggregate
-context switches (`switches`) are dominated by VOLUNTARY yields — every long-lived citizen
-busy-yields, resetting the quantum counter thousands of times per 10 ms tick, so the timer-
-preemption path is nearly dead at rest. switches/tick is therefore BOTH quantum-insensitive
-(a SCHED_QUANTUM_TICKS change does not move it -> a gate on it is vacuous) AND host-CPU-
-throughput dependent (yield-loop iterations per tick scale with guest speed -> flaky on slow
-CI). The kernel now exposes a DEDICATED `preempt` counter incremented ONLY on timer-quantum
-expiry (never on SYS_YIELD), which is 1/quantum-paced by construction. But whether `preempt`
-is non-zero enough UNDER LOAD to separate q=5 from q=80 is an EMPIRICAL question. So PR-1
-does NOT assert any perf band. It RECORDS every candidate (preempt-per-1000-ticks, switch-
-per-1000-ticks, max reschedule gap, run-count spread) under idle and under COM2 PING load,
-across the SCHED_QUANTUM_TICKS values, to CALIBRATE which scalar PR-2 will gate. The only
-assertion here is a non-vacuous LIVENESS floor (the scheduler is actually multiplexing a
-real roster) so this job still fails on a dead/wedged/frozen scheduler.
+THE METRIC (design-panel-refined, calibration-selected): the design panel's red-team
+refuted the naive metric. Aggregate context switches (`switches`) are dominated by
+VOLUNTARY yields — every long-lived citizen busy-yields, resetting the quantum counter
+thousands of times per 10 ms tick, so the timer-preemption path is nearly dead at rest.
+switches/tick is therefore BOTH quantum-insensitive (a gate on it is vacuous) AND host-CPU
+dependent (flaky on slow CI). The kernel instead exposes a DEDICATED `preempt` counter,
+incremented ONLY on timer-quantum expiry (never on SYS_YIELD). PR-1's calibration confirmed
+preempt-per-1000-guest-ticks = ~1000/quantum, host-invariant (~200 at q=5 idle+load with
+<0.5% variance, ~50 at q=20). So this gate ASSERTS that scalar in [FLOOR, CEIL] (see the
+constants below) — plus a non-vacuous LIVENESS floor so it also reddens on a dead/wedged/
+frozen scheduler. Everything asserted is a delta over GUEST ticks, so a slow CI runner reads
+the same value (it just takes longer wall-clock to fill the window).
 
 Env:
   QOS_KERNEL       path to kernel.elf32 (else the bridge default)
@@ -45,6 +43,18 @@ from qos_bridge import QosVM, QosError  # noqa: E402
 # demo kernel threads) is ~20-22 at rest; the floor is set generously below that.
 LIVENESS_MIN_SWITCHES = 100   # context switches over the measured window
 LIVENESS_MIN_RUNNABLE = 12    # settled runnable count (observed ~20 at rest)
+
+# Armed perf band on the calibration-selected scalar: preemptions per 1000 guest ticks.
+# WSL calibration measured preempt/1000t = ~200 at SCHED_QUANTUM_TICKS=5 (idle AND load,
+# <0.5% variance) and ~50 at q=20 — i.e. it tracks 1000/quantum, host-invariant (a ratio
+# of guest-side counters, so a slow CI runner reads the same value). FLOOR = q5-median x
+# 0.5 = 100 is load-bearing: it reddens when the round-robin cadence COARSENS (quantum
+# raised past ~10, the sluggish direction ADR-0022 warns about) — a SCHED_QUANTUM_TICKS
+# bump to 20 drops P to ~50 and trips it (revert-confirmed). CEIL = q5-median x 3 = 600 is
+# a loose thrash cap that does NOT redden on the intended future fix (a SMALLER quantum
+# raises P; q=2 -> ~500 still passes), only on pathological churn.
+PREEMPT_PER_1000T_FLOOR = 100.0
+PREEMPT_PER_1000T_CEIL = 600.0
 
 # State-gated warmup by GUEST TICKS: the transient boot self-tests (echo, watched-svc,
 # quota-test, delegation-test, cpu-hog, qpu-test) run and exit inside the first few
@@ -136,19 +146,33 @@ def main():
           f"switch_per_1000t={p_switch:.2f} maxgap={max_gap} spread={max_spread} "
           f"runnable_min={min_runnable}")
 
-    # NON-VACUOUS LIVENESS FLOOR (the only assertion in PR-1): the scheduler must be
-    # multiplexing a real roster. Reddens on a dead scheduler (no switches), a single-
-    # runnable degenerate, or a frozen guest clock — but NOT on any healthy cadence, so
-    # it is not a perf band (that is PR-2, armed on the calibration-selected scalar).
+    # NON-VACUOUS LIVENESS FLOOR: the scheduler must be multiplexing a real roster.
+    # Reddens on a dead scheduler (no switches), a single-runnable degenerate, or a
+    # frozen guest clock. Checked before the perf band so a wedged scheduler is
+    # attributed correctly rather than as a band miss.
     if d_switch < LIVENESS_MIN_SWITCHES:
         _fail(f"scheduler not multiplexing: {d_switch} switches over {d_ticks} ticks "
               f"(< {LIVENESS_MIN_SWITCHES}) — dead/wedged scheduler")
     if min_runnable < LIVENESS_MIN_RUNNABLE:
         _fail(f"runnable roster collapsed to {min_runnable} (< {LIVENESS_MIN_RUNNABLE}) "
               "— citizens not staying schedulable")
+
+    # ARMED PERF BAND (the calibration-selected scalar): preemptions per 1000 guest
+    # ticks must sit in [FLOOR, CEIL]. The floor catches a coarsened round-robin cadence
+    # (the scheduler getting more sluggish — ADR-0022's regression direction); the loose
+    # ceiling catches pathological thrash without reddening on the intended smaller-
+    # quantum fix. Revert-confirmed: SCHED_QUANTUM_TICKS 5 -> 20 drops P to ~50 < FLOOR.
+    if p_preempt < PREEMPT_PER_1000T_FLOOR:
+        _fail(f"preemption rate {p_preempt:.1f}/1000t below floor {PREEMPT_PER_1000T_FLOOR:.0f} "
+              f"— round-robin cadence has COARSENED (quantum raised? scheduler more sluggish). "
+              f"dpreempt={d_preempt} over dticks={d_ticks}. See ADR-0022.")
+    if p_preempt > PREEMPT_PER_1000T_CEIL:
+        _fail(f"preemption rate {p_preempt:.1f}/1000t above ceiling {PREEMPT_PER_1000T_CEIL:.0f} "
+              f"— pathological reschedule thrash. dpreempt={d_preempt} over dticks={d_ticks}.")
     print(f"OK: scheduler live ({d_switch} switches, {min_runnable} runnable over "
-          f"{d_ticks} ticks). Baseline recorded — no perf band asserted (PR-1 report-only).")
-    print("=== scheduler baseline recorder PASSED (liveness floor; calibration data emitted) ===")
+          f"{d_ticks} ticks); preemption rate {p_preempt:.1f}/1000t within "
+          f"[{PREEMPT_PER_1000T_FLOOR:.0f}, {PREEMPT_PER_1000T_CEIL:.0f}].")
+    print("=== scheduler baseline gate PASSED (liveness + preemption-rate band) ===")
 
 
 if __name__ == "__main__":

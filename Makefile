@@ -2211,12 +2211,13 @@ ci-smoke-latency: kernel
 	@echo "=== QuantumOS COM2 latency Test (ADR-0022) ==="
 	QOS_KERNEL=$(BUILD_DIR)/kernel.elf32 python3 scripts/test_qos_latency.py
 
-# Scheduler perf/stability baseline recorder (ADR-0022 prereq 2). REPORT-ONLY:
-# emits the tick-normalized SCHED baseline (preempt/switch per 1000 guest ticks,
-# max reschedule gap, run-count spread) and asserts ONLY a non-vacuous liveness
-# floor (the scheduler is multiplexing a real roster), so it reddens on a
-# dead/wedged scheduler but arms no perf band yet — PR-2 arms the calibration-
-# selected scalar. QOS_SCHED_LOAD=1 drives COM2 PING load during sampling.
+# Scheduler perf/stability baseline gate (ADR-0022 prereq 2). Emits the tick-
+# normalized SCHED baseline (preempt/switch per 1000 guest ticks, max reschedule
+# gap, run-count spread) and ASSERTS the calibration-selected scalar — preemptions
+# per 1000 guest ticks, ~200 at the default quantum — within [100, 600], plus a
+# non-vacuous liveness floor. Guest-tick-normalized, so host-CPU-invariant on slow
+# CI. Revert-confirmed: SCHED_QUANTUM_TICKS 5 -> 20 drops the rate to ~50 and reddens
+# the floor. QOS_SCHED_LOAD=1 drives COM2 PING load during sampling.
 ci-smoke-sched: kernel
 	@echo "=== QuantumOS scheduler baseline recorder (ADR-0022 prereq 2) ==="
 	QOS_KERNEL=$(BUILD_DIR)/kernel.elf32 python3 scripts/test_qos_sched.py
