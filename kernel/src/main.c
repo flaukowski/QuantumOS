@@ -361,6 +361,16 @@ static void core_services_init(void) {
     }
     boot_log("PMMHEAP: heap range reserved; allocator never hands a heap frame");
 
+    // Physical-ceiling clamp gate (ADR-0021): every frame the PMM can hand out
+    // must sit below the 1 GB identity map (a >= 1 GB frame is unmappable — a
+    // #158-class escalation). This synthetic self-test feeds the clamp a > 1 GB
+    // frame count and asserts it clamps to exactly PMM_MAX_FRAMES, so the clamp
+    // is proven load-bearing even on the -m 128M leg; reverting it panics here.
+    if (pmm_clamp_selftest() != 0) {
+        boot_panic("PMM 1GB-clamp self-test failed");
+    }
+    boot_log("PMMCLAMP: frame count clamps to the 1 GB identity ceiling");
+
     // Boot-validation gate (ADR-0021): the kernel is Multiboot1-only; the MB2
     // magic must be refused (a v2 info block parsed as v1 loses the cmdline and
     // wild-writes the framebuffer). Driven with a dummy info_addr since no shipped

@@ -99,6 +99,7 @@ int pmm_alloc_selftest(void);
 // Heap-reservation self-test (ADR-0021): proves pmm_init reserved the kernel
 // heap's backing frames so the allocator can never hand one out. 0 on pass.
 int pmm_heap_reservation_selftest(void);
+int pmm_clamp_selftest(void);
 
 // Virtual memory management
 mem_result_t vmm_init(void);

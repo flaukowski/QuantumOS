@@ -42,6 +42,32 @@ static inline void irq_restore(uint64_t f) {
     __asm__ volatile("push %0; popfq" ::"r"(f) : "memory", "cc");
 }
 
+// Clamp a raw physical frame count to the 1 GB identity-map ceiling (ADR-0021).
+// Factored out of pmm_init so pmm_clamp_selftest can prove the clamp on a
+// synthetic > 1 GB input without a machine that actually has > 1 GB RAM.
+static uint64_t pmm_clamp_frames(uint64_t frames) {
+    return frames > PMM_MAX_FRAMES ? PMM_MAX_FRAMES : frames;
+}
+
+// ADR-0021 clamp teeth-check: a frame count derived from a region larger than the
+// 1 GB identity map MUST clamp to exactly PMM_MAX_FRAMES, a count within the
+// ceiling MUST pass through unchanged, and the boundary is exact. Uses synthetic
+// inputs, so the -m 128M boot leg proves the clamp is load-bearing without any
+// > 1 GB RAM; reverting the clamp fails this before "QuantumOS ready".
+int pmm_clamp_selftest(void) {
+    uint64_t over = 0x60000000ULL / PAGE_SIZE; // 1.5 GB of frames = 393216
+    if (pmm_clamp_frames(over) != PMM_MAX_FRAMES) {
+        return 1;
+    }
+    if (pmm_clamp_frames(0x8000) != 0x8000) { // 128 MB passes through unchanged
+        return 2;
+    }
+    if (pmm_clamp_frames(PMM_MAX_FRAMES) != PMM_MAX_FRAMES) { // boundary exact
+        return 3;
+    }
+    return 0;
+}
+
 // Physical memory management
 mem_result_t pmm_init(uint64_t total_memory) {
     boot_log("Initializing physical memory manager...");
@@ -54,9 +80,7 @@ mem_result_t pmm_init(uint64_t total_memory) {
     if (total_frames == 0) {
         boot_panic("PMM: zero usable RAM");
     }
-    if (total_frames > PMM_MAX_FRAMES) {
-        total_frames = PMM_MAX_FRAMES;
-    }
+    total_frames = pmm_clamp_frames(total_frames);
     // Floor: the kernel heap's backing frames [__heap_start, __heap_end) are a
     // fixed static-layout range; a machine reporting less RAM than that would let
     // kheap_init build the heap on unbacked physical memory. Fail loudly.

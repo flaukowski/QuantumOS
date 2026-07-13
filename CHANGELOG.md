@@ -69,9 +69,13 @@ Groundwork before dynamic PMM sizing lands, all no-ops at the current hardcoded
   the frame bitmap can't overrun the kernel region, and widened the frame-address
   multiply to 64-bit (the clamp was the only thing preventing a 32-bit wrap).
 
-Verified no-op at 128 M: `ci-smoke` boots to `QuantumOS ready` with the PMMROVER
-and PMMHEAP self-tests green. The mmap-driven dynamic sizing + 1 GB feature legs
-follow in subsequent increments.
+Verified no-op at 128 M: `ci-smoke` boots to `QuantumOS ready` with the PMMROVER,
+PMMHEAP, and PMMCLAMP self-tests green. The last is a synthetic teeth-check — the
+clamp is factored into `pmm_clamp_frames()` and `pmm_clamp_selftest` feeds it a
+> 1 GB frame count and asserts it clamps to exactly 262144, so the 1 GB ceiling is
+proven load-bearing on the `-m 128M` leg without any > 1 GB RAM (revert-confirmed:
+removing the clamp panics the boot and reddens the gate). The mmap-driven dynamic
+sizing + high-memory feature legs follow in subsequent increments.
 
 ## [0.5.0] — 2026-07-11 — Agent-reachable QPU, hardening, dead-code payoff
 
