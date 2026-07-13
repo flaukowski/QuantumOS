@@ -92,10 +92,13 @@ mem_result_t pmm_init(uint64_t total_memory) {
     pmm.used_frames = 0;
     pmm.highest_frame = total_frames - 1;
 
-    // Allocate frame bitmap. Round UP: total_frames/8 truncates, so a frame count
-    // not divisible by 8 would leave the top few frames unrepresented (harmless at
-    // 128MB where 32768/8 is exact, but a latent gap once total_memory varies).
-    size_t bitmap_size = (total_frames + 7) / 8;
+    // Frame bitmap sized for the 1 GB MAXIMUM (fixed 32 KB), not detected RAM: the
+    // buffer then always covers the fixed physical reservation ranges (kernel
+    // image, heap) no matter what the untrusted mmap reported, structurally ruling
+    // out a small-RAM overrun. Frames total_frames..PMM_MAX_FRAMES-1 stay marked
+    // free but unreachable (the allocator scan is bounded by total_frames). Round
+    // UP retained (exact here) as the #187 hardening against a future ceiling bump.
+    size_t bitmap_size = (PMM_MAX_FRAMES + 7) / 8;
     pmm.frame_bitmap = (uint8_t *)ALIGN_UP((uintptr_t)&__end, PAGE_SIZE);
 
     // The bitmap sits just past the kernel image, inside the 16 MB kernel region
@@ -147,6 +150,14 @@ mem_result_t pmm_init(uint64_t total_memory) {
     }
 
     boot_log("Physical memory manager initialized");
+    // Dedicated ADR-0021 size marker on ONE line: the exact 16-wide hex frame
+    // count derived from the multiboot memory map. Emitted with the raw console
+    // writer (not boot_log, which appends its newline BEFORE the hex and would
+    // split label from value) so the whole token stays greppable. The ci-smoke
+    // mem legs grep this to prove the PMM is sized from real RAM, not a constant.
+    early_console_write("PMMSIZE=");
+    early_console_write_hex(pmm.total_frames);
+    early_console_write("\r\n");
     boot_log("Total frames: ");
     early_console_write_hex(pmm.total_frames);
     boot_log("Free frames: ");
@@ -689,12 +700,11 @@ void *align_down(void *ptr, size_t alignment) {
 }
 
 // Main memory initialization
-mem_result_t memory_init(void) {
+mem_result_t memory_init(uint64_t total_memory) {
     boot_log("Initializing memory management...");
 
-    // Initialize physical memory manager
-    // TODO: Get actual memory size from multiboot
-    uint64_t total_memory = 128 * 1024 * 1024; // 128MB for testing
+    // Physical memory manager, sized from the multiboot memory map by the caller
+    // (ADR-0021). pmm_init clamps to the 1 GB identity-map ceiling.
     mem_result_t result = pmm_init(total_memory);
     if (result != MEM_SUCCESS) {
         return result;

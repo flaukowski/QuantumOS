@@ -81,7 +81,7 @@ typedef struct {
 } virtual_memory_t;
 
 // Memory management functions
-mem_result_t memory_init(void);
+mem_result_t memory_init(uint64_t total_memory);
 mem_result_t memory_map_page(void *virt_addr, void *phys_addr, uint32_t permissions);
 mem_result_t memory_unmap_page(void *virt_addr);
 mem_result_t memory_map_region(void *virt_addr, void *phys_addr, size_t size, uint32_t permissions);

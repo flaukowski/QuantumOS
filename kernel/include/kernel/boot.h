@@ -58,6 +58,7 @@ typedef struct {
     uint32_t kernel_size;
     uint32_t initrd_start;
     uint32_t initrd_size;
+    uint64_t total_memory; // bytes of usable RAM, parsed from the multiboot mmap (ADR-0021)
     char cmdline[256];
 } boot_config_t;
 

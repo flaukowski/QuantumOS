@@ -79,6 +79,7 @@ static void ipc_subsystem_init(void);
 static void process_subsystem_init(void);
 static void scheduler_subsystem_init(void);
 static void parse_boot_cmdline(uint32_t info_addr);
+static uint64_t multiboot_parse_memory(uint32_t info_addr);
 static int boot_validate_selftest(void);
 
 // Kernel main entry point
@@ -99,6 +100,12 @@ void kernel_main(uint32_t magic, uint32_t info_addr) {
     // Parse boot configuration
     boot_config.magic = magic;
     boot_config.boot_flags = *(uint32_t *)(uintptr_t)info_addr;
+    // Size physical RAM from the (untrusted) multiboot memory map. Safe to read
+    // the fixed MB1 offsets here: boot_validate_multiboot confirmed the MB1 magic
+    // just above, and this is the ONLY consumer of the mmap — it must stay AFTER
+    // the validation (running it on a v2 info block re-wild-writes like the
+    // closed fb bug).
+    boot_config.total_memory = multiboot_parse_memory(info_addr);
 
     boot_log("QuantumOS " QOS_VERSION " booting...");
     boot_log("Multiboot information validated");
@@ -285,7 +292,7 @@ static void memory_subsystem_init(void) {
     boot_log("Initializing memory management...");
 
     // Call the real memory_init from memory.h
-    mem_result_t result = memory_init();
+    mem_result_t result = memory_init(boot_config.total_memory);
     if (result != MEM_SUCCESS) {
         boot_log("Warning: Memory init returned non-success");
     }
@@ -677,6 +684,82 @@ static void cmdline_get_peers(const char *cmd) {
             }
         }
     }
+}
+
+// Read a little-endian value from a possibly-misaligned untrusted address. The
+// multiboot mmap entries carry 64-bit base/length at +4/+12, so byte-wise reads
+// avoid an unaligned access and don't assume the mmap buffer is aligned.
+static uint32_t mb_rd32(uintptr_t p) {
+    const uint8_t *b = (const uint8_t *)p;
+    return (uint32_t)b[0] | ((uint32_t)b[1] << 8) | ((uint32_t)b[2] << 16) | ((uint32_t)b[3] << 24);
+}
+static uint64_t mb_rd64(uintptr_t p) {
+    return (uint64_t)mb_rd32(p) | ((uint64_t)mb_rd32(p + 4) << 32);
+}
+
+// Parse total usable physical RAM (bytes) from the Multiboot1 info block. This is
+// UNTRUSTED bootloader input: every field is bounds-checked, the entry walk is
+// termination- and overflow-guarded, and a garbage or absent map falls back to
+// mem_upper (or panics if neither is present) rather than sizing a wild bitmap.
+// Returns the highest available-region end, clamped to the 1 GB identity ceiling
+// (pmm_init clamps again at frame granularity). MUST run only after
+// boot_validate_multiboot has confirmed the Multiboot1 magic.
+static uint64_t multiboot_parse_memory(uint32_t info_addr) {
+    const uint32_t *info = (const uint32_t *)(uintptr_t)info_addr;
+    uint32_t flags = info[0];
+    uint64_t best_end = 0; // highest available-region end, clamped to the ceiling
+
+    if (flags & 0x40) {                  // bit 6: full memory map present
+        uint32_t mmap_length = info[11]; // bytes, at offset 44
+        uint32_t mmap_addr = info[12];   // at offset 48
+        uint64_t win_end = (uint64_t)mmap_addr + (uint64_t)mmap_length;
+        // The whole buffer must sit inside the identity map with no overflow: this
+        // is the first attacker-pointed memory we dereference.
+        if (mmap_addr != 0 && mmap_length >= 24 && win_end > (uint64_t)mmap_addr &&
+            win_end <= PMM_PHYS_CEIL) {
+            uintptr_t cursor = mmap_addr;
+            uintptr_t end = (uintptr_t)win_end;
+            int iters = 0;
+            while (cursor + 4 <= end && iters < 1024) {
+                uint32_t size = mb_rd32(cursor); // entry size, EXCLUDES this u32
+                if (size < 20) {
+                    break; // too small to hold base/length/type, or no progress
+                }
+                uintptr_t next = cursor + (uintptr_t)size + 4;
+                if (next <= cursor || next > end) {
+                    break; // overflow or walk past the buffer
+                }
+                uint64_t base = mb_rd64(cursor + 4);
+                uint64_t length = mb_rd64(cursor + 12);
+                uint32_t type = mb_rd32(cursor + 20);
+                if (type == 1) { // available RAM
+                    uint64_t rend = base + length;
+                    if (rend >= base) { // no overflow
+                        if (rend > PMM_PHYS_CEIL) {
+                            rend = PMM_PHYS_CEIL;
+                        }
+                        if (rend > best_end) {
+                            best_end = rend; // ceiling = MAX end, never a sum
+                        }
+                    }
+                }
+                cursor = next;
+                iters++;
+            }
+        }
+    }
+
+    if (best_end == 0 && (flags & 0x1)) { // fallback: mem_upper (KB above 1 MB)
+        best_end = 0x100000ULL + ((uint64_t)info[2] << 10);
+        if (best_end > PMM_PHYS_CEIL) {
+            best_end = PMM_PHYS_CEIL;
+        }
+    }
+
+    if (best_end == 0) {
+        boot_panic("PMM: multiboot reported no usable memory (no mmap, no mem_upper)");
+    }
+    return best_end;
 }
 
 // Match "qseed=" at p; on hit, decode up to 16 hex digits into a u64. Also
