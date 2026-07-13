@@ -40,8 +40,13 @@ committed golden (an intended change is a visible golden diff, never silently
 regenerated — `make regen-abi-golden` is human-only), and a teeth-check compiles
 a mutated `SYS_QPU` and asserts the gate reddens, so a broken generator can't ship
 vacuously green. New CI job `abi-golden` (gcc + binutils, no boot, no pip) that
-also gates `release`. Struct offsets and the device-ID / audit-format sections
-follow in a subsequent increment.
+also gates `release`.
+
+The frozen surface now also pins ring-crossing struct **field offsets**
+(`__builtin_offsetof` for every field of the six `udp`/`cap_derive`/`qpu_*`
+twins, cross-checked user↔kernel) — so a size-preserving field reorder, which
+the size check alone would miss, reddens the gate (221 golden entries). The
+device-ID / audit-durable-format sections follow next.
 
 ## [0.5.0] — 2026-07-11 — Agent-reachable QPU, hardening, dead-code payoff
 

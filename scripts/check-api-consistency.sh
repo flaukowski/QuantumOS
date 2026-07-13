@@ -194,7 +194,7 @@ echo ""
 echo -e "${BLUE}[3/4] Checking for undeclared function calls...${NC}"
 
 # Known external/builtin functions to ignore
-KNOWN_EXTERNALS="memset memcpy strlen strncpy printf snprintf boot_log boot_panic early_console_write early_console_init"
+KNOWN_EXTERNALS="memset memcpy strlen strncpy printf snprintf boot_log boot_panic early_console_write early_console_init __builtin_offsetof offsetof"
 
 for func in "${!CALLED_FUNCTIONS[@]}"; do
     # Skip if declared
