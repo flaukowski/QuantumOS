@@ -48,8 +48,11 @@ twins, cross-checked user↔kernel) — so a size-preserving field reorder, whic
 the size check alone would miss, reddens the gate. The capability resource-type
 namespace (`cap_resource_type_t`), the arg-page field offsets, and the device-ID
 namespace (`net`/`qpu`/`com2`/`console`/`disk` — the `resource_id` a
-`CAP_RESOURCE_DEVICE` capability names) are frozen too (237 golden entries). The
-audit-durable-format section and the ADR Proposed→Accepted flip follow next.
+`CAP_RESOURCE_DEVICE` capability names) are frozen too (237 golden entries). With
+this, **ADR-0020 is Accepted** for the guest syscall ABI (contract a) — frozen and
+CI-enforced. The MCP-schema lane (contract b), the COM2/attestation lane
+(contract c, now unblocked by ADR-0019), and the durable audit-format freeze
+remain scoped as deferred follow-ups.
 
 ## [0.5.0] — 2026-07-11 — Agent-reachable QPU, hardening, dead-code payoff
 
