@@ -54,6 +54,25 @@ CI-enforced. The MCP-schema lane (contract b), the COM2/attestation lane
 (contract c, now unblocked by ADR-0019), and the durable audit-format freeze
 remain scoped as deferred follow-ups.
 
+### ADR-0021 dynamic-PMM — hardening groundwork (no behavior change)
+
+Groundwork before dynamic PMM sizing lands, all no-ops at the current hardcoded
+128 MB (`kernel/src/memory.c`, `kernel/include/kernel/memory.h`):
+- Added `PMM_PHYS_CEIL` (0x40000000) / `PMM_MAX_FRAMES` (262144) — the 1 GB
+  identity-map ceiling `boot.S` already provides — and **clamp the frame count to
+  it before the bitmap is sized**, so no frame the allocator can ever hand out is
+  unmappable (a `>= 1 GB` frame would be a #158-class escalation).
+- A **static-layout floor**: if a machine reports less RAM than the kernel heap's
+  backing frames need, `pmm_init` panics loudly instead of letting `kheap_init`
+  build the heap on unbacked physical memory.
+- Guarded the kernel-image reservation loop against a short frame count, asserted
+  the frame bitmap can't overrun the kernel region, and widened the frame-address
+  multiply to 64-bit (the clamp was the only thing preventing a 32-bit wrap).
+
+Verified no-op at 128 M: `ci-smoke` boots to `QuantumOS ready` with the PMMROVER
+and PMMHEAP self-tests green. The mmap-driven dynamic sizing + 1 GB feature legs
+follow in subsequent increments.
+
 ## [0.5.0] — 2026-07-11 — Agent-reachable QPU, hardening, dead-code payoff
 
 Post-v0.4.0 increments landed autonomously through the panel → gate (revert-and-confirm)

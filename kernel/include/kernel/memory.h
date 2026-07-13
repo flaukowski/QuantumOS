@@ -130,6 +130,15 @@ void memory_dump_physical_map(void);
 #define PAGE_SHIFT 12
 #define PAGE_MASK (~(PAGE_SIZE - 1))
 
+// Physical memory ceiling (ADR-0021). boot.S identity-maps exactly the first
+// 1 GB (512 x 2 MB PD entries), so a physical frame at or above this is
+// unmappable through the supervisor identity VA and handing one out would be a
+// #158-class escalation. EXCLUSIVE. Tied to boot.S by this comment; deliberately
+// NOT reusing USER_VBASE (its 0x40000000 value is an incidental collision — a
+// user-half relocation must not silently move the physical ceiling).
+#define PMM_PHYS_CEIL 0x40000000ULL
+#define PMM_MAX_FRAMES (PMM_PHYS_CEIL / PAGE_SIZE) // 262144
+
 #define KERNEL_BASE_ADDR 0xFFFF800000000000
 #define KERNEL_HEAP_START 0xFFFF800000000000
 #define KERNEL_HEAP_SIZE 0x100000000 // 4GB
