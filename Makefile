@@ -2335,6 +2335,28 @@ ci-smoke-society3-gate:
 	@echo "=== QuantumOS N-Way Society Test (epic #139, three kernels) ==="
 	timeout -k 5 $(SOCIETY3_GATE_TIMEOUT) python3 scripts/test_qos_society3.py
 
+# N-way authenticated swarm plane (epic #139 + ADR-0019): THREE kernels on a
+# shared mcast L2, and the host-admitted group session key gating the FIELD wire
+# across N>2. The gate does NOT assert on R_x/SYNCHRONIZED (a keyless node
+# one-way-locks to the keyed pair and prints SYNCHRONIZED — vacuous); it asserts
+# on frame-ADMISSION signals offset-anchored at each member's FSKEY: (a) key A,B
+# only -> FSAUTH bad-MAC on A,B + zero 'frame from C' admitted, while C still
+# receives from A,B (one-way lock, positively confirmed); (b) key C too -> C's
+# frames resume + fresh post-key sync; (c) a REAL host mcast capture-replay ->
+# per-reason replay marker + rekey line. A separate single-sourced timeout; the
+# proven society3/keyauth gates stay untouched (the #93 single-source lesson).
+# Revert-confirm: skip the leg-(b) admit -> frame-from-C resume + sync redden;
+# collapse the per-reason reject flag -> the leg-(c) replay marker reddens
+# (swallowed behind leg (a)'s bad-MAC line). FAILS LOUD if host multicast is
+# unavailable to a joiner (never a silent green).
+KEYAUTH_N_GATE_TIMEOUT ?= 600s
+
+ci-smoke-keyauth-n: kernel ci-smoke-keyauth-n-gate
+
+ci-smoke-keyauth-n-gate:
+	@echo "=== QuantumOS N-Way Authenticated Swarm Plane (epic #139, ADR-0019) ==="
+	timeout -k 5 $(KEYAUTH_N_GATE_TIMEOUT) python3 scripts/test_qos_keyauth_n.py
+
 # ISO/GRUB boot path (epic #101): boot the GRUB-built ISO with -cdrom —
 # NOT QEMU's -kernel shortcut — so the real bootloader handoff (menu,
 # default entry, MB1 info from GRUB) is what's under test. The default

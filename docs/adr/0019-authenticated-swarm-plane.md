@@ -16,6 +16,41 @@ QSUBMIT #200, attestation-by-default #201, consolidation #202; FSYP and insider 
 > society-aggregate auth, COM2 DATA-reply auth, insider hardening (pairwise keys + sender-IP
 > binding), a sliding replay window, and the IPC/net deny-audit ride-alongs.
 
+> **Update 2026-07-15 — N-way authenticated swarm plane (epic #139 + increment 0 observability).**
+> The FSYN key auth now extends to N>2 societies, gated by `ci-smoke-keyauth-n` (three kernels on a
+> shared mcast L2). An adversarial panel established the load-bearing correction below.
+>
+> - **One-way-lock semantics (why an R_x / SYNCHRONIZED assertion cannot detect a keyless node).**
+>   The model is enforce-*when-keyed*, so an UNKEYED receiver skips the MAC guard and accepts every
+>   frame, INCLUDING a keyed peer's authenticated frames. A keyless node C in a 2-keyed+1-keyless
+>   mesh therefore becomes a **one-way Kuramoto follower**: it phase-locks onto A/B's frames and
+>   prints `R_x >= 0.80` + `SYNCHRONIZED`, while A/B reject C's zero-tag frames and (after
+>   `PEER_STALE_TICKS`) drop C's frozen slot so their own min-pairwise R_x recovers. All three
+>   print SYNCHRONIZED with the key withheld — **R_x discriminates nothing about admission.** The
+>   real discriminator is frame-ADMISSION, offset-anchored at each member's `FSKEY` log position:
+>   the `FSAUTH … (bad MAC)` line on the keyed members, and per-source `FIELDSYNC: frame from <ip>`
+>   growth that STOPS for the excluded source and RESUMES once it is keyed. This one-way lock is
+>   expected, documented behaviour — the gate asserts it positively (C keeps receiving from A/B),
+>   never treats it as a failure.
+> - **Increment 0 observability split.** `note_reject` now latches ONCE PER REASON (two independent
+>   flags: bad-MAC, replay) rather than once per boot, so a distinct replayed frame surfaces its own
+>   `… (replay)` line instead of being swallowed behind an earlier bad-MAC line; `note_key` now also
+>   emits `FSKEY: rekeyed (replay watermarks reset)` on a re-install (previously console-silent).
+>   These are console lines only — **`SWARM_STATUS_BODY_LEN` stays 6 (frozen ABI, contracts/wire/
+>   v1.golden is untouched).** The host status helpers gained an optional `since=` log offset so a
+>   multi-phase gate reads only evidence produced after a phase boundary (the whole-log grep is
+>   sticky and would otherwise report a stale pre-key SYNCHRONIZED forever).
+> - **FSYP remains UNAUTHENTICATED — explicit scope.** Only the FSYN phase frame is MAC-gated. The
+>   FSYP society-aggregate frame (epic #178) carries no tag: it is source-IP filtered (`in_peer_set`)
+>   and **print-never-imprint** (received aggregates are only printed for host-side value-recompute,
+>   never folded into field content), so a forged aggregate can at most redden a host gate, never
+>   poison a field. Authenticating FSYP (reuse `reserved0` as seq + a 32 B tag → 48 B) stays
+>   deferred; the integrity check for FSYP is the host value-recompute, stated here so it is not
+>   mistaken for an oversight.
+>
+> Revert-confirmed: skipping the leg-(b) admit reddens the frame-from-C resume + post-key sync;
+> collapsing the per-reason reject flag back to one shared latch reddens the leg-(c) replay marker.
+
 ## Context
 
 Guest authority is structural (ADR-0001/0008) and boot identity is Lamport-attested
@@ -174,7 +209,12 @@ FSYN/FSYP frame ABIs were locked with static asserts as a prep step (this increm
 
 **First increment — authenticated FSYN only:**
 - **Frame** grows to **296 B**: `magic(4) | seq(4) | phase[256] | tag[32]`, `_Static_assert(==296)`;
-  receiver tightens the accept from `n >= sizeof` to exact `n == 296`.
+  receiver accepts `n >= sizeof(fsyn_frame_t)` (NOT exact `== 296`). *Doc/code drift resolved
+  2026-07-15: the shipped code always used `>=` (user/fieldsyncd.c) and `>=` is kept.* Rationale:
+  the MAC covers exactly `FSYN_MAC_COVERED` (264) leading bytes and the tag is read at its fixed
+  compile-time offset, so trailing bytes beyond the struct can neither move the tag nor alter the
+  MAC preimage — accepting a padded transport datagram tolerates a benign encapsulation without
+  weakening authentication. Runts (`n < sizeof`) still fall through and drop.
 - **Key store**: `peer_key[GHOST_MAX_PEERS][32]`, `peer_key_ok[]`, `peer_last_seq[]` in lockstep
   with `peer_ip[]`.
 - **MAC**: add RFC-2104 **HMAC-SHA256** on the shipped integer `user/sha256.h` (NOT bare
