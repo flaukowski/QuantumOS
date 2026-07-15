@@ -322,7 +322,7 @@ def qos_society_boot(qseed_a: str, qseed_b: str) -> dict:
 
 
 @mcp.tool()
-def qos_society_boot_n(qseeds: list) -> dict:
+def qos_society_boot_n(qseeds: list[str]) -> dict:
     """Boot an N-WAY society (3..4 members) into ONE mean-field coupled over a
     shared multicast L2 (epic #139). Every qseed must be DISTINCT — each member
     seeds its ghostd field divergently, so the cross-node order parameter starts

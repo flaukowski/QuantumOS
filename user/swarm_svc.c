@@ -31,6 +31,12 @@
 #include "ghost.h"       /* ghost_req_t/ghost_rep_t, GHOST_*, usys.h, string builders */
 #include "qpu_circuit.h" /* QC_RESULT_LEN, QC_STATUS_* (epic #149 B1) */
 
+/* The frozen QSUBMIT DONE body (swarm.h, ADR-0020 lane C) must stay derived
+ * from the executor's result length — a QC_RESULT_LEN change that forgets the
+ * wire contract fails HERE, in the emitter's TU, not silently on the host. */
+_Static_assert(SWARM_QSUBMIT_BODY_OK == 2 + QC_RESULT_LEN,
+               "QSUBMIT DONE body = op + status + QC result");
+
 /* ---- state (zeroed .bss) ---- */
 static uint8_t master_seed[LAMPORT_SEED_LEN];
 static uint8_t framebuf[SWARM_HDR_LEN + SWARM_MAX_PAYLOAD + 1];
@@ -47,7 +53,7 @@ static long ghostd_pid = 0;
  * ADR-0023's declarative re-mint restores only the DELIVERY PATH: a reborn
  * fieldsyncd with restored ghostd wiring but no key would emit seq=0 zero-tag
  * frames that keyed peers silently reject (a keyless-but-wired partition). */
-static uint8_t session_key[32];
+static uint8_t session_key[SWARM_KEY_LEN];
 static int have_key = 0;
 /* The fieldsyncd pid the key was last successfully forwarded to (0 = never). */
 static long key_fwd_pid = 0;
@@ -71,7 +77,7 @@ static long qsub_jid = 0;
  * MAC'd when the job completes. qsub_authed snapshots have_key at accept (NOT
  * read live at DONE-time) so a key admitted mid-flight cannot desync the reply
  * framing from what the host is awaiting. Scrubbed on completion. */
-static uint8_t qsub_nonce[16];
+static uint8_t qsub_nonce[SWARM_REPLYAUTH_NONCE_LEN];
 static int qsub_authed = 0;
 
 static void logline(const char *s) {
@@ -188,12 +194,12 @@ static void emit_signature(const uint8_t md[LAMPORT_HASH_LEN]) {
 /* Compose the attestation string into `msg`, returning its length. */
 static int build_attestation(char *msg, int seed_present, uint64_t qseed, uint64_t tk) {
     int o = 0;
-    o = ghost_put(msg, o, "QOS-BOOT|qseed=");
+    o = ghost_put(msg, o, SWARM_ATTEST_HEAD);
     if (seed_present)
         o = put_hex_u64(msg, o, qseed);
     else
         o = ghost_put(msg, o, "none");
-    o = ghost_put(msg, o, "|ticks=");
+    o = ghost_put(msg, o, SWARM_ATTEST_TICKS);
     o = ghost_put_u(msg, o, (unsigned)tk);
     return o;
 }
@@ -309,24 +315,26 @@ static void emit_authed_reply(const uint8_t *body, uint32_t body_len, const uint
         emit_frame(FRAME_DATA, body, body_len);
         return;
     }
-    uint8_t out[1 + 1 + QC_RESULT_LEN + 16 + 32]; /* max body(22) + nonce(16) + tag(32) */
+    /* max body(22) + nonce(16) + tag(32) */
+    uint8_t out[SWARM_QSUBMIT_BODY_OK + SWARM_REPLYAUTH_NONCE_LEN + SWARM_REPLYAUTH_TAG_LEN];
     for (uint32_t i = 0; i < body_len; i++) {
         out[i] = body[i];
     }
-    for (int i = 0; i < 16; i++) {
+    for (int i = 0; i < SWARM_REPLYAUTH_NONCE_LEN; i++) {
         out[body_len + i] = nonce[i]; /* nonce echo */
     }
     /* MAC input: op(1) || nonce(16) || body[1..] — identical form to STATUS. */
-    uint8_t macin[1 + 16 + 1 + QC_RESULT_LEN];
+    uint8_t macin[1 + SWARM_REPLYAUTH_NONCE_LEN + 1 + QC_RESULT_LEN];
     macin[0] = body[0];
-    for (int i = 0; i < 16; i++) {
+    for (int i = 0; i < SWARM_REPLYAUTH_NONCE_LEN; i++) {
         macin[1 + i] = nonce[i];
     }
     for (uint32_t i = 1; i < body_len; i++) {
-        macin[17 + (i - 1)] = body[i];
+        macin[1 + SWARM_REPLYAUTH_NONCE_LEN + (i - 1)] = body[i];
     }
-    hmac_sha256(session_key, 32, macin, 17 + (body_len - 1), &out[body_len + 16]);
-    emit_frame(FRAME_DATA, out, body_len + 16 + 32);
+    hmac_sha256(session_key, SWARM_KEY_LEN, macin, 1 + SWARM_REPLYAUTH_NONCE_LEN + (body_len - 1),
+                &out[body_len + SWARM_REPLYAUTH_NONCE_LEN]);
+    emit_frame(FRAME_DATA, out, body_len + SWARM_REPLYAUTH_NONCE_LEN + SWARM_REPLYAUTH_TAG_LEN);
 }
 
 /* ---- session-key delivery to fieldsyncd (ADR-0019 + ADR-0023) ---- */
@@ -358,12 +366,12 @@ static long find_fieldsyncd_pid(void) {
  * swarm_svc->fieldsyncd IPC cap. Records the delivered-to pid on success so
  * the main-loop watch can detect a fieldsyncd REBIRTH (new pid) and re-send. */
 static int forward_key_to(long fs_pid) {
-    char km[33];
+    char km[1 + SWARM_KEY_LEN];
     km[0] = 'K';
-    for (int i = 0; i < 32; i++) {
+    for (int i = 0; i < SWARM_KEY_LEN; i++) {
         km[i + 1] = (char)session_key[i];
     }
-    if (send_to(fs_pid, km, 33) == 0) {
+    if (send_to(fs_pid, km, 1 + SWARM_KEY_LEN) == 0) {
         key_fwd_pid = fs_pid;
         return 1;
     }
@@ -414,7 +422,7 @@ static void handle_data(const uint8_t *payload, uint32_t len) {
             return;
         /* reply body (leading, so legacy 6-byte parsers still work): op,
          * r_q16 (LE u32), live (u8). */
-        uint8_t body[6];
+        uint8_t body[SWARM_STATUS_BODY_LEN];
         body[0] = SWARM_OP_STATUS;
         body[1] = (uint8_t)(rep.r_q16);
         body[2] = (uint8_t)(rep.r_q16 >> 8);
@@ -425,7 +433,8 @@ static void handle_data(const uint8_t *payload, uint32_t len) {
          * (OPTIONAL for STATUS: a plain 1-byte request keeps the legacy 6-byte
          * reply, so an unkeyed host / ci-smoke-mcp is unaffected). Same emit path
          * as QSUBMIT — one audited nonce-echo + HMAC(op||nonce||body[1..]). */
-        const uint8_t *nonce = (have_key && len >= 1 + 16) ? &payload[1] : NULL;
+        const uint8_t *nonce =
+            (have_key && len >= 1 + SWARM_REPLYAUTH_NONCE_LEN) ? &payload[1] : NULL;
         emit_authed_reply(body, sizeof(body), nonce);
     } else if (op == SWARM_OP_RECALL) {
         if (len < 1 + GHOST_PW * 4)
@@ -439,7 +448,7 @@ static void handle_data(const uint8_t *payload, uint32_t len) {
         if (!ghost_query(&req, &rep))
             return;
         /* reply: op, match (s8), r_q16 (LE u32) */
-        uint8_t out[6];
+        uint8_t out[SWARM_RECALL_BODY_LEN];
         out[0] = SWARM_OP_RECALL;
         out[1] = (uint8_t)rep.match;
         out[2] = (uint8_t)(rep.r_q16);
@@ -466,18 +475,19 @@ static void handle_data(const uint8_t *payload, uint32_t len) {
             /* Too short to carry a nonce -> we could not authenticate any reply,
              * so drop SILENTLY (no OOB read, no plaintext downgrade oracle); the
              * keyed host fail-closes on the transaction timeout. */
-            if (len < 1 + 16) {
+            if (len < 1 + SWARM_REPLYAUTH_NONCE_LEN) {
                 return;
             }
             nonce = &payload[1];
-            circuit = &payload[1 + 16];
-            clen = len - 1 - 16;
+            circuit = &payload[1 + SWARM_REPLYAUTH_NONCE_LEN];
+            clen = len - 1 - SWARM_REPLYAUTH_NONCE_LEN;
         } else {
             circuit = &payload[1];
             clen = len - 1;
         }
         if (clen == 0 || clen > QPU_CIRCUIT_MAX) {
-            uint8_t err[2] = {SWARM_OP_QSUBMIT, 2}; /* malformed → broker/EINVAL */
+            /* malformed → broker/EINVAL */
+            uint8_t err[SWARM_QSUBMIT_BODY_ERR] = {SWARM_OP_QSUBMIT, 2};
             emit_authed_reply(err, sizeof(err), nonce);
             return;
         }
@@ -485,7 +495,7 @@ static void handle_data(const uint8_t *payload, uint32_t len) {
             /* A job is already outstanding (unreachable under a synchronous
              * host that waits for each reply; defensive). Report refused with
              * the IN-HAND nonce — a synchronous error NEVER touches the stash. */
-            uint8_t busy[2] = {SWARM_OP_QSUBMIT, 1};
+            uint8_t busy[SWARM_QSUBMIT_BODY_ERR] = {SWARM_OP_QSUBMIT, 1};
             emit_authed_reply(busy, sizeof(busy), nonce);
             return;
         }
@@ -502,14 +512,14 @@ static void handle_data(const uint8_t *payload, uint32_t len) {
              * snapshot (not live have_key). */
             qsub_authed = (nonce != NULL);
             if (nonce) {
-                for (int i = 0; i < 16; i++) {
+                for (int i = 0; i < SWARM_REPLYAUTH_NONCE_LEN; i++) {
                     qsub_nonce[i] = nonce[i];
                 }
             }
         } else {
             /* -4 EPERM/quota → refused(1); other broker errors → 2. Synchronous
              * error → in-hand nonce, no stash write. */
-            uint8_t err[2] = {SWARM_OP_QSUBMIT, (uint8_t)(r == -4 ? 1 : 2)};
+            uint8_t err[SWARM_QSUBMIT_BODY_ERR] = {SWARM_OP_QSUBMIT, (uint8_t)(r == -4 ? 1 : 2)};
             emit_authed_reply(err, sizeof(err), nonce);
         }
     } else if (op == SWARM_OP_KEY) {
@@ -519,13 +529,13 @@ static void handle_data(const uint8_t *payload, uint32_t len) {
          * HMAC-authenticated. fieldsyncd's pid comes from the uncapped
          * SYSINFO_PS text (the agentd/qtop pattern). No reply — the host does
          * not depend on a guest ack for the key. */
-        if (len < 1 + 32) {
+        if (len < 1 + SWARM_KEY_LEN) {
             return;
         }
         /* Store the key for reply-auth FIRST — independent of the fieldsyncd
          * forward below, so a lone MCP VM (or one whose fieldsyncd hasn't yet
          * appeared in SYSINFO_PS) can still authenticate its COM2 replies. */
-        for (int i = 0; i < 32; i++) {
+        for (int i = 0; i < SWARM_KEY_LEN; i++) {
             session_key[i] = payload[1 + i];
         }
         have_key = 1;
@@ -560,7 +570,7 @@ static void qsub_poll_step(void) {
      * this same single-threaded loop (no ISR), so the pointer stays valid until
      * the scrub below; a future move to interrupt-driven RX re-triggers review. */
     const uint8_t *nonce = qsub_authed ? qsub_nonce : NULL;
-    uint8_t reply[1 + 1 + QC_RESULT_LEN];
+    uint8_t reply[SWARM_QSUBMIT_BODY_OK];
     reply[0] = SWARM_OP_QSUBMIT;
     if (st == QPU_POLL_DONE && out.status == QPU_STATUS_OK && out.result_len == QC_RESULT_LEN) {
         /* status keys on the EXECUTOR's circuit-level result[0], not just the
@@ -573,14 +583,14 @@ static void qsub_poll_step(void) {
     } else {
         /* EXECFAIL, a short/oversized result, or a poll error → broker error. */
         reply[1] = 2;
-        emit_authed_reply(reply, 2, nonce);
+        emit_authed_reply(reply, SWARM_QSUBMIT_BODY_ERR, nonce);
     }
     /* Clear-on-completion: free the broker slot AND scrub the auth context so no
      * later path can emit with a stale nonce (a replayed DONE re-poll is already
      * blocked by qsub_jid==0, this is defense-in-depth). */
     qsub_jid = 0;
     qsub_authed = 0;
-    for (int i = 0; i < 16; i++) {
+    for (int i = 0; i < SWARM_REPLYAUTH_NONCE_LEN; i++) {
         qsub_nonce[i] = 0;
     }
 }

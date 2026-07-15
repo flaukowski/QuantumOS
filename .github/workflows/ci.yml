@@ -677,6 +677,13 @@ jobs:
     # against the committed contracts/abi/v1.golden. Pure-static (gcc + binutils,
     # no boot, no pip), so it stays in the fast lane. The selftest runs FIRST so a
     # broken generator cannot leave the gate vacuously green.
+    #
+    # The WIRE freeze (ADR-0020 lane C) rides the same fast static lane: the
+    # guest probe (user/wire_probe.c) is compiler-measured the same way, the
+    # host ring is imported live from stdlib-only scripts/qos_bridge.py (no
+    # pip), and the twin cross-check keeps emitter and verifier agreeing.
+    # Its selftest also runs FIRST, and asserts rc == 1 exactly (rc 2 is
+    # operational, never a caught mutation).
     steps:
     - name: Checkout code
       uses: actions/checkout@v4
@@ -684,6 +691,37 @@ jobs:
       run: make ci-smoke-abi-golden-selftest
     - name: ABI golden gate (extracted ABI == committed golden)
       run: make ci-smoke-abi-golden-gate
+    - name: Wire golden teeth-check (mutation + twin-teeth must redden the gate)
+      run: make ci-smoke-wire-golden-selftest
+    - name: Wire golden gate (extracted wire contract == committed golden)
+      run: make ci-smoke-wire-golden-gate
+
+  mcp-schema:
+    name: v1 MCP tool-surface freeze gate (golden diff + teeth-check — ADR-0020)
+    runs-on: ubuntu-latest
+    # The MCP tool schemas (contract b of ADR-0020) need `mcp` + pydantic, which
+    # the stdlib-only integration lane forbids — so this is its own pinned-pip
+    # lane (the quantum-gateway shape). requirements-mcp-gate.txt pins the exact
+    # schema GENERATORS (mcp/pydantic/pydantic-core) and the golden's _meta
+    # records the same pins; the extractor self-checks them (a resolver bump is
+    # rc 2 GENERATOR SKEW, never a fake diff). The selftest runs FIRST and
+    # asserts rc == 1 exactly, so a skewed or broken generator cannot pass as a
+    # caught mutation. MCP_PY=python3: the venv indirection is for local runs.
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.12'
+        cache: pip
+        cache-dependency-path: requirements-mcp-gate.txt
+    - name: Install pinned MCP schema generators
+      run: pip install --retries 5 -r requirements-mcp-gate.txt
+    - name: MCP schema teeth-check (a mutated schema must redden the gate)
+      run: make ci-smoke-mcp-schema-selftest MCP_PY=python3
+    - name: MCP schema gate (extracted tool surface == committed golden)
+      run: make ci-smoke-mcp-schema-gate MCP_PY=python3
 
   quantum-com2:
     name: COM2 Quantum-Submit (host → broker → qpud over the wire — epic #149 B1)

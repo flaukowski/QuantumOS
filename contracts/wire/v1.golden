@@ -1,0 +1,88 @@
+# QuantumOS v1 WIRE contract (ADR-0020 lane C): COM2 swarm-bridge framing,
+# reply-auth geometry, Lamport attestation parameters, FSYN/FSYP coupling
+# frames, and attestation-string KATs — guest ring (user/wire_probe.c,
+# compiler-measured) twinned against the host ring (scripts/qos_bridge.py).
+# Regenerate ONLY for an INTENDED wire change (human-only, never in CI):
+#   make regen-wire-golden
+# then commit the diff. A v1 wire change is a contract break: follow the
+# semver procedure in docs/adr/0020-v1-contract-freeze.md (bump the frozen
+# contract version; a silent regen without the version call is a break).
+guest:kat:WIRE_ATTEST_HEAD_0 = 6075161567992958801
+guest:kat:WIRE_ATTEST_HEAD_1 = 17280360235889020
+guest:kat:WIRE_ATTEST_TICKS_0 = 17296878645900412
+guest:off:fsyn.magic = 0
+guest:off:fsyn.phase = 8
+guest:off:fsyn.seq = 4
+guest:off:fsyn.tag = 264
+guest:off:fsyp.aggregate = 4
+guest:off:fsyp.magic = 0
+guest:off:fsyp.reserved0 = 8
+guest:size:fsyn_frame_t = 296
+guest:size:fsyp_frame_t = 16
+guest:wire:FRAME_ATTEST = 17
+guest:wire:FRAME_DATA = 2
+guest:wire:FRAME_DISCONNECT = 5
+guest:wire:FRAME_HANDSHAKE = 1
+guest:wire:FRAME_PING = 3
+guest:wire:FRAME_PKDIGEST = 16
+guest:wire:FRAME_PONG = 4
+guest:wire:FRAME_SIG = 18
+guest:wire:FSYN_MAC_COVERED = 264
+guest:wire:FSYN_MAGIC = 1314476870
+guest:wire:FSYN_PORT = 4747
+guest:wire:FSYP_MAGIC = 1348031302
+guest:wire:LAMPORT_BITS = 256
+guest:wire:LAMPORT_HASH_LEN = 32
+guest:wire:LAMPORT_SEED_LEN = 32
+guest:wire:LAMPORT_SIG_ELEM = 64
+guest:wire:LAMPORT_SIG_LEN = 16384
+guest:wire:SWARM_CRC8_INIT = 0
+guest:wire:SWARM_CRC8_POLY = 7
+guest:wire:SWARM_HDR_LEN = 4
+guest:wire:SWARM_KEY_LEN = 32
+guest:wire:SWARM_MAGIC = 165
+guest:wire:SWARM_MAX_PAYLOAD = 512
+guest:wire:SWARM_OP_KEY = 4
+guest:wire:SWARM_OP_QSUBMIT = 3
+guest:wire:SWARM_OP_RECALL = 2
+guest:wire:SWARM_OP_STATUS = 1
+guest:wire:SWARM_QSUBMIT_BODY_ERR = 2
+guest:wire:SWARM_QSUBMIT_BODY_OK = 22
+guest:wire:SWARM_RECALL_BODY_LEN = 6
+guest:wire:SWARM_REPLYAUTH_NONCE_LEN = 16
+guest:wire:SWARM_REPLYAUTH_TAG_LEN = 32
+guest:wire:SWARM_STATUS_BODY_LEN = 6
+guest:wire:SWARM_STATUS_R_SCALE = 65536
+host:kat:WIRE_ATTEST_HEAD_0 = 6075161567992958801
+host:kat:WIRE_ATTEST_HEAD_1 = 17280360235889020
+host:kat:WIRE_ATTEST_TICKS_0 = 17296878645900412
+host:kat:ping_frame = 811748819877
+host:wire:FRAME_ATTEST = 17
+host:wire:FRAME_DATA = 2
+host:wire:FRAME_DISCONNECT = 5
+host:wire:FRAME_HANDSHAKE = 1
+host:wire:FRAME_PING = 3
+host:wire:FRAME_PKDIGEST = 16
+host:wire:FRAME_PONG = 4
+host:wire:FRAME_SIG = 18
+host:wire:LAMPORT_BITS = 256
+host:wire:LAMPORT_HASH_LEN = 32
+host:wire:LAMPORT_SIG_ELEM = 64
+host:wire:LAMPORT_SIG_LEN = 16384
+host:wire:SWARM_CRC8_INIT = 0
+host:wire:SWARM_CRC8_POLY = 7
+host:wire:SWARM_HDR_LEN = 4
+host:wire:SWARM_KEY_LEN = 32
+host:wire:SWARM_MAGIC = 165
+host:wire:SWARM_MAX_PAYLOAD = 512
+host:wire:SWARM_OP_KEY = 4
+host:wire:SWARM_OP_QSUBMIT = 3
+host:wire:SWARM_OP_RECALL = 2
+host:wire:SWARM_OP_STATUS = 1
+host:wire:SWARM_QSUBMIT_BODY_ERR = 2
+host:wire:SWARM_QSUBMIT_BODY_OK = 22
+host:wire:SWARM_RECALL_BODY_LEN = 6
+host:wire:SWARM_REPLYAUTH_NONCE_LEN = 16
+host:wire:SWARM_REPLYAUTH_TAG_LEN = 32
+host:wire:SWARM_STATUS_BODY_LEN = 6
+host:wire:SWARM_STATUS_R_SCALE = 65536

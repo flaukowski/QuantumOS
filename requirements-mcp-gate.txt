@@ -1,0 +1,10 @@
+# Pinned schema GENERATORS for the v1 MCP tool-surface freeze gate (ADR-0020
+# lane B). pydantic/mcp derive the JSON inputSchemas, so a resolver bump can
+# re-shape a schema with no source change — the golden's _meta records these
+# same pins and scripts/extract-mcp-schema.py self-checks them (a mismatch is
+# rc 2 GENERATOR SKEW, operational). Re-pin only together with an intentional
+# `make regen-mcp-golden`. Used by the mcp-schema CI job and the local
+# build venv (make ci-smoke-mcp-schema-gate).
+mcp==1.28.1
+pydantic==2.13.4
+pydantic-core==2.46.4

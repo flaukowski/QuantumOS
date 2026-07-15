@@ -1,7 +1,7 @@
 # 20. Freeze the v1 Agent-Surface Contracts
 
 Date: 2026-07-11
-Status: Accepted (guest syscall ABI frozen 2026-07-13, PRs #206–#211; MCP-schema and COM2/attestation lanes deferred)
+Status: Accepted (all three lanes complete 2026-07-15: guest syscall ABI frozen 2026-07-13 PRs #206–#211; MCP tool surface + COM2/attestation wire frozen 2026-07-15)
 
 ## Context
 
@@ -87,6 +87,46 @@ scoped as follow-ups, not part of this closure:
   make a future reservation a conscious red-CI change, rather than reserve
   durable-format space speculatively for an unbuilt syscall) is left open pending
   an explicit call.
+
+## Update (2026-07-15) — lanes B and C frozen; all three contracts gated
+
+The two deferred lanes shipped as one increment (branch `feat/adr-0020-freeze-lanes`):
+
+- **Wire golden (contract c, `contracts/wire/v1.golden`).** A guest probe TU
+  (`user/wire_probe.c`, compiler-measured under real `USER_CFLAGS` — the
+  abi-golden pattern verbatim) plus a **live host ring** imported from
+  `scripts/qos_bridge.py` by `scripts/extract-wire.py`. The literals both sides
+  used are now shared named constants (`user/swarm.h` `SWARM_CRC8_*`/
+  `SWARM_ATTEST_*`/reply-auth body lens; the FSYN/FSYP frames moved to
+  `user/fsyn.h`; `qos_bridge` module constants), and the extractor
+  **twin-cross-checks** guest vs host — plus a MUST-TWIN set so a one-sided
+  deletion is a named failure, not a hole. Attestation-string KATs are packed
+  from the SHARED macros on the guest and REBUILT from the parser's pieces on
+  the host, so emitter and verifier cannot drift apart silently.
+- **MCP tool-surface golden (contract b, `contracts/mcp/v1-tools.json`).**
+  `scripts/extract-mcp-schema.py` freezes `name + inputSchema` per tool,
+  **normalized** (docstring-derived `title`/`description` stripped — pydantic
+  re-words those without wire consequence). The generators are **pinned**
+  (`requirements-mcp-gate.txt`: mcp 1.28.1, pydantic 2.13.4, pydantic-core
+  2.46.4) and recorded in the golden's `_meta`; the check self-verifies the
+  environment against those pins first (mismatch = exit 2 `GENERATOR SKEW`,
+  operational, never a fake diff). Runs in its own pinned-pip CI job
+  (`mcp-schema`, the quantum-gateway shape) — the integration lane stays
+  stdlib-only. Pre-freeze fix: `qos_society_boot_n(qseeds: list[str])` so the
+  frozen schema has a typed items schema.
+- **Shared gate discipline.** Both extractors: exit 1 = contract signal ONLY
+  (diff/twin/must-twin), exit 2 = operational; selftests run FIRST in CI and
+  assert rc == 1 **exactly** plus the specific mutated marker; teeth live in
+  the extractors (never production code) and **emit refuses to run under
+  teeth**; regen targets are human-only; goldens are LF-pinned
+  (`.gitattributes contracts/**`).
+- **Documented-not-gated:** tool descriptions and result-dict shapes are
+  excluded from the freeze — they belong to the machine-readable agent-docs
+  item (the Decision's last bullet), which remains the follow-up that
+  documents them.
+- **Follow-ups for the maintainer:** retrofit the same `#` header comment onto
+  `contracts/abi/v1.golden` (its extractor does not strip comments yet), and
+  add the two new gates to branch-protection required checks.
 
 ## Consequences
 

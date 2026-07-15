@@ -42,7 +42,12 @@ import time
 import uuid
 
 # ---- wire constants (user/swarm.h) ----------------------------------------
+# These module constants ARE the host ring of the ADR-0020 wire freeze:
+# scripts/extract-wire.py imports this module and twins each value against the
+# compiler-measured guest probe (user/wire_probe.c), so an edit on either side
+# is a contracts/wire/v1.golden diff, never a silent protocol split.
 MAGIC = 0xA5
+HDR_LEN = 4                          # magic + type + len(2) (SWARM_HDR_LEN)
 SWARM_MAX_PAYLOAD = 512
 
 FRAME_HANDSHAKE = 0x01
@@ -59,6 +64,25 @@ SWARM_OP_RECALL = 0x02
 SWARM_OP_QSUBMIT = 0x03  # host submits an opaque circuit to the SYS_QPU broker (epic #149 B1)
 SWARM_OP_KEY = 0x04      # host admits the swarm-plane group session key (ADR-0019)
 
+CRC8_POLY = 0x07                     # CRC-8/CCITT polynomial (SWARM_CRC8_POLY)
+CRC8_INIT = 0x00                     # CRC-8/CCITT init value (SWARM_CRC8_INIT)
+
+# ---- attestation string pieces (user/swarm.h SWARM_ATTEST_*) ---------------
+# parse_attestation() splits on these; the guest composes with the same bytes.
+ATTEST_MAGIC = "QOS-BOOT"
+ATTEST_QSEED_KEY = "qseed="
+ATTEST_TICKS_KEY = "ticks="
+
+# ---- reply-auth + DATA reply body geometry (user/swarm.h, ADR-0019) --------
+REPLYAUTH_NONCE_LEN = 16             # per-request host nonce, echoed in the reply
+REPLYAUTH_TAG_LEN = 32               # HMAC-SHA256 tag after the nonce echo
+KEY_LEN = 32                         # swarm-plane group session key (SWARM_OP_KEY)
+STATUS_BODY_LEN = 6                  # op + r_q16(4) + live
+RECALL_BODY_LEN = 6                  # op + match + r_q16(4)
+QSUBMIT_BODY_ERR = 2                 # op + status (error reply)
+QSUBMIT_BODY_OK = 22                 # op + status + QC_RESULT_LEN(20) result
+STATUS_R_SCALE = 65536               # r_q16 is a Q16 fraction
+
 # ---- Lamport parameters (user/swarm.h) ------------------------------------
 LAMPORT_BITS = 256
 HASH_LEN = 32
@@ -71,11 +95,11 @@ SIG_LEN = LAMPORT_BITS * SIG_ELEM    # 16384
 # ============================================================================
 def crc8(data: bytes) -> int:
     """CRC-8/CCITT (poly 0x07, init 0x00, MSB-first) — matches swarm_crc8()."""
-    crc = 0x00
+    crc = CRC8_INIT
     for byte in data:
         crc ^= byte
         for _ in range(8):
-            crc = ((crc << 1) ^ 0x07) & 0xFF if (crc & 0x80) else (crc << 1) & 0xFF
+            crc = ((crc << 1) ^ CRC8_POLY) & 0xFF if (crc & 0x80) else (crc << 1) & 0xFF
     return crc
 
 
@@ -111,18 +135,18 @@ class FrameParser:
         while True:
             while self.buf and self.buf[0] != MAGIC:
                 del self.buf[0]
-            if len(self.buf) < 4:
+            if len(self.buf) < HDR_LEN:
                 return out
             length = self.buf[2] | (self.buf[3] << 8)
             if length > SWARM_MAX_PAYLOAD:
                 self.bad_len += 1
                 del self.buf[0]      # impossible length: resync past this magic
                 continue
-            total = 4 + length + 1
+            total = HDR_LEN + length + 1
             if len(self.buf) < total:
                 return out           # frame not fully arrived yet
-            if crc8(bytes(self.buf[1:4 + length])) == self.buf[4 + length]:
-                out.append((self.buf[1], bytes(self.buf[4:4 + length])))
+            if crc8(bytes(self.buf[1:HDR_LEN + length])) == self.buf[HDR_LEN + length]:
+                out.append((self.buf[1], bytes(self.buf[HDR_LEN:HDR_LEN + length])))
                 del self.buf[:total]
             else:
                 self.bad_crc += 1
@@ -174,12 +198,12 @@ def verify_lamport(message: bytes, pkdigest: bytes, signature: bytes) -> bool:
 def parse_attestation(msg: str):
     """Parse 'QOS-BOOT|qseed=<hex|none>|ticks=<n>' -> (qseed_or_None, ticks)."""
     parts = msg.split("|")
-    if len(parts) != 3 or parts[0] != "QOS-BOOT":
+    if len(parts) != 3 or parts[0] != ATTEST_MAGIC:
         raise ValueError(f"malformed attestation: {msg!r}")
-    if not parts[1].startswith("qseed=") or not parts[2].startswith("ticks="):
+    if not parts[1].startswith(ATTEST_QSEED_KEY) or not parts[2].startswith(ATTEST_TICKS_KEY):
         raise ValueError(f"malformed attestation fields: {msg!r}")
-    qseed = parts[1][len("qseed="):]
-    ticks = parts[2][len("ticks="):]
+    qseed = parts[1][len(ATTEST_QSEED_KEY):]
+    ticks = parts[2][len(ATTEST_TICKS_KEY):]
     qseed_val = None if qseed == "none" else int(qseed, 16)
     return qseed_val, int(ticks)
 
@@ -862,8 +886,8 @@ class QosVM:
         control of this COM2 channel."""
         self._ensure_verified()
         key = bytes(key)
-        if len(key) != 32:
-            raise QosError(f"session key must be 32 bytes, got {len(key)}")
+        if len(key) != KEY_LEN:
+            raise QosError(f"session key must be {KEY_LEN} bytes, got {len(key)}")
         req = frame(FRAME_DATA, bytes([SWARM_OP_KEY]) + key)
         with self._io_lock:
             self._com2.sendall(req)
@@ -884,7 +908,7 @@ class QosVM:
         Fail-CLOSED: raises if attestation cannot go live in time (it never
         silently leaves the session on the plain path while claiming attested)."""
         self._ensure_verified()
-        self.admit_key(os.urandom(32))
+        self.admit_key(os.urandom(KEY_LEN))
         deadline = time.time() + deadline_s
         last = None
         while time.time() < deadline:
@@ -915,7 +939,7 @@ class QosVM:
         self._ensure_verified()
         if self._session_key is None:
             raise QosError("no session key admitted — call admit_key() first")
-        nonce = os.urandom(16)
+        nonce = os.urandom(REPLYAUTH_NONCE_LEN)
         payload = self._transact(frame(FRAME_DATA, bytes([SWARM_OP_STATUS]) + nonce),
                                  SWARM_OP_STATUS, time.time() + deadline_s)
         return self._verify_status_reply(payload, nonce)
@@ -933,17 +957,18 @@ class QosVM:
         if self._session_key is None:
             raise QosError("no session key admitted")
         total = len(payload)
-        floor = min(valid_body_lens) + 16 + 32
+        floor = min(valid_body_lens) + REPLYAUTH_NONCE_LEN + REPLYAUTH_TAG_LEN
         if total < floor:
             raise QosRefused(
                 f"op {op} reply too short to authenticate ({total} < {floor}) — "
                 "tag stripped or unkeyed guest")
-        body_len = total - 16 - 32
+        body_len = total - REPLYAUTH_NONCE_LEN - REPLYAUTH_TAG_LEN
         if body_len not in valid_body_lens:
             raise QosRefused(f"op {op} reply body_len {body_len} not in {valid_body_lens}")
         body = bytes(payload[:body_len])
-        echo = bytes(payload[body_len:body_len + 16])
-        tag = bytes(payload[body_len + 16:body_len + 48])
+        echo = bytes(payload[body_len:body_len + REPLYAUTH_NONCE_LEN])
+        tag = bytes(payload[body_len + REPLYAUTH_NONCE_LEN:
+                            body_len + REPLYAUTH_NONCE_LEN + REPLYAUTH_TAG_LEN])
         if body[0] != op:
             raise QosRefused(f"op {op} reply op mismatch (0x{body[0]:02x}) — cross-op frame")
         if echo != bytes(expect_nonce):
@@ -956,9 +981,10 @@ class QosVM:
 
     def _verify_status_reply(self, payload, expect_nonce):
         """Verify an authenticated STATUS reply (body op|r_q16(4)|live = 6 bytes)."""
-        body = self._verify_reply_auth(payload, expect_nonce, SWARM_OP_STATUS, (6,))
+        body = self._verify_reply_auth(payload, expect_nonce, SWARM_OP_STATUS,
+                                       (STATUS_BODY_LEN,))
         r_q16 = int.from_bytes(body[1:5], "little")
-        return {"r": r_q16 / 65536.0, "live": body[5], "authenticated": True,
+        return {"r": r_q16 / STATUS_R_SCALE, "live": body[5], "authenticated": True,
                 "identity": self.identity()}
 
     def status(self, deadline_s=5.0):
@@ -969,7 +995,7 @@ class QosVM:
                                  SWARM_OP_STATUS, time.time() + deadline_s)
         r_q16 = int.from_bytes(payload[1:5], "little") if len(payload) >= 5 else 0
         live = payload[5] if len(payload) > 5 else 0
-        return {"r": r_q16 / 65536.0, "live": live, "identity": self.identity()}
+        return {"r": r_q16 / STATUS_R_SCALE, "live": live, "identity": self.identity()}
 
     def qsubmit(self, circuit, deadline_s=10.0):
         """Submit an OPAQUE circuit (qpu_circuit.h bytes) to the in-OS QPU broker
@@ -991,7 +1017,7 @@ class QosVM:
         Unkeyed submits keep the legacy op|circuit wire and plain reply."""
         self._ensure_verified()
         if self._session_key is not None:
-            nonce = os.urandom(16)
+            nonce = os.urandom(REPLYAUTH_NONCE_LEN)
             payload = self._transact(
                 frame(FRAME_DATA, bytes([SWARM_OP_QSUBMIT]) + nonce + bytes(circuit)),
                 SWARM_OP_QSUBMIT, time.time() + deadline_s)
@@ -1005,7 +1031,8 @@ class QosVM:
     def _verify_qsubmit_reply(self, payload, expect_nonce):
         """Verify an authenticated QSUBMIT reply. Body is op|status(1) for an
         error or op|status(1)|result(20) for DONE, so body_len is 2 or 22."""
-        body = self._verify_reply_auth(payload, expect_nonce, SWARM_OP_QSUBMIT, (2, 22))
+        body = self._verify_reply_auth(payload, expect_nonce, SWARM_OP_QSUBMIT,
+                                       (QSUBMIT_BODY_ERR, QSUBMIT_BODY_OK))
         return {"status": body[1], "result": body[2:] if len(body) > 2 else b"",
                 "authenticated": True}
 
