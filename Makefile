@@ -118,7 +118,7 @@ OBJECTS = $(KERNEL_SOURCES:$(KERNEL_DIR)/src/%.c=$(BUILD_DIR)/%.o) \
 -include $(OBJECTS:.o=.d)
 
 # Targets
-.PHONY: all clean kernel run debug dump test test-list test-coverage ci-smoke ci-smoke-mem256 ci-smoke-mem512 ci-smoke-sched ci-smoke-disk ci-smoke-disk-upgrade ci-smoke-net ci-smoke-http ci-smoke-httpd ci-smoke-quiet ci-smoke-resonant ci-smoke-qseed ci-smoke-swarm ci-smoke-mcp ci-smoke-mcp-gate ci-smoke-qsubmit ci-smoke-society ci-smoke-society-gate ci-smoke-society-agents ci-smoke-society-agents-gate ci-smoke-society3 ci-smoke-society3-gate ci-smoke-iso ci-smoke-kbd ci-smoke-noserial ci-smoke-screen swarm-pingpong
+.PHONY: all clean kernel run debug dump test test-list test-coverage ci-smoke ci-smoke-mem256 ci-smoke-mem512 ci-smoke-sched ci-smoke-disk ci-smoke-disk-upgrade ci-smoke-net ci-smoke-http ci-smoke-httpd ci-smoke-quiet ci-smoke-resonant ci-smoke-qseed ci-smoke-swarm ci-smoke-mcp ci-smoke-mcp-gate ci-smoke-qsubmit ci-smoke-society ci-smoke-society-gate ci-smoke-society-agents ci-smoke-society-agents-gate ci-smoke-society3 ci-smoke-society3-gate ci-smoke-society4 ci-smoke-society4-gate ci-smoke-iso ci-smoke-kbd ci-smoke-noserial ci-smoke-screen swarm-pingpong
 
 all: kernel
 
@@ -2334,6 +2334,26 @@ ci-smoke-society3: kernel ci-smoke-society3-gate
 ci-smoke-society3-gate:
 	@echo "=== QuantumOS N-Way Society Test (epic #139, three kernels) ==="
 	timeout -k 5 $(SOCIETY3_GATE_TIMEOUT) python3 scripts/test_qos_society3.py
+
+# N=4 society — the DOCUMENTED configuration ceiling (societies epic increment 2):
+# FOUR kernels on a shared mcast L2, the max the host bridge addresses
+# (_NET/_MAC are 4 entries) with each node's peer set at N-1=3 against a
+# 4-slot ghostd table. Proves the full 4-cycle mesh (12 directed frame
+# observations, per-IP in boot_n), four distinct attested identities, and
+# min-pairwise R_x >= 0.80 from divergent (< 0.50) per-node starts, then a clean
+# 4-way reap. Deliberately does NOT assert slot-full/eviction (unreachable at
+# 3/4 slots, and unobservable). Larger timeout than society3: 4 QEMU-TCG VMs
+# oversubscribe the runner's cores and dilate convergence wall-clock. FAILS LOUD
+# if host multicast is unavailable. Revert-confirm: drop one member's qseed to a
+# duplicate -> boot_n's distinct-seed guard reddens; shrink the roster to 3 ->
+# this is society3, not the ceiling. See ADR-0014 for the true N=5 constant wall.
+SOCIETY4_GATE_TIMEOUT ?= 600s
+
+ci-smoke-society4: kernel ci-smoke-society4-gate
+
+ci-smoke-society4-gate:
+	@echo "=== QuantumOS N=4 Society Test (societies epic, the documented ceiling) ==="
+	timeout -k 5 $(SOCIETY4_GATE_TIMEOUT) python3 scripts/test_qos_society4.py
 
 # N-way authenticated swarm plane (epic #139 + ADR-0019): THREE kernels on a
 # shared mcast L2, and the host-admitted group session key gating the FIELD wire

@@ -74,7 +74,26 @@ over COM2 and admits it to the L2.
   problem).
 - Watchdog-reborn `fieldsyncd`/peer IPC caps are not re-minted on restart
   (user/fieldsyncd.c:333-339) — a standing reliability gap that ADR-0019 turns into
-  a key-distribution outage and must fix in-phase.
+  a key-distribution outage. **Closed (2026-07-15):** ADR-0023 re-mints peer IPC
+  caps declaratively on every start, and swarm_svc re-forwards the cached group
+  key on a `fieldsyncd` pid change — a rebirth is now a re-admission, not an outage.
+
+> **Update (2026-07-15) — the N=4 configuration is now proven, and the ceiling
+> stated precisely.** The societies epic adds `ci-smoke-society4-gate`
+> (`scripts/test_qos_society4.py`): four attested kernels on a shared mcast L2,
+> the full 4-cycle mesh (12 directed frame observations), four distinct
+> identities, min-pairwise R_x ≥ 0.80 from divergent per-node starts, clean reap.
+> The gate deliberately does **not** assert slot-full/eviction behavior: at N=4
+> each node has N-1 = 3 peers against a 4-slot ghostd table (3/4 occupied), so
+> the slot-full and eviction branches are structurally unreachable and have no
+> console observable — an "assert no eviction" would be vacuous. The binding
+> ceilings, precisely: the host bridge's `_NET`/`_MAC` arrays are 4 entries (the
+> wall this gate sits at); the `GHOST_MAX_PEERS`/`MAX_PEERS` = 4 constants bound
+> *peers per node* to 4 and would actually admit **N = 5** (a 5th node means 4
+> peers each) — lifting past 5 is where the two lockstep constants plus the
+> per-peer arrays must all grow together. The N-way authenticated wire (the group
+> key gating field coupling at N > 2) landed alongside as `ci-smoke-keyauth-n`
+> (ADR-0019 update).
 
 ## Evidence
 - Shipped in: PR #116 — static IP + ARP responder (raw-L2 prerequisite, epic #97)
