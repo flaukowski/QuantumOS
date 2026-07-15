@@ -465,15 +465,16 @@ status_t process_destroy(uint32_t pid) {
     /* Revoke every capability the process owns (cascades to anything
      * it granted onward) */
     cap_revoke_all_for_process(pid);
-    /* Free the SURVIVING peers' spawn-channel caps targeting this pid (epic
-     * #175). INVARIANT: this must run HERE, before the state=UNUSED store
-     * below — pids are first-fit slot indices, and every pid-reuse path
-     * funnels through process_destroy (both the idle-loop reaper and
-     * service_stop), so unlink-here is what keeps a recycled pid from
-     * inheriting a live inbound channel minted for its predecessor. Do not
-     * hoist this below the UNUSED store, and do not move it to any single
-     * caller of process_destroy. */
-    cap_revoke_spawn_channels(pid);
+    /* Free the SURVIVING peers' IPC caps targeting this pid (epic #175,
+     * generalized to ALL IPC caps by ADR-0023). INVARIANT: this must run
+     * HERE, before the state=UNUSED store below — pids are first-fit slot
+     * indices, and every pid-reuse path funnels through process_destroy
+     * (both the idle-loop reaper and service_stop), so unlink-here is what
+     * keeps a recycled pid from inheriting a live inbound channel minted for
+     * its predecessor. Do not hoist this below the UNUSED store, and do not
+     * move it to any single caller of process_destroy. Declared service
+     * pairs come back on restart via ipc_peers[] (service.c start_slot). */
+    cap_revoke_ipc_targets(pid);
     process->capability_root = CAP_ID_INVALID;
     process->capability_count = 0;
 

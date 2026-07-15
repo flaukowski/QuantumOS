@@ -170,6 +170,50 @@ static inline void svc_irq_restore(uint64_t flags) {
     __asm__ volatile("push %0; popfq" : : "r"(flags) : "memory");
 }
 
+/* ---- Declarative IPC peer wiring (ADR-0023) ------------------------------ */
+
+/* A peer slot is safe to mint against only if it is RUNNING **and** its pid
+ * still names the process we spawned. state==RUNNING alone is a STALE value:
+ * a service can be TERMINATED, freed by the idle reaper, and have its pid
+ * recycled first-fit up to ~2 s before the health monitor marks the slot
+ * CRASHED — cap_create validates neither owner nor resource liveness, so an
+ * unguarded mint would hand an IPC cap to whatever process recycled the pid,
+ * reopening the exact leak cap_revoke_ipc_targets closes. Same guard as
+ * slot_by_pid and service_stop. */
+static int slot_peer_live(const service_slot_t *s) {
+    return s->info.state == SERVICE_STATE_RUNNING && s->info.pid != 0 &&
+           process_is_valid(s->info.pid) &&
+           process_get_generation(s->info.pid) == s->info.pid_generation;
+}
+
+/* Mint one declared pair between declarer pid `a` and peer pid `b`:
+ * a->b with to_perms, b->a with from_perms (either may be 0 = skip).
+ * TRANSACTIONAL: an IPC pair is only meaningful whole — a half-minted
+ * qsh<->ghostd pair would send fine and time out on the reply, a flake worse
+ * than a hard fail — so if the second direction's mint fails, the first is
+ * revoked and the pair is absent, attributably. */
+static void mint_ipc_pair(const char *declarer_name, uint32_t a, uint32_t b, uint32_t to_perms,
+                          uint32_t from_perms) {
+    uint32_t to_cap = CAP_ID_INVALID;
+    if (to_perms) {
+        if (cap_create(a, CAP_RESOURCE_IPC, b, to_perms, 0, &to_cap) != CAP_SUCCESS) {
+            boot_log("service: IPC peer pair mint failed (pair skipped)");
+            boot_log(declarer_name);
+            return;
+        }
+    }
+    if (from_perms) {
+        uint32_t from_cap = CAP_ID_INVALID;
+        if (cap_create(b, CAP_RESOURCE_IPC, a, from_perms, 0, &from_cap) != CAP_SUCCESS) {
+            if (to_cap != CAP_ID_INVALID) {
+                cap_revoke(to_cap, a); /* roll back the half already minted */
+            }
+            boot_log("service: IPC peer pair mint failed (pair rolled back)");
+            boot_log(declarer_name);
+        }
+    }
+}
+
 static svc_result_t start_slot(service_slot_t *slot) {
     if (slot->info.state == SERVICE_STATE_RUNNING || slot->info.state == SERVICE_STATE_STARTING) {
         return SVC_SUCCESS;
@@ -454,6 +498,50 @@ static svc_result_t start_slot(service_slot_t *slot) {
             man.entry_count++;
         }
         manifest_bind(pid, &man);
+    }
+
+    /* Declarative IPC peer wiring (ADR-0023 Part 2), inside the SAME cli
+     * window as the grant_* mints and the manifest bind. On a single CPU with
+     * IF=0 the health monitor and reaper cannot run, so services[] is a
+     * frozen snapshot during the scan — but a frozen snapshot can still be
+     * STALE, hence the slot_peer_live generation guard on every mint.
+     *
+     * Pass 1 MUST run entirely before Pass 2, with no cap frees in between:
+     * a service holding several outbound IPC caps (swarm-svc: ghostd + the
+     * fieldsyncd key cap) relies on its declared (Pass-1) primary peer
+     * landing at the lowest first-fit cap slot, where untargeted send_msg's
+     * first-match finds it. */
+
+    /* Pass 1: for each of MY declared peers currently running, mint the pair
+     * as declared — covers first boot AND my own rebirth. A peer that is not
+     * up (or stale) is skipped; its own start's Pass 2 wires us then. */
+    for (uint32_t p = 0; p < SERVICE_MAX_IPC_PEERS && slot->def.ipc_peers[p].peer; p++) {
+        service_slot_t *other = slot_by_name(slot->def.ipc_peers[p].peer);
+        if (!other || other == slot || !slot_peer_live(other)) {
+            continue;
+        }
+        mint_ipc_pair(slot->info.name, pid, other->info.pid, slot->def.ipc_peers[p].to_perms,
+                      slot->def.ipc_peers[p].from_perms);
+    }
+
+    /* Pass 2: for each running service whose declaration names ME, mint its
+     * declared pair against my fresh pid — covers MY rebirth when the OTHER
+     * side owns the declaration, and boot-order gaps (fieldsyncd declares the
+     * swarm-svc key cap before swarm-svc exists; the pair mints here when
+     * swarm-svc starts). Single-sided declaration means a pair mints in
+     * exactly one pass per start — never twice (#176 singleton invariant). */
+    for (uint32_t i = 0; i < MAX_SERVICES; i++) {
+        service_slot_t *other = &services[i];
+        if (!other->registered || other == slot || !slot_peer_live(other)) {
+            continue;
+        }
+        for (uint32_t p = 0; p < SERVICE_MAX_IPC_PEERS && other->def.ipc_peers[p].peer; p++) {
+            if (!str_eq(other->def.ipc_peers[p].peer, slot->info.name)) {
+                continue;
+            }
+            mint_ipc_pair(other->info.name, other->info.pid, pid, other->def.ipc_peers[p].to_perms,
+                          other->def.ipc_peers[p].from_perms);
+        }
     }
 
     slot->info.pid = pid;
