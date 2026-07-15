@@ -7,6 +7,10 @@ Full per-PR provenance: `git log` and the PR list on GitHub.
 
 ## [Unreleased]
 
+*(nothing yet)*
+
+## [0.5.1] — 2026-07-15 — v1 contracts frozen, 9–19× faster agent wire, rebirth-proof IPC
+
 ### ADR-0020 v1 contract freeze — pre-freeze corrections (guest syscall ABI)
 
 Groundwork before the golden-diff ABI freeze gate lands, so v1 pins a *correct*
@@ -194,6 +198,85 @@ bumping it to 20 drops the rate to 49.9 and reddens the floor; restoring returns
 green. This completes ADR-0022's second prerequisite, so the ADR flips to **Accepted** —
 the deferral decision and both prerequisites (latency gate + scheduler baseline) are done;
 the latency fix itself stays a deliberately deferred, now-unblocked future epic.
+
+### Fixed — post-ADR-0021/0022 sweep
+
+- `pmm_highmem_selftest` rover clamped to the first high frame (#219, ADR-0021 follow-up).
+- The echo/client IPC demos NUL-terminate their `recv_msg` buffers — a reply could
+  disclose stale stack bytes past the message (#220, self-disclosure class).
+- The browser boot-gate interactivity probe keys on `uptime` instead of a
+  ghost-EPERM-prone command, de-flaking the qemu-wasm CI leg (#221).
+
+### ADR-0023 — IPC peer re-wiring on watchdog rebirth + dead-target unlink (#222–#224), **Accepted**
+
+Two defects, one decision (adversarial design review pre-implementation: 15 findings,
+3 blockers — all folded into the ADR before a line of code):
+- **No capability outlives the process it names.** The epic #175 spawn-channel unlink
+  generalizes to EVERY `CAP_RESOURCE_IPC` cap naming a dead pid (`cap_revoke_ipc_targets`)
+  — closing the recycled-pid authority leak for `SYS_SEND_TO` and the `SYS_CAP_DERIVE`
+  targeted-peer check. The capability self-test's survivor assert inverts to gate it.
+- **Wiring comes back by declaration, not pid-reuse luck.** `service_definition_t` grows
+  a per-direction `ipc_peers[]` table; `start_slot` re-mints declared pairs on every
+  start inside the grant cli window — two passes (my running peers; running services
+  declaring me), every mint guarded by liveness + pid **generation** (a stale RUNNING
+  slot would reintroduce the exact leak Part 1 closes), pair mints transactional.
+  paradoxd/fieldsyncd/swarm-svc/qsh ↔ ghostd and the ADR-0019 key cap converted; the
+  citizens.c hand mints are gone, along with every "known restart limitation" caveat.
+- swarm_svc re-forwards its cached session key when fieldsyncd's pid changes — the
+  re-mint restores the delivery *path*; the re-forward restores the *key* (a reborn
+  fieldsyncd would otherwise emit zero-tag frames its keyed peers silently reject).
+- Gates: the ci-smoke session delivers a delayed `ghost` to the REBORN shell, asserted
+  on the post-`QSH: reborn` log slice (whole-log grep passes vacuously — the session
+  prints `ghost R=` twice pre-rebirth); `ghost exit` (exit-is-a-feature for ghostd)
+  restarts the TARGET under the living shell and a post-`GHOSTD: FIELD REBORN` slice
+  gate proves Part 1's necessity in the live routing path. Revert-confirmed in both
+  directions; the forward run happened to rebirth ghostd onto a recycled pid — the
+  exact scenario the unlink protects.
+
+### ADR-0022 — the I/O-priority boost: the deferred latency epic, **shipped** (#225)
+
+The option table's principled fix, hardened by a 4-lens adversarial panel (31 findings:
+7 blockers, 15 majors). A process whose awaited I/O just arrived — an IPC delivery, or
+a COM2 RX byte for the registered holder — is flagged `io_boost` and picked out of turn
+at the next reschedule. **PING 0.45 s → 0.052 s (~9×), STATUS 0.90 s → 0.048 s (~19×)**;
+every agent-facing MCP tool call rides this wire. The panel's teeth are in the design:
+a sticky 0xFF absent-COM2 latch (an unbacked port reads all-ones — the boost would have
+fired every tick of every COM2-less CI boot), `SCHED_BOOST_MAX_CONSEC=2` (a boost
+ping-pong would starve the roster AND freeze quantum expiry itself, invisibly to every
+liveness floor), consume-at-dispatch-commit (`pick_next` stays pure — it is a bare
+predicate in the CPUKILL pre-check), a (pid, generation)+live-cap-validated COM2-holder
+registration, and `boost_count` counting HONORED picks only. Gates re-armed in the same
+increment: ci-smoke-latency asserts PING median < 0.30 s AND a positive honored-boost
+delta (binding effect to mechanism — a bare median is gameable by a quantum change the
+sched gate deliberately tolerates), STATUS < 0.6 s; ci-smoke-sched arms a max_gap ≤ 600
+tick starvation ceiling under a boost-invariant paced load. Four-way revert-confirmed:
+`SCHED_IO_BOOST 0` reddens both latency assertions (the boost-off median lands exactly
+on the phase-locked 0.45 s rotation floor) while the preempt band stays green in both
+directions.
+
+### ADR-0020 — MCP + wire freeze lanes: the v1 contract freeze is **complete** (#226)
+
+The two deferred lanes land, mirroring the ABI golden discipline (2-lens panel first:
+21 findings, 4 blockers):
+- **`contracts/wire/v1.golden`** — the COM2 swarm-bridge framing, opcodes, Lamport
+  attestation parameters, CRC8 parameters, reply-auth geometry, FSYN/FSYP coupling-frame
+  sizes+offsets, and attestation-string KATs, compiler-measured from a probe
+  (`user/wire_probe.c`) whose macros are the SAME ones the emitters now use — twinned
+  against a host ring extracted from the live `scripts/qos_bridge.py` parser constants.
+  The twin rule + a MUST_TWIN set turn guest↔host drift (previously guarded only by a
+  code comment) into a red diff; `host:kat:ping_frame` freezes byte order + CRC span in
+  one measured number.
+- **`contracts/mcp/v1-tools.json`** — all 22 MCP tools, name + inputSchema (descriptions
+  and result-dict shapes deliberately excluded and recorded as such); pydantic's volatile
+  `title` keys normalized away; `mcp`/`pydantic`/`pydantic-core` pinned in
+  `requirements-mcp-gate.txt` AND the golden `_meta` with a generator-skew self-check, so
+  a wrong-environment regen cannot be committed silently. Teeth live in the extractors
+  (changed-value AND added-name mutations both proven caught; exit 1 is reserved for
+  diffs so an inverted teeth-check cannot pass on a crash). New pinned-pip CI lane for
+  the MCP gate; the wire gate rides the stdlib-only abi-golden job.
+
+With all three lanes frozen — syscall ABI (#206–#212), wire, and MCP — **the v1
+agent-surface contract of ADR-0020 is complete.**
 
 ## [0.5.0] — 2026-07-11 — Agent-reachable QPU, hardening, dead-code payoff
 
