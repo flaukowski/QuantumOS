@@ -1705,11 +1705,14 @@ class QosSociety:
             raise QosTimeout(f"society did not synchronize (>= {threshold}) in {timeout}s")
 
     # ---- N-way society (epic #139): N>=3 members on one mcast L2 -------------
-    def boot_n(self, qseeds, expects=None, timeout=45):
+    def boot_n(self, qseeds, expects=None, timeout=45, extra_tokens=""):
         """Boot N (>=3) attested members into ONE mean-field society on a shared
         mcast L2. Every qseed must be distinct (divergent starts → a non-vacuous
         R_x climb). `expects` (optional, per-member) verifies against a DIFFERENT
-        qseed for negative admission. Each ghostd folds the MEAN field over its
+        qseed for negative admission. `extra_tokens` are appended to EVERY
+        member's cmdline (e.g. "agentdemo" to run each node's local sub-agent
+        society for the N-way society-of-societies gate). Each ghostd folds the
+        MEAN field over its
         N-1 peers, so all N reaching min-pairwise R_x >= threshold is convergence
         two VMs structurally cannot fake."""
         with self._lock:
@@ -1746,12 +1749,13 @@ class QosSociety:
             self.members = [QosVM(kernel=self.kernel) for _ in range(n)]
             _society_register(self)
             try:
+                extra = f" {extra_tokens.strip()}" if extra_tokens.strip() else ""
                 for i in range(n):
                     peers = ",".join(self._NET[j] for j in range(n) if j != i)
                     self.members[i].boot(
                         qseed=qseeds[i], expect_qseed=expects[i], timeout=timeout,
                         quiet=False, arm_signals=False, mac=self._MAC[i],
-                        append_extra=f"ip={self._NET[i]} peer={peers}", netdev=netdev)
+                        append_extra=f"ip={self._NET[i]} peer={peers}{extra}", netdev=netdev)
                 # mcast reachability precheck (FAIL LOUD — never a silent green):
                 # every node must receive a frame from EACH of its N-1 peers (the
                 # full mesh), or the shared L2 is not delivering. Scale the

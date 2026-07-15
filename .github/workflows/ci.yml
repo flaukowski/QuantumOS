@@ -834,6 +834,12 @@ jobs:
         echo "Using kernel: $KERNEL_ELF"
         QOS_KERNEL="$KERNEL_ELF" make ci-smoke-society4-gate
 
+    - name: N-way society-of-societies — three societies exchange aggregates (epic #178 at N=3)
+      run: |
+        KERNEL_ELF=$(find build/ -name "kernel.elf32" | head -1)
+        echo "Using kernel: $KERNEL_ELF"
+        QOS_KERNEL="$KERNEL_ELF" make ci-smoke-society-agents-n-gate
+
   integration:
     name: Integration Tests
     runs-on: ubuntu-latest

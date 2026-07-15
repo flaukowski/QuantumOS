@@ -118,7 +118,7 @@ OBJECTS = $(KERNEL_SOURCES:$(KERNEL_DIR)/src/%.c=$(BUILD_DIR)/%.o) \
 -include $(OBJECTS:.o=.d)
 
 # Targets
-.PHONY: all clean kernel run debug dump test test-list test-coverage ci-smoke ci-smoke-mem256 ci-smoke-mem512 ci-smoke-sched ci-smoke-disk ci-smoke-disk-upgrade ci-smoke-net ci-smoke-http ci-smoke-httpd ci-smoke-quiet ci-smoke-resonant ci-smoke-qseed ci-smoke-swarm ci-smoke-mcp ci-smoke-mcp-gate ci-smoke-qsubmit ci-smoke-society ci-smoke-society-gate ci-smoke-society-agents ci-smoke-society-agents-gate ci-smoke-society3 ci-smoke-society3-gate ci-smoke-society4 ci-smoke-society4-gate ci-smoke-iso ci-smoke-kbd ci-smoke-noserial ci-smoke-screen swarm-pingpong
+.PHONY: all clean kernel run debug dump test test-list test-coverage ci-smoke ci-smoke-mem256 ci-smoke-mem512 ci-smoke-sched ci-smoke-disk ci-smoke-disk-upgrade ci-smoke-net ci-smoke-http ci-smoke-httpd ci-smoke-quiet ci-smoke-resonant ci-smoke-qseed ci-smoke-swarm ci-smoke-mcp ci-smoke-mcp-gate ci-smoke-qsubmit ci-smoke-society ci-smoke-society-gate ci-smoke-society-agents ci-smoke-society-agents-gate ci-smoke-society3 ci-smoke-society3-gate ci-smoke-society4 ci-smoke-society4-gate ci-smoke-society-agents-n ci-smoke-society-agents-n-gate ci-smoke-iso ci-smoke-kbd ci-smoke-noserial ci-smoke-screen swarm-pingpong
 
 all: kernel
 
@@ -2322,6 +2322,26 @@ ci-smoke-society-agents: kernel ci-smoke-society-agents-gate
 ci-smoke-society-agents-gate:
 	@echo "=== QuantumOS Society-of-Societies Test (epic #178, two societies) ==="
 	timeout -k 5 $(SOCIETY_AGENTS_GATE_TIMEOUT) python3 scripts/test_qos_society_agents.py
+
+# N-way society-of-societies (societies epic increment 3; epic #178 at N>2): THREE
+# agentdemo VMs each run a full local sub-agent society and EXCHANGE their
+# qseed-salted aggregates over FSYP full-mesh — each node must show BOTH peers'
+# aggregates (N-1=2), host-recomputed and value-attributed (the FSYP print carries
+# no source, and FSYP stays source-IP-filtered/unauthenticated per ADR-0019, so
+# the host value recompute is the integrity check; a FIXTURE precheck requires all
+# 3 expected values pairwise-distinct). Larger budget than the 2-VM gate: three
+# agentdemo boots (QPU+spawns+field ops each) ride the same VMs on an
+# oversubscribed runner. Revert-confirm: boot one member WITHOUT agentdemo (drop
+# it from extra_tokens) -> its value never reaches the others -> the N-1 assertion
+# reddens; or collide two qseeds -> the pairwise-distinct fixture reddens. FAILS
+# LOUD if host multicast is unavailable.
+SOCIETY_AGENTS_N_GATE_TIMEOUT ?= 720s
+
+ci-smoke-society-agents-n: kernel ci-smoke-society-agents-n-gate
+
+ci-smoke-society-agents-n-gate:
+	@echo "=== QuantumOS N-Way Society-of-Societies Test (epic #178 at N=3) ==="
+	timeout -k 5 $(SOCIETY_AGENTS_N_GATE_TIMEOUT) python3 scripts/test_qos_society_agents_n.py
 
 # N-way society (epic #139): THREE kernels mean-field-couple on a shared mcast
 # L2. A separate gate/timeout from the 2-node one (a 3-body field converges
