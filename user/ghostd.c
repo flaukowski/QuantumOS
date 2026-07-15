@@ -691,6 +691,15 @@ static void handle(const ghost_req_t *req, long sender) {
         rep.match = (int8_t)live_count;
         rep.r_q16 = field_order_param();
         break;
+    case GHOST_EXIT:
+        /* Exit-is-a-feature (ADR-0023): terminate so the watchdog rebirths
+         * us — the imprinted field dies with this process (the reborn banner
+         * says so honestly) and every peer's IPC cap to this pid is unlinked
+         * by the kernel, then re-minted declaratively at our restart. No
+         * reply: the sender outlives us and its next query is the proof. */
+        logline("GHOSTD: exiting — the watchdog will restart me");
+        exit_(0);
+        break; /* unreachable */
     default:
         rep.match = GHOST_NOMATCH;
         break;
