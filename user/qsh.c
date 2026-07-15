@@ -1276,6 +1276,32 @@ static void cmd_ghost(void) {
     out_bytes(b, o);
 }
 
+/* `ghost <sub>` — today only `ghost exit` (ADR-0023): ask ghostd to
+ * terminate so the watchdog rebirths it. Restarting the TARGET under this
+ * LIVING shell is the one rebirth direction a qsh `exit` never exercises:
+ * our stale ghostd cap must be unlinked at its death (Part 1) and the fresh
+ * pair re-minted at its restart (Part 2) for the NEXT `ghost` to answer —
+ * the ci-smoke Part-1 integration leg drives exactly that sequence. The op
+ * is fire-and-forget (ghostd sends no reply; it is dying). */
+static void cmd_ghost_arg(const char *sub) {
+    if (!is_cmd(sub, "exit")) {
+        out("qsh: ghost: usage: ghost [exit]\r\n");
+        return;
+    }
+    ghost_req_t req;
+    req.op = GHOST_EXIT;
+    req.slot = 0;
+    req.pad[0] = req.pad[1] = 0;
+    for (int w = 0; w < GHOST_PW; w++) {
+        req.bits[w] = 0;
+    }
+    if (send_msg((const char *)&req, sizeof(req)) < 0) {
+        out("qsh: ghost exit send denied (EPERM)\r\n");
+        return;
+    }
+    out("qsh: ghost exit sent — the watchdog will rebirth ghostd\r\n");
+}
+
 /* Start an initrd program (SYS_SPAWN — the shell's spawn capability at
  * work) and poll its fate with SYS_WAITPID, heartbeating so the watchdog
  * never mistakes the wait for a hang. */
@@ -1425,6 +1451,8 @@ static void execute(const char *line) {
         cmd_qrand();
     } else if (is_cmd(line, "qseed")) {
         cmd_qseed();
+    } else if ((a = arg_of(line, "ghost")) != 0) {
+        cmd_ghost_arg(a);
     } else if (is_cmd(line, "ghost")) {
         cmd_ghost();
     } else if (is_cmd(line, "clear")) {

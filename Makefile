@@ -437,7 +437,7 @@ ci-smoke: kernel
 	@echo ""
 	@echo "[1/3] Build verified: $(BUILD_DIR)/kernel.elf exists"
 	@test -f $(BUILD_DIR)/kernel.elf || (echo "ERROR: Kernel not built" && exit 1)
-	@echo "[2/3] Running QEMU boot test (26 second timeout, shell session piped into the console)..."
+	@echo "[2/3] Running QEMU boot test (34 second timeout, shell session piped into the console)..."
 	@# The SECOND `ghost` (after the run legs) gates qsh's first-match send_msg
 	@# invariant (epic #175): qsh must still hold EXACTLY ONE IPC WRITE cap
 	@# (->ghostd) after spawning children — a blanket spawn-channel mint (or any
@@ -451,8 +451,14 @@ ci-smoke: kernel
 	@# processed `exit` (bytes landing in the death->rebirth gap wait in the
 	@# kernel RX ring for the reborn reader). Gated on the post-reborn log slice
 	@# below.
-	@( printf 'help\nps\nfree\nuptime\ndate\nghost\nqrand\nls\ncat /docs/hello.txt\nrun /bin/hello\nrun /bin/args alpha quantumos\nrun /bin/libqtest\nrun /bin/consciousnessd\nrun /bin/qtop\nrun /bin/life\nghost\nimprint the cat sat on the mat\nimprint pure quantum wave dynamics\nimprint hello little world\nrecall the cxt sxt on thx mxt\nfieldtest\nwrite /data/note ramfs-works\nls /data\nrm /data/note\nsync\nexit\n'; sleep 15; printf 'ghost\n'; sleep 10 ) | \
-		timeout 26s qemu-system-x86_64 -kernel $(BUILD_DIR)/kernel.elf32 \
+	@# Then `ghost exit` + a FOURTH `ghost` (ADR-0023 Part-1 integration leg):
+	@# restart the TARGET (ghostd) under the LIVING reborn shell — the direction
+	@# a qsh exit never exercises. Without the dead-target unlink the shell's
+	@# stale lower-slot ghostd cap wins first-match and routes to the dead pid;
+	@# only unlink (Part 1) + the Pass-2 re-mint (Part 2) make the last answer
+	@# appear. Gated on the post-'GHOSTD: FIELD REBORN' slice below.
+	@( printf 'help\nps\nfree\nuptime\ndate\nghost\nqrand\nls\ncat /docs/hello.txt\nrun /bin/hello\nrun /bin/args alpha quantumos\nrun /bin/libqtest\nrun /bin/consciousnessd\nrun /bin/qtop\nrun /bin/life\nghost\nimprint the cat sat on the mat\nimprint pure quantum wave dynamics\nimprint hello little world\nrecall the cxt sxt on thx mxt\nfieldtest\nwrite /data/note ramfs-works\nls /data\nrm /data/note\nsync\nexit\n'; sleep 15; printf 'ghost\n'; sleep 4; printf 'ghost exit\n'; sleep 7; printf 'ghost\n'; sleep 6 ) | \
+		timeout 34s qemu-system-x86_64 -kernel $(BUILD_DIR)/kernel.elf32 \
 		-append agentdemo \
 		-serial stdio -m 128M -display none -no-reboot 2>&1 | tee /tmp/qemu-boot.log || true
 	@echo ""
@@ -1253,6 +1259,34 @@ ci-smoke: kernel
 		echo ""; echo "=== Smoke Test FAILED ==="; exit 1; \
 	fi
 	@echo "SUCCESS: reborn shell re-acquired its ghostd IPC pair (declarative re-mint, ADR-0023)"
+	@# Part-1 INTEGRATION gate (ADR-0023): `ghost exit` restarted ghostd under
+	@# the LIVING shell. The shell held a live qsh->ghostd cap across ghostd's
+	@# death; without the dead-target unlink that stale cap sits at a LOWER
+	@# first-fit slot than the Pass-2 re-mint and wins untargeted send_msg's
+	@# first-match, routing to the dead pid — no answer. Only unlink + re-mint
+	@# together produce a 'ghost R=' AFTER the 'GHOSTD: FIELD REBORN' banner.
+	@# (The self-test gates Part 1's MECHANISM; this leg gates its NECESSITY
+	@# in the live routing path.) Anchored the same way as the reborn-shell
+	@# gate: single UART, strictly ordered, the slice cannot see earlier
+	@# answers. Inherently non-vacuous: if `ghost exit` were dropped, the
+	@# banner never prints and the slice is empty.
+	@if ! grep -q "GHOSTD: exiting" /tmp/qemu-boot.log 2>/dev/null; then \
+		echo "ERROR: 'ghost exit' never reached ghostd (GHOSTD: exiting missing)"; \
+		echo "Boot log tail:"; tail -40 /tmp/qemu-boot.log 2>/dev/null || true; \
+		echo ""; echo "=== Smoke Test FAILED ==="; exit 1; \
+	fi
+	@if ! grep -q "GHOSTD: FIELD REBORN" /tmp/qemu-boot.log 2>/dev/null; then \
+		echo "ERROR: watchdog did not rebirth ghostd after 'ghost exit' (GHOSTD: FIELD REBORN missing)"; \
+		echo "Boot log tail:"; tail -40 /tmp/qemu-boot.log 2>/dev/null || true; \
+		echo ""; echo "=== Smoke Test FAILED ==="; exit 1; \
+	fi
+	@if ! awk '/GHOSTD: FIELD REBORN/{f=1} f' /tmp/qemu-boot.log 2>/dev/null | grep -q "qsh: ghost R="; then \
+		echo "ERROR: living shell got no answer from REBORN ghostd — stale-cap unlink or re-mint broken (ADR-0023 Part 1)"; \
+		echo "Post-FIELD-REBORN slice:"; \
+		awk '/GHOSTD: FIELD REBORN/{f=1} f' /tmp/qemu-boot.log 2>/dev/null || true; \
+		echo ""; echo "=== Smoke Test FAILED ==="; exit 1; \
+	fi
+	@echo "SUCCESS: living shell survived a ghostd rebirth (dead-target unlink + re-mint, ADR-0023 Part 1)"
 	@# epic #73: the default boot attaches no rtl8139, so the NIC driver must
 	@# report its honest absence and MUST NOT claim a NIC came up.
 	@if ! grep -q "NET: no rtl8139" /tmp/qemu-boot.log 2>/dev/null; then \

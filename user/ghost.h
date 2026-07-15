@@ -37,6 +37,13 @@
 #define GHOST_STATUS 3   /* report R, live count, lambda */
 #define GHOST_SNAPSHOT 4 /* reply carries this node's 256 phase bytes + R_x (epic #97) */
 #define GHOST_COUPLE 5   /* request carries the PEER's 256 phase bytes to fold in (epic #97) */
+#define GHOST_EXIT 6     /* terminate ghostd; the watchdog rebirths it (ADR-0023). Exit-is-a-
+                          * feature, mirroring qsh: any holder of a ghostd IPC send-cap may ask
+                          * (the same trust domain that can already flood every other op), no
+                          * reply is sent, and abuse is bounded by ghostd's max_restarts budget.
+                          * Exists so the operator (and the ci-smoke Part-1 integration leg) can
+                          * restart the TARGET under a LIVING sender — the one direction a qsh
+                          * `exit` rebirth never exercises. */
 
 /* Wide phase message (epic #97): 256 oscillators as one byte each — the
  * TOP byte of each phase "turn", so a difference is exact modular u8

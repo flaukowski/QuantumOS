@@ -164,8 +164,10 @@ first match.
   integration necessity (qsh's death REAPs its own outbound cap regardless of
   Part 1; the stale-first-match hazard only manifests when the TARGET restarts
   under a living sender). Part 1's mechanism is gated by the inverted
-  capability self-test; a ghostd-restart-under-living-qsh CI leg is the future
-  increment that would gate the integration.
+  capability self-test; the ghostd-restart-under-living-qsh leg (SHIPPED as
+  the follow-up increment: `GHOST_EXIT` + `ghost exit` + the
+  post-`GHOSTD: FIELD REBORN` slice gate) gates the integration — the living
+  shell's answer after ghostd's rebirth requires the unlink AND the re-mint.
 
 ## Evidence
 
