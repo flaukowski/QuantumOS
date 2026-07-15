@@ -118,7 +118,7 @@ OBJECTS = $(KERNEL_SOURCES:$(KERNEL_DIR)/src/%.c=$(BUILD_DIR)/%.o) \
 -include $(OBJECTS:.o=.d)
 
 # Targets
-.PHONY: all clean kernel run debug dump test test-list test-coverage ci-smoke ci-smoke-mem256 ci-smoke-mem512 ci-smoke-sched ci-smoke-disk ci-smoke-disk-upgrade ci-smoke-net ci-smoke-http ci-smoke-httpd ci-smoke-quiet ci-smoke-resonant ci-smoke-qseed ci-smoke-swarm ci-smoke-mcp ci-smoke-mcp-gate ci-smoke-qsubmit ci-smoke-society ci-smoke-society-gate ci-smoke-society-agents ci-smoke-society-agents-gate ci-smoke-society3 ci-smoke-society3-gate ci-smoke-society4 ci-smoke-society4-gate ci-smoke-society-agents-n ci-smoke-society-agents-n-gate ci-smoke-iso ci-smoke-kbd ci-smoke-noserial ci-smoke-screen swarm-pingpong
+.PHONY: all clean kernel run debug dump test test-list test-coverage ci-smoke ci-smoke-mem256 ci-smoke-mem512 ci-smoke-sched ci-smoke-disk ci-smoke-disk-upgrade ci-smoke-net ci-smoke-http ci-smoke-httpd ci-smoke-quiet ci-smoke-resonant ci-smoke-qseed ci-smoke-swarm ci-smoke-mcp ci-smoke-mcp-gate ci-smoke-qsubmit ci-smoke-society ci-smoke-society-gate ci-smoke-society-agents ci-smoke-society-agents-gate ci-smoke-society3 ci-smoke-society3-gate ci-smoke-society4 ci-smoke-society4-gate ci-smoke-society-agents-n ci-smoke-society-agents-n-gate ci-smoke-iso ci-smoke-kbd ci-smoke-noserial ci-smoke-screen swarm-pingpong qos-claude qos-claude-list
 
 all: kernel
 
@@ -2180,6 +2180,25 @@ ci-smoke-swarm: kernel
 
 # Local two-way exercise: COM2 as a TCP server; drive PING/PONG + a DATA request
 # routed to ghostd over capability-checked IPC. Not part of CI (needs a client).
+# Claude ↔ QuantumOS (scripts/qos_claude_agent.py): a bring-your-own-key Claude
+# agent that drives a live VM through the FROZEN MCP tool surface (ADR-0020) —
+# Claude is the external consumer that freeze was built for, reusing
+# scripts/qos_mcp.py verbatim (no tool duplication). Needs the guest built
+# (kernel prereq) and Anthropic credentials (ANTHROPIC_API_KEY or `ant auth
+# login`). Pass a free-form prompt with TASK=..., or a curated preset with
+# EXPERIMENT={recall,society,quantum,explore}; deps: pip install -r
+# requirements-claude-agent.txt
+qos-claude: kernel
+	@echo "=== Claude drives QuantumOS (BYO key) ==="
+	QOS_KERNEL=$(BUILD_DIR)/kernel.elf32 python3 scripts/qos_claude_agent.py \
+		$(if $(TASK),"$(TASK)",--experiment $(if $(EXPERIMENT),$(EXPERIMENT),recall))
+
+# Prove the Claude→MCP→qos_bridge handshake end to end with NO API call and no
+# key: spawn the MCP server, list its tools, exit. A fast sanity check that the
+# agent's plumbing is intact.
+qos-claude-list:
+	@python3 scripts/qos_claude_agent.py --list-tools
+
 swarm-pingpong: kernel
 	@echo "=== QuantumOS swarm bridge two-way (PING/PONG + DATA->ghostd) ==="
 	@(timeout 18s qemu-system-x86_64 -kernel $(BUILD_DIR)/kernel.elf32 \
