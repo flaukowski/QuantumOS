@@ -338,8 +338,8 @@ static long find_fieldsyncd_pid(void) {
     long pn = sysinfo(SYSINFO_PS, ps, sizeof(ps) - 1);
     ps[(pn > 0) ? pn : 0] = '\0';
     for (long o = 0; ps[o]; o++) {
-        if ((o == 0 || ps[o - 1] == '\n') && ps[o] == 'P' && ps[o + 1] == 'S' &&
-            ps[o + 2] == ':' && ps[o + 3] == ' ') {
+        if ((o == 0 || ps[o - 1] == '\n') && ps[o] == 'P' && ps[o + 1] == 'S' && ps[o + 2] == ':' &&
+            ps[o + 3] == ' ') {
             long p = 0, k = o + 4;
             while (ps[k] >= '0' && ps[k] <= '9') {
                 p = p * 10 + (ps[k] - '0');
