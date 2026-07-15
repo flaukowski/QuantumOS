@@ -55,6 +55,11 @@ LIVENESS_MIN_RUNNABLE = 12    # settled runnable count (observed ~20 at rest)
 # raises P; q=2 -> ~500 still passes), only on pathological churn.
 PREEMPT_PER_1000T_FLOOR = 100.0
 PREEMPT_PER_1000T_CEIL = 600.0
+# Max reschedule-gap ceiling in guest ticks, asserted in LOAD mode only (the
+# starvation referee for the ADR-0022 I/O boost; idle-mode gaps are dominated
+# by one-shot citizens finishing, so LOAD is where a monopoly would show).
+# Baseline ~100-110 ticks; K=2 boost-cap bound ~220; 600 = ~3x margin.
+MAXGAP_TICKS_CEIL = 600
 
 # State-gated warmup by GUEST TICKS: the transient boot self-tests (echo, watched-svc,
 # quota-test, delegation-test, cpu-hog, qpu-test) run and exit inside the first few
@@ -114,10 +119,20 @@ def main():
     wall_deadline = time.time() + 90.0  # absolute safety bound on wall time
     while (last["ticks"] - s0["ticks"]) < WINDOW_TICKS and time.time() < wall_deadline:
         if LOAD:
+            # Fixed 0.5s cadence (ADR-0022 I/O boost): un-paced back-to-back
+            # pings would make the load profile a function of the reply
+            # latency itself — the boost cut ping latency ~5x, which would
+            # silently multiply the load behind the same "load baseline"
+            # label and shift the calibration table the maxgap ceiling below
+            # is armed against. Pacing makes the profile boost-invariant.
+            t_ping = time.time()
             try:
                 vm.ping(deadline_s=10.0)
             except QosError:
                 pass  # a transient ping hiccup is not a scheduler fault; keep sampling
+            remain = 0.5 - (time.time() - t_ping)
+            if remain > 0:
+                time.sleep(remain)
         else:
             time.sleep(0.05)
         try:
@@ -169,6 +184,19 @@ def main():
     if p_preempt > PREEMPT_PER_1000T_CEIL:
         _fail(f"preemption rate {p_preempt:.1f}/1000t above ceiling {PREEMPT_PER_1000T_CEIL:.0f} "
               f"— pathological reschedule thrash. dpreempt={d_preempt} over dticks={d_ticks}.")
+
+    # ARMED FAIRNESS CEILING (ADR-0022 I/O boost): max reschedule-gap over the
+    # window. This is the ONLY metric that can referee the boost's starvation
+    # guard — a boost ping-pong monopoly keeps every liveness floor green
+    # (starved processes stay READY; the pair switches plenty) and can even
+    # keep the preempt band green outside the monopoly window, while max_gap
+    # grows without bound. Baseline ~100-110 ticks (~1 rotation); the K=2
+    # consecutive-boost cap bounds it at ~2-3 rotations (~220); ceiling 600 =
+    # ~3x margin. Revert-confirm: removing the SCHED_BOOST_MAX_CONSEC guard
+    # under LOAD drives the gap toward the whole 3000-tick window.
+    if LOAD and max_gap > MAXGAP_TICKS_CEIL:
+        _fail(f"max reschedule gap {max_gap} ticks exceeds {MAXGAP_TICKS_CEIL} — a citizen "
+              f"is being starved (I/O-boost monopoly? see ADR-0022 SCHED_BOOST_MAX_CONSEC)")
     print(f"OK: scheduler live ({d_switch} switches, {min_runnable} runnable over "
           f"{d_ticks} ticks); preemption rate {p_preempt:.1f}/1000t within "
           f"[{PREEMPT_PER_1000T_FLOOR:.0f}, {PREEMPT_PER_1000T_CEIL:.0f}].")

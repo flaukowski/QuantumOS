@@ -1,7 +1,33 @@
 # 22. COM2 Round-Trip Latency Is Scheduler-Cadence-Bound
 
 Date: 2026-07-11
-Status: Accepted (2026-07-13; the deferral decision + both prerequisites are complete — the latency fix itself remains a deliberately deferred future epic)
+Status: Accepted (2026-07-15; the latency fix SHIPPED — the I/O-priority boost, see the final update)
+
+> **Update (2026-07-15) — the deferred epic is implemented: the I/O-priority boost.**
+> The option table's principled fix shipped, hardened by a 4-lens adversarial design panel
+> (31 findings: 7 blockers, 15 majors — all folded in). Mechanism: a per-PCB `io_boost` flag;
+> set (a) at the end of every successful `ipc_send` for a READY receiver (own irq bracket —
+> ipc_send had no existing one) and (b) from `scheduler_tick` when the registered COM2 holder
+> has RX pending. `pick_next`'s DEFAULT round-robin arm prefers a boosted READY process;
+> the flag is consumed only at the dispatch COMMIT (pick_next stays pure — it is also used
+> as a bare predicate by the CPUKILL pre-check). Guards the panel forced: a sticky 0xFF
+> absent-device latch (an unbacked COM2 port reads all-ones — the boost would otherwise fire
+> every tick of every COM2-less CI boot); `SCHED_BOOST_MAX_CONSEC=2` (a boost ping-pong would
+> otherwise monopolize every yield-path reschedule AND, by resetting the quantum counter,
+> keep quantum expiry itself from firing — starving the roster invisibly to every liveness
+> floor); the COM2-holder registration is (pid, generation) + live-cap-validated at the boost
+> site and cleared in process_destroy (a bare pid would boost whatever recycles it — the
+> ADR-0023 lesson); `boost_count` counts HONORED picks at the commit (a set-side counter is
+> the switch_count vacuity trap). Gates re-armed in the same increment: ci-smoke-latency now
+> asserts PING median < 0.30 s (boost-off phase-locks to the full ~0.45 s rotation — fail-side
+> structural on any host) AND a positive honored-boost delta (binding effect to mechanism),
+> plus STATUS median < 0.6 s with a 3-of-5 success floor; ci-smoke-sched LOAD mode paces its
+> ping load at a fixed cadence (boost-invariant load profile) and arms a max_gap <= 600-tick
+> starvation ceiling — the only metric that can referee the boost's fairness guard.
+> Revert-confirm: `SCHED_IO_BOOST 0` reddens both latency assertions while ci-smoke-sched
+> stays green (the preempt band is structurally boost-invariant: the expiry increment precedes
+> the pick). The boost carries no authority (caps still gate every action) and no audit event
+> (it would flood the 256-entry ring); its instrument is the counter.
 
 > **Update (2026-07-11).** Prerequisite 1 below — a bounded latency assertion — **shipped** as
 > `ci-smoke-latency` (`scripts/test_qos_latency.py`, via the new `QosVM.ping()` one-hop primitive).

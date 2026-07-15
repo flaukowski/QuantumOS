@@ -584,6 +584,11 @@ static uint64_t sys_sysinfo(uint32_t pid, uint64_t op, uint64_t user_ptr, uint64
         o = fmt_dec(tmp, o, sizeof(tmp), spread);
         o = fmt_str(tmp, o, sizeof(tmp), " runnable=");
         o = fmt_dec(tmp, o, sizeof(tmp), runnable);
+        /* boost= APPENDED LAST (ADR-0022 I/O boost): honored-boost picks.
+         * Trailing so every existing prefix-matched parser keeps working;
+         * the latency gate asserts a positive delta across its ping batch. */
+        o = fmt_str(tmp, o, sizeof(tmp), " boost=");
+        o = fmt_dec(tmp, o, sizeof(tmp), scheduler_get_boosts());
         o = fmt_str(tmp, o, sizeof(tmp), "\r\n");
         produced = o;
     } else {

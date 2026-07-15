@@ -16,6 +16,7 @@
 #include <kernel/capability.h>
 #include <kernel/manifest.h>
 #include <kernel/interrupts.h> /* timer_get_ticks() for the ADR-0022 sched timing seam */
+#include <kernel/scheduler.h>  /* scheduler_com2_holder_clear (ADR-0022 RX boost) */
 #include <kernel/qpu.h>
 #include <kernel/quantum.h>
 #include <kernel/gdt.h>
@@ -477,6 +478,12 @@ status_t process_destroy(uint32_t pid) {
     cap_revoke_ipc_targets(pid);
     process->capability_root = CAP_ID_INVALID;
     process->capability_count = 0;
+
+    /* Drop the ADR-0022 COM2-RX boost registration if this pid held it —
+     * same pid-reuse funnel argument as the unlink above: a recycled pid
+     * must never inherit the holder's scheduling boost. (No-op for every
+     * process but the COM2 holder; start_slot re-registers on rebirth.) */
+    scheduler_com2_holder_clear(pid);
 
     /* Clear the intent manifest with the caps (epic #135). INVARIANT: this
      * must run before state=UNUSED below — every pid-reuse path funnels

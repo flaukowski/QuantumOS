@@ -20,6 +20,27 @@
 /* Scheduling quantum in timer ticks (ticks are 10 ms at TIMER_DEFAULT_HZ) */
 #define SCHED_QUANTUM_TICKS 5
 
+/* ADR-0022 I/O-priority boost (the deferred latency epic). When 1, a process
+ * whose awaited I/O just arrived — an IPC message delivered to its mailbox,
+ * or a COM2 RX byte for the registered COM2 holder — is flagged io_boost and
+ * picked out of turn at the next reschedule (default round-robin arm only),
+ * collapsing a COM2 hop from ~one full rotation (~450 ms at rest) to
+ * tick-detect (<=10 ms) + one quantum remainder (<=50 ms). 0 restores the
+ * exact pre-epic pick behavior — the latency gate's revert-confirm flag. */
+#define SCHED_IO_BOOST 1
+
+/* Max CONSECUTIVE boosted picks before one plain round-robin pick is forced
+ * (the starvation guard). Two IPC-chatty peers ping-ponging sends would
+ * otherwise monopolize every yield-path reschedule AND — because each yield
+ * resets the global quantum counter — keep quantum expiry (and preempt_count,
+ * and the watchdog's turn) from ever firing. K=2 guarantees >=1 plain pick
+ * per 3, so a rotation of N runnable completes within ~3N picks and max_gap
+ * stays within a small multiple of today's envelope (refereed by the armed
+ * maxgap ceiling in ci-smoke-sched); a 1-boost PING hop rides through
+ * untouched and STATUS hops absorb at most a couple of plain slices, well
+ * inside the armed 0.6 s bound. */
+#define SCHED_BOOST_MAX_CONSEC 2
+
 /* Attach the scheduler to the timer tick. Call after process_init(). */
 status_t scheduler_init(void);
 
@@ -35,6 +56,29 @@ uint64_t scheduler_get_switches(void);
  * quantum expiry, excluding voluntary SYS_YIELD. This is the quantum-sensitive,
  * host-invariant quantity a scheduler baseline is built on (see scheduler.c). */
 uint64_t scheduler_get_preempts(void);
+
+/* HONORED I/O boosts (ADR-0022): counted only when a boosted pick is actually
+ * COMMITTED to the interrupt frame — never on flag-sets — so the counter is
+ * non-vacuous by construction (the switch_count lesson: a set-side counter
+ * reads nonzero while the pick path is dead). The latency gate asserts a
+ * positive delta across its ping batch to bind the measured latency win to
+ * the boost mechanism rather than an unrelated cadence change. */
+uint64_t scheduler_get_boosts(void);
+
+/* Flag `pid` for one out-of-turn pick iff it is currently READY (ADR-0022).
+ * Called by ipc_send after a successful enqueue (inside the caller's irq
+ * bracket) and by the COM2 RX check in scheduler_tick. Advisory only: worst
+ * case is one extra or one missed boost; never corrupts scheduling state. */
+void scheduler_boost_if_ready(uint32_t pid);
+
+/* Register/clear the COM2-holder for the RX boost, as a (pid, generation)
+ * pair — a bare pid would re-attach to whatever recycles it (the ADR-0023
+ * lesson). Set at every start_slot grant_com2 mint (overwrite semantics, so
+ * a watchdog rebirth re-registers structurally); cleared in process_destroy.
+ * The boost site additionally validates the live COM2 device cap, keeping
+ * the capability table the single source of truth for the authority. */
+void scheduler_com2_holder_set(uint32_t pid, uint32_t generation);
+void scheduler_com2_holder_clear(uint32_t pid);
 
 /* ADR-0022 prereq-2 fairness/tail snapshot over the runnable ring-3 citizens.
  * Writes max reschedule gap (max now - last_scheduled), the run-count spread

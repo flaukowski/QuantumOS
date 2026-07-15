@@ -13,6 +13,7 @@
 #include <kernel/boot.h>
 #include <kernel/memory.h>
 #include <kernel/process.h>
+#include <kernel/scheduler.h> /* scheduler_boost_if_ready (ADR-0022 I/O boost) */
 
 /* ============================================================================
  * Internal Constants
@@ -434,6 +435,20 @@ ipc_result_t ipc_send(uint32_t receiver_id, const ipc_message_t *msg, uint64_t t
 
     if (result == IPC_SUCCESS) {
         ipc_global_stats.total_sent++;
+        /* I/O-priority boost (ADR-0022): the receiver's awaited message just
+         * landed — flag it for one out-of-turn pick so the hop costs a
+         * reschedule, not a full round-robin rotation (~450 ms at rest).
+         * Only on SUCCESS (a dropped/full-queue send must not boost), only
+         * if READY (checked inside), and in its OWN irq bracket: ipc_send is
+         * otherwise unbracketed and today's callers are all cli'd syscalls,
+         * but IF=1 kernel-thread senders are documented-plausible (the
+         * health monitor / net thread pattern) and an unbracketed
+         * check-then-set racing the timer IRQ could stamp the flag on a PCB
+         * the CPUKILL latch just terminated. Advisory flag: worst case is
+         * one extra or one missed boost, never corrupted scheduling state. */
+        uint64_t bflags = ipc_irq_save();
+        scheduler_boost_if_ready(receiver_id);
+        ipc_irq_restore(bflags);
     }
 
     return result;

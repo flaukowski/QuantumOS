@@ -103,3 +103,25 @@ uint32_t com2_read(uint8_t *buf, uint32_t len) {
     }
     return n;
 }
+
+/* Sticky: set once LSR reads 0xFF — the unbacked-port signature (all error
+ * bits + TEMT + THRE + DR simultaneously, impossible on real silicon). QEMU
+ * boots with a single -serial (nearly every functional CI gate, and the
+ * qBraid/laptop boots) leave 0x2F8 unassigned, and unassigned I/O reads
+ * all-ones — so without this latch the ADR-0022 RX-boost check would see
+ * DATA_READY on EVERY tick of every COM2-less boot and hand swarm-svc a
+ * permanent unearned scheduling skew. Latched once; one io_inb saved per
+ * tick thereafter. */
+static uint8_t com2_absent = 0;
+
+int com2_rx_pending(void) {
+    if (!com2_ready || com2_dead || com2_absent) {
+        return 0;
+    }
+    uint8_t lsr = io_inb(COM2_PORT_BASE + UART_LSR);
+    if (lsr == 0xFF) {
+        com2_absent = 1;
+        return 0;
+    }
+    return (lsr & LSR_DATA_READY) ? 1 : 0;
+}
