@@ -55,15 +55,44 @@ REPO = os.path.dirname(HERE)
 # Default experiment when none is given on the command line. Deliberately
 # open-ended: Claude designs the run rather than following a script (Fable-5
 # does better with a goal than a recipe).
-DEFAULT_TASK = (
-    "You are driving a live QuantumOS instance. Design and run a small "
-    "associative-memory experiment: boot a VM, imprint three distinct short "
-    "phrases into the kernel Hopfield-Kuramoto field, then recall a corrupted "
-    "probe of one of them and report whether the field relaxed to the right "
-    "basin and with what order parameter R. Draw one quantum-seeded number to "
-    "salt the run. Shut the VM down when finished, and give me a plain-language "
-    "readout of what happened and what it demonstrates about the field."
-)
+# Curated on-ramp experiments (--experiment NAME). Each is a goal, not a
+# recipe: Claude designs the actual tool sequence. "recall" is the default.
+EXPERIMENTS = {
+    "recall": (
+        "Design and run a small associative-memory experiment: boot a VM, "
+        "imprint three distinct short phrases into the kernel Hopfield-Kuramoto "
+        "field, then recall a corrupted probe of one of them and report whether "
+        "the field relaxed to the right basin and with what order parameter R. "
+        "Draw one quantum-seeded number to salt the run. Shut the VM down when "
+        "finished and give a plain-language readout of what the field did."
+    ),
+    "society": (
+        "Boot a 3-node field society, wait for the members to mean-field "
+        "synchronize, then read each node's status and the aggregates it "
+        "received from its peers. Report whether all three synchronized (and to "
+        "what R_x), and whether each node saw the OTHER two nodes' distinct "
+        "qseed-salted aggregates. Shut the society down when finished."
+    ),
+    "quantum": (
+        "Draw several quantum-seeded random numbers from the guest and submit a "
+        "small quantum circuit (e.g. a Bell pair) to the in-OS QPU broker. "
+        "Report the results and explain, honestly, what is and isn't attested "
+        "about them. Shut the VM down when finished."
+    ),
+    "explore": (
+        "You have a live QuantumOS instance. Explore it: read a machine "
+        "snapshot, inspect the holographic field read-only, look at the "
+        "capability authority ledger, and form your own small hypothesis about "
+        "how the field behaves — then run one experiment to test it. Shut down "
+        "cleanly and tell me what you found."
+    ),
+}
+DEFAULT_TASK = EXPERIMENTS["recall"]
+
+# Idempotent power-off tools called on exit so a booted VM/society is never
+# orphaned, however the run ends (the system prompt asks Claude to shut down,
+# this guarantees it even on error, Ctrl-C, or the turn cap).
+CLEANUP_TOOLS = ("qos_shutdown", "qos_society_shutdown")
 
 SYSTEM = """You are an experimentalist driving a live QuantumOS instance — a \
 capability-secured microkernel whose kernel hosts a Hopfield–Kuramoto \
@@ -151,9 +180,21 @@ async def list_tools_only():
     return 0
 
 
-async def run_agent(task, model, max_tokens, effort):
+async def _cleanup(session):
+    """Power off anything the agent may have booted. Best-effort and idempotent:
+    both tools no-op when nothing is running, so calling both is always safe."""
+    for name in CLEANUP_TOOLS:
+        try:
+            await session.call_tool(name, {})
+        except Exception:  # noqa: BLE001 — cleanup must never mask the real outcome
+            pass
+
+
+async def run_agent(task, model, max_tokens, effort, max_turns):
     """Drive QuantumOS with Claude: spawn the MCP server, convert its tools,
-    and run the tool-runner loop, streaming the trace to stdout."""
+    and run the tool-runner loop, streaming the trace to stdout. Guarantees the
+    guest is powered off on exit and caps the number of turns so a runaway loop
+    cannot silently burn the user's key."""
     try:
         from anthropic import AsyncAnthropic
         from anthropic.lib.tools.mcp import async_mcp_tool
@@ -208,17 +249,33 @@ async def run_agent(task, model, max_tokens, effort):
 
             # Each yielded message is one assistant turn (before its tools run).
             # The MCP tools execute long VM operations; the runner awaits them.
-            async for message in runner:
-                for block in message.content:
-                    if block.type == "text" and block.text.strip():
-                        print(block.text, flush=True)
-                    elif block.type == "thinking" and getattr(block, "thinking", ""):
-                        print(f"[thinking] {block.thinking}", flush=True)
-                    elif block.type == "tool_use":
-                        print(f"[tool] {block.name}({_fmt_input(block.input)})", flush=True)
-                if message.stop_reason == "refusal":
-                    print("\n[Claude declined this request.]", file=sys.stderr)
-                    break
+            # cleanup runs in finally so a booted guest is never orphaned — on
+            # normal completion, on the turn cap, on a refusal, or on Ctrl-C.
+            try:
+                turns = 0
+                async for message in runner:
+                    turns += 1
+                    for block in message.content:
+                        if block.type == "text" and block.text.strip():
+                            print(block.text, flush=True)
+                        elif block.type == "thinking" and getattr(block, "thinking", ""):
+                            print(f"[thinking] {block.thinking}", flush=True)
+                        elif block.type == "tool_use":
+                            print(f"[tool] {block.name}({_fmt_input(block.input)})", flush=True)
+                    if message.stop_reason == "refusal":
+                        print("\n[Claude declined this request.]", file=sys.stderr)
+                        break
+                    if turns >= max_turns:
+                        print(
+                            f"\n[Reached the {max_turns}-turn cap — stopping so a "
+                            "runaway loop can't keep spending. Raise --max-turns "
+                            "to allow more.]",
+                            file=sys.stderr,
+                        )
+                        break
+            finally:
+                print("\n[shutting down any VM the agent booted…]", file=sys.stderr)
+                await _cleanup(session)
     return 0
 
 
@@ -233,19 +290,24 @@ def main():
     p = argparse.ArgumentParser(
         description="Drive a live QuantumOS VM with Claude over its frozen MCP tools (BYO key)."
     )
-    p.add_argument("task", nargs="?", default=DEFAULT_TASK,
-                   help="the experiment for Claude to run (default: an associative-memory demo)")
+    p.add_argument("task", nargs="?", default=None,
+                   help="a free-form experiment for Claude to run (overrides --experiment)")
+    p.add_argument("--experiment", choices=sorted(EXPERIMENTS), default="recall",
+                   help="a curated experiment when no free-form task is given (default: recall)")
     p.add_argument("--model", default=os.environ.get("QOS_CLAUDE_MODEL", "claude-opus-4-8"),
                    help="Anthropic model id (default claude-opus-4-8; try claude-fable-5 for the hardest reasoning)")
     p.add_argument("--max-tokens", type=int, default=16000)
     p.add_argument("--effort", default="high", choices=["low", "medium", "high", "xhigh", "max"])
+    p.add_argument("--max-turns", type=int, default=40,
+                   help="hard cap on agent turns so a runaway loop can't burn your key (default 40)")
     p.add_argument("--list-tools", action="store_true",
                    help="list the QuantumOS MCP tools and exit (no API call, no key needed)")
     args = p.parse_args()
 
     if args.list_tools:
         return asyncio.run(list_tools_only())
-    return asyncio.run(run_agent(args.task, args.model, args.max_tokens, args.effort))
+    task = args.task if args.task is not None else EXPERIMENTS[args.experiment]
+    return asyncio.run(run_agent(task, args.model, args.max_tokens, args.effort, args.max_turns))
 
 
 if __name__ == "__main__":

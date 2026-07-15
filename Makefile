@@ -2185,11 +2185,13 @@ ci-smoke-swarm: kernel
 # Claude is the external consumer that freeze was built for, reusing
 # scripts/qos_mcp.py verbatim (no tool duplication). Needs the guest built
 # (kernel prereq) and Anthropic credentials (ANTHROPIC_API_KEY or `ant auth
-# login`). Pass a prompt with TASK=... ; deps: pip install -r
+# login`). Pass a free-form prompt with TASK=..., or a curated preset with
+# EXPERIMENT={recall,society,quantum,explore}; deps: pip install -r
 # requirements-claude-agent.txt
 qos-claude: kernel
 	@echo "=== Claude drives QuantumOS (BYO key) ==="
-	QOS_KERNEL=$(BUILD_DIR)/kernel.elf32 python3 scripts/qos_claude_agent.py $(if $(TASK),"$(TASK)",)
+	QOS_KERNEL=$(BUILD_DIR)/kernel.elf32 python3 scripts/qos_claude_agent.py \
+		$(if $(TASK),"$(TASK)",--experiment $(if $(EXPERIMENT),$(EXPERIMENT),recall))
 
 # Prove the Claude→MCP→qos_bridge handshake end to end with NO API call and no
 # key: spawn the MCP server, list its tools, exit. A fast sanity check that the
