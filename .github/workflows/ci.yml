@@ -786,6 +786,48 @@ jobs:
     - name: COM2 latency — one-hop round-trip bounded + baseline recorded (ADR-0022)
       run: make ci-smoke-latency
 
+  society-n:
+    name: N-way authenticated society (epic #139 + ADR-0019)
+    runs-on: ubuntu-latest
+    needs: [build]
+    # Three kernels mean-field-couple on a shared mcast L2 AND the host-admitted
+    # group session key gates the field wire for N>2. Runs the single-sourced
+    # `make ci-smoke-keyauth-n-gate` against the DOWNLOADED kernel artifact (the
+    # no-kernel-prereq gate pattern — the gate target has no `kernel` dep, so it
+    # does not rebuild). The gate does NOT assert on R_x/SYNCHRONIZED (a keyless
+    # node one-way-locks to the keyed pair and prints SYNCHRONIZED — vacuous); it
+    # asserts frame-ADMISSION signals offset-anchored at each member's FSKEY, plus
+    # a REAL host mcast capture-replay. FAILS LOUD if host multicast is
+    # unavailable to a joiner (never a silent green — a skipped coupling gate
+    # proves nothing). 2:1 TCG oversubscription on the runner dilates wall-clock,
+    # so the timeout is budgeted in host-seconds (KEYAUTH_N_GATE_TIMEOUT).
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Install dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y build-essential qemu-system-x86 nasm python3
+
+    - name: Download build artifacts
+      uses: actions/download-artifact@v4
+      with:
+        name: quantumos-build-x86_64-debug
+        path: build-artifacts/
+
+    - name: Prepare build directory
+      run: |
+        mkdir -p build/x86_64
+        cp -r build-artifacts/* build/ 2>/dev/null || cp -r build-artifacts/* build/x86_64/ 2>/dev/null || true
+        find build/ -name "*.elf" -exec ls -la {} \;
+
+    - name: N-way authenticated swarm plane — group key gates the field wire (epic #139)
+      run: |
+        KERNEL_ELF=$(find build/ -name "kernel.elf32" | head -1)
+        echo "Using kernel: $KERNEL_ELF"
+        QOS_KERNEL="$KERNEL_ELF" make ci-smoke-keyauth-n-gate
+
   integration:
     name: Integration Tests
     runs-on: ubuntu-latest

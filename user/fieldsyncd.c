@@ -87,9 +87,15 @@ static uint32_t tx_seq;
 /* ADR-0019 replay watermark: the highest FSYN seq accepted from each peer.
  * Per-peer so one peer's stream can't advance another's; reset on a (re)key. */
 static uint32_t peer_last_seq[GHOST_MAX_PEERS];
-/* Saturating count of frames rejected for a bad MAC or a stale seq — one
- * console line at the first reject; the counter never wraps or spams. */
+/* Saturating count of frames rejected for a bad MAC or a stale seq — the
+ * counter never wraps or spams. The console line is emitted once PER REASON
+ * (not once per boot): a keyed member excluding a keyless peer prints the
+ * bad-MAC line, and a distinct replayed frame later must still surface its
+ * OWN 'replay' line — a single shared flag would swallow it (the observability
+ * hole increment 0 closes). Two independent latches, one per reject reason. */
 static uint32_t rejects;
+static int reject_badmac_logged;
+static int reject_replay_logged;
 
 /* Capture a "K"+32-byte key handoff from swarm_svc. Dual-sited like
  * note_aggregate — the key can race a snapshot reply. `got` is recv_msg's
@@ -108,8 +114,15 @@ static void note_key(const char *buf, long got) {
         for (int i = 0; i < GHOST_MAX_PEERS; i++) {
             peer_last_seq[i] = 0;
         }
+        /* First install and RE-install both emit a console line: the first so
+         * the host can anchor its exclusion checks at the keying boundary, the
+         * rekey so a 2nd admit (which reset every replay watermark just above)
+         * is observable rather than silent — the increment-0 observability
+         * split the replay-injection gate anchors on. */
         if (!have_key) {
             write_str("FSKEY: swarm-plane session key installed");
+        } else {
+            write_str("FSKEY: rekeyed (replay watermarks reset)");
         }
         have_key = 1;
     }
@@ -122,12 +135,15 @@ static void note_key(const char *buf, long got) {
 static uint32_t peer_ip[GHOST_MAX_PEERS];
 static int peer_count;
 
-/* Record a rejected frame: log the reason ONCE (the first reject), then bump a
- * saturating counter — never a per-frame print (a flood must not spam) and
- * never a kernel-ledger write (ring 3 cannot forge the authority ledger). */
-static void note_reject(const char *why) {
-    if (rejects == 0) {
+/* Record a rejected frame: log the reason ONCE PER REASON via the caller's own
+ * latch (so a bad-MAC exclusion and a later replay each get their own console
+ * line), then bump a saturating counter — never a per-frame print (a flood must
+ * not spam) and never a kernel-ledger write (ring 3 cannot forge the authority
+ * ledger). */
+static void note_reject(const char *why, int *logged) {
+    if (!*logged) {
         write_str(why);
+        *logged = 1;
     }
     if (rejects != 0xffffffffu) {
         rejects++;
@@ -302,6 +318,13 @@ void _start(void) {
             if (pidx < 0) {
                 continue;
             }
+            /* Accept `n >= sizeof` (NOT exact `== 296`): a datagram carrying at
+             * least a full frame is valid; the MAC covers exactly FSYN_MAC_COVERED
+             * leading bytes and the tag is read at its fixed offset, so trailing
+             * bytes can neither move the tag nor forge the MAC. `>=` is the
+             * intentional resolution of the ADR-0019 doc/code drift (the ADR text
+             * said `== 296`); it tolerates a padded transport without weakening
+             * auth. Runts (n < sizeof) fall through to the drop below. */
             if (magic == FSYN_MAGIC && n >= (long)sizeof(fsyn_frame_t)) {
                 const fsyn_frame_t *f = (const fsyn_frame_t *)rbuf;
                 /* ADR-0019: once keyed, a frame must carry a valid HMAC over
@@ -314,11 +337,13 @@ void _start(void) {
                     uint8_t want[32];
                     hmac_sha256(session_key, 32, rbuf, FSYN_MAC_COVERED, want);
                     if (!hmac_sha256_equal(want, f->tag)) {
-                        note_reject("FSAUTH: forged FSYN frame rejected (bad MAC)");
+                        note_reject("FSAUTH: forged FSYN frame rejected (bad MAC)",
+                                    &reject_badmac_logged);
                         continue;
                     }
                     if (f->seq <= peer_last_seq[pidx]) {
-                        note_reject("FSAUTH: stale FSYN frame rejected (replay)");
+                        note_reject("FSAUTH: stale FSYN frame rejected (replay)",
+                                    &reject_replay_logged);
                         continue;
                     }
                     peer_last_seq[pidx] = f->seq;

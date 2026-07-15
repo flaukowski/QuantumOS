@@ -32,6 +32,7 @@ import hmac
 import json
 import os
 import platform
+import random
 import re
 import signal
 import socket
@@ -1589,6 +1590,8 @@ class QosSociety:
         self.a = None
         self.b = None
         self.members = []  # N-way society (epic #139); empty for the 2-VM path
+        self._mcast_group = None  # set by boot_n; the replay-injection gate reads it
+        self._mcast_port = None
         self._lock = threading.RLock()
 
     def is_running(self):
@@ -1657,8 +1660,12 @@ class QosSociety:
             time.sleep(0.2)
         raise QosTimeout(f"society: {what} not observed on both nodes")
 
-    def _node_status(self, vm):
-        text = vm._log_text()
+    def _node_status(self, vm, since=0):
+        # `since` anchors R_x / SYNCHRONIZED at a log OFFSET (a member's FSKEY
+        # position), so a multi-phase gate reads only evidence produced AFTER the
+        # phase boundary — the whole-log grep is sticky and would report a stale
+        # pre-key SYNCHRONIZED forever (the panel's central observability finding).
+        text = vm._log_text(since)
         rxs = self._R_X.findall(text)
         return {"identity": vm.identity(),
                 "verified": vm.attestation.verified if vm.attestation else False,
@@ -1723,7 +1730,17 @@ class QosSociety:
                 mport = s.getsockname()[1]
             finally:
                 s.close()
-            netdev = f"socket,id=n0,mcast={self._MCAST_GROUP}:{mport}"
+            # Randomize the mcast GROUP per boot, not just the port: concurrent
+            # local runs on the identical static _NET IPs sharing one fixed
+            # 230.0.0.9 group would cross-couple (the guests never see the group
+            # address, so distinct ports alone don't isolate the L2). A random
+            # 230.x.y.z admin-scope group makes each society's shared L2 disjoint.
+            mgroup = "230.%d.%d.%d" % (random.randint(1, 254),
+                                       random.randint(0, 255),
+                                       random.randint(1, 254))
+            self._mcast_group = mgroup   # exposed for the replay-injection gate
+            self._mcast_port = mport
+            netdev = f"socket,id=n0,mcast={mgroup}:{mport}"
             # Create + register ALL members BEFORE booting any, so a boot failure
             # on member k still reaps every already-forked QEMU (no orphan leak).
             self.members = [QosVM(kernel=self.kernel) for _ in range(n)]
@@ -1737,8 +1754,12 @@ class QosSociety:
                         append_extra=f"ip={self._NET[i]} peer={peers}", netdev=netdev)
                 # mcast reachability precheck (FAIL LOUD — never a silent green):
                 # every node must receive a frame from EACH of its N-1 peers (the
-                # full mesh), or the shared L2 is not delivering.
-                self._await_all_frames(time.time() + 20)
+                # full mesh), or the shared L2 is not delivering. Scale the
+                # deadline with N — an N-body full mesh needs more boots to settle
+                # than a 3-body one, so a fixed 20s would flake load, not detect
+                # absent multicast. Absent multicast still fails in <20s (no frame
+                # from ANY peer arrives), distinguished by the missing-IP list.
+                self._await_all_frames(time.time() + 10 + 5 * n)
             except QosTimeout as exc:
                 self.shutdown()
                 raise QosTimeout(f"N-way coupling mesh not established — is host "
@@ -1756,29 +1777,38 @@ class QosSociety:
         """Each member must log 'FIELDSYNC: frame from <ip>' for ALL of its peer
         IPs (the full N-cycle, per-IP — not a generic match that a 2-of-N
         masquerade could satisfy)."""
+        missing = None
         while time.time() < deadline:
             for i, m in enumerate(self.members):
                 if not m.is_running():
                     raise QosDead(f"society member {i} exited before coupling")
-            ok = True
+            missing = []
             for i, m in enumerate(self.members):
                 text = m._log_text()
                 for ip in self._member_peers(i):
                     if f"FIELDSYNC: frame from {ip}" not in text:
-                        ok = False
-                        break
-                if not ok:
-                    break
-            if ok:
+                        missing.append(f"member{i}<-{ip}")
+            if not missing:
                 return
             time.sleep(0.2)
-        raise QosTimeout("not every member received a frame from each of its peers")
+        # List the unheard directed edges so a load-flake (a few edges missing,
+        # frames flowing) reads differently from absent multicast (EVERY edge
+        # missing — no frame from any peer reached any node).
+        raise QosTimeout("not every member received a frame from each of its "
+                         f"peers; unheard edges: {missing}")
 
-    def status_n(self):
+    def status_n(self, since=None):
+        # `since` (optional) is a PER-MEMBER list of log offsets — each member's
+        # FSKEY position — so a keyed-phase gate anchors every member's status at
+        # its own keying boundary. None => whole log (the boot-time default).
         with self._lock:
             if not self.members:
                 raise QosError("no N-way society booted")
-            return {"members": [self._node_status(m) for m in self.members],
+            offs = since if since is not None else [0] * len(self.members)
+            if len(offs) != len(self.members):
+                raise QosError("since must have one offset per member")
+            return {"members": [self._node_status(m, offs[i])
+                                for i, m in enumerate(self.members)],
                     "trust_note": (
                         "coupling and attestation are cryptographically UNLINKED: a "
                         "verified 'synchronized' proves N fields coupled on the shared "
@@ -1786,9 +1816,12 @@ class QosSociety:
                         "forged source on the L2 can skew (not starve — ghostd never "
                         "evicts a live peer) the mean. Trust == control of the host.")}
 
-    def await_sync_n(self, threshold=0.80, timeout=120):
+    def await_sync_n(self, threshold=0.80, timeout=120, since=None):
         """Poll until EVERY member's field synchronizes (min-pairwise R_x >=
-        threshold), a member dies, or the deadline passes."""
+        threshold), a member dies, or the deadline passes. `since` (per-member
+        offset list) anchors the R_x/SYNCHRONIZED read at each member's keying
+        boundary, so a post-admission sync is proven fresh — not read off a stale
+        pre-key SYNCHRONIZED line still sitting in the sticky log."""
         with self._lock:
             if not self.members:
                 raise QosError("no N-way society booted")
@@ -1797,12 +1830,58 @@ class QosSociety:
                 for i, m in enumerate(self.members):
                     if not m.is_running():
                         raise QosDead(f"society member {i} exited during sync")
-                st = self.status_n()
+                st = self.status_n(since=since)
                 if all(nd["synchronized"] and (nd["r_x"] or 0) >= threshold
                        for nd in st["members"]):
                     return st
                 time.sleep(0.3)
             raise QosTimeout(f"N-way society did not synchronize (>= {threshold}) in {timeout}s")
+
+    def _await_fskey(self, m, since_len, timeout):
+        """Wait for a member to print an FSKEY line (install OR rekey) at/after
+        `since_len`, and return the log offset captured just past it — the anchor
+        for post-keying exclusion/resume/sync checks. Fail fast on a dead member."""
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            if not m.is_running():
+                raise QosDead("society member exited before installing the key")
+            if "FSKEY:" in m._log_text(since_len):
+                return m._log_len()
+            time.sleep(0.3)
+        raise QosTimeout("society member did not install the session key")
+
+    def admit_key_n(self, key, indices=None, timeout=25):
+        """Admit the SAME host group session key (ADR-0019) to N members — the
+        N-way generalization of the 2-VM keyauth `_wait_both`. Built on per-member
+        admit_key(SAME key bytes): every admitted member gets the IDENTICAL 32
+        bytes, so their tags verify against each other. NEVER attest() — it mints
+        a fresh os.urandom key PER VM, which would leave the society mutually
+        keyless (each member rejecting every other's tag), the exact trap the
+        panel flagged. `indices` restricts admission to a subset (default all) so
+        a caller can key a proper subset and observe the excluded member. Awaits
+        each admitted member's FSKEY line and returns {index: post-FSKEY offset}
+        so post-admission checks anchor at the keying boundary. Re-calling admits
+        again (a rekey) — the FSKEY-since scan catches the fresh 'rekeyed' line."""
+        with self._lock:
+            if not self.members:
+                raise QosError("no N-way society booted")
+            key = bytes(key)
+            idxs = list(range(len(self.members))) if indices is None else list(indices)
+            pre = {i: self.members[i]._log_len() for i in idxs}
+            for i in idxs:
+                self.members[i].admit_key(key)   # SAME key to every member
+            return {i: self._await_fskey(self.members[i], pre[i], timeout)
+                    for i in idxs}
+
+    def frame_from_count(self, member_index, src_ip, since=0):
+        """Count 'FIELDSYNC: frame from <src_ip>' lines in a member's log since an
+        offset — the per-source frame-ADMISSION signal (a keyless peer's frames
+        stop being admitted once the member is keyed) the exclusion gate reads,
+        the discriminator R_x cannot provide (a keyless follower still prints
+        SYNCHRONIZED off the keyed pair's frames)."""
+        with self._lock:
+            text = self.members[member_index]._log_text(since)
+            return text.count(f"FIELDSYNC: frame from {src_ip}")
 
     def shutdown(self):
         with self._lock:
