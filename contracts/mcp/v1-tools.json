@@ -1,0 +1,315 @@
+{
+  "_meta": {
+    "contract": "qos-mcp-tools",
+    "frozen": "name+inputSchema; descriptions and result-dict shapes excluded (documented in the machine-readable agent docs, not gated)",
+    "mcp": "1.28.1",
+    "pydantic": "2.13.4",
+    "pydantic-core": "2.46.4",
+    "regen": "make regen-mcp-golden",
+    "version": 1
+  },
+  "tools": [
+    {
+      "inputSchema": {
+        "properties": {},
+        "type": "object"
+      },
+      "name": "qos_audit"
+    },
+    {
+      "inputSchema": {
+        "properties": {
+          "kernel": {
+            "default": "",
+            "type": "string"
+          },
+          "qseed": {
+            "default": "",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "name": "qos_boot"
+    },
+    {
+      "inputSchema": {
+        "properties": {
+          "allow_private": {
+            "default": false,
+            "type": "boolean"
+          },
+          "host": {
+            "type": "string"
+          },
+          "port": {
+            "default": 80,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "host"
+        ],
+        "type": "object"
+      },
+      "name": "qos_fetch"
+    },
+    {
+      "inputSchema": {
+        "properties": {},
+        "type": "object"
+      },
+      "name": "qos_field_status"
+    },
+    {
+      "inputSchema": {
+        "properties": {
+          "op": {
+            "type": "string"
+          },
+          "path": {
+            "default": "",
+            "type": "string"
+          },
+          "text": {
+            "default": "",
+            "type": "string"
+          }
+        },
+        "required": [
+          "op"
+        ],
+        "type": "object"
+      },
+      "name": "qos_fs"
+    },
+    {
+      "inputSchema": {
+        "properties": {
+          "text": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "text"
+        ],
+        "type": "object"
+      },
+      "name": "qos_imprint"
+    },
+    {
+      "inputSchema": {
+        "properties": {},
+        "type": "object"
+      },
+      "name": "qos_manifest"
+    },
+    {
+      "inputSchema": {
+        "properties": {
+          "query": {
+            "type": "string"
+          },
+          "top_k": {
+            "default": 3,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "query"
+        ],
+        "type": "object"
+      },
+      "name": "qos_memory_bridged_recall"
+    },
+    {
+      "inputSchema": {
+        "properties": {
+          "allow_write": {
+            "default": false,
+            "type": "boolean"
+          },
+          "importance": {
+            "default": 0.6,
+            "type": "number"
+          },
+          "probe": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "probe"
+        ],
+        "type": "object"
+      },
+      "name": "qos_memory_export"
+    },
+    {
+      "inputSchema": {
+        "properties": {
+          "query": {
+            "type": "string"
+          },
+          "top_k": {
+            "default": 5,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "query"
+        ],
+        "type": "object"
+      },
+      "name": "qos_memory_import"
+    },
+    {
+      "inputSchema": {
+        "properties": {
+          "iters": {
+            "default": 1,
+            "type": "integer"
+          },
+          "kind": {
+            "default": "bell",
+            "type": "string"
+          },
+          "n_qubits": {
+            "default": 3,
+            "type": "integer"
+          },
+          "probe": {
+            "default": 0,
+            "type": "integer"
+          },
+          "target": {
+            "default": 0,
+            "type": "integer"
+          }
+        },
+        "type": "object"
+      },
+      "name": "qos_qpu_submit"
+    },
+    {
+      "inputSchema": {
+        "properties": {},
+        "type": "object"
+      },
+      "name": "qos_qrand"
+    },
+    {
+      "inputSchema": {
+        "properties": {
+          "text": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "text"
+        ],
+        "type": "object"
+      },
+      "name": "qos_recall"
+    },
+    {
+      "inputSchema": {
+        "properties": {
+          "args": {
+            "default": "",
+            "type": "string"
+          },
+          "program": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "program"
+        ],
+        "type": "object"
+      },
+      "name": "qos_run"
+    },
+    {
+      "inputSchema": {
+        "properties": {},
+        "type": "object"
+      },
+      "name": "qos_shutdown"
+    },
+    {
+      "inputSchema": {
+        "properties": {
+          "threshold": {
+            "default": 0.8,
+            "type": "number"
+          }
+        },
+        "type": "object"
+      },
+      "name": "qos_society_await_sync"
+    },
+    {
+      "inputSchema": {
+        "properties": {
+          "qseed_a": {
+            "type": "string"
+          },
+          "qseed_b": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "qseed_a",
+          "qseed_b"
+        ],
+        "type": "object"
+      },
+      "name": "qos_society_boot"
+    },
+    {
+      "inputSchema": {
+        "properties": {
+          "qseeds": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "qseeds"
+        ],
+        "type": "object"
+      },
+      "name": "qos_society_boot_n"
+    },
+    {
+      "inputSchema": {
+        "properties": {},
+        "type": "object"
+      },
+      "name": "qos_society_shutdown"
+    },
+    {
+      "inputSchema": {
+        "properties": {},
+        "type": "object"
+      },
+      "name": "qos_society_status"
+    },
+    {
+      "inputSchema": {
+        "properties": {},
+        "type": "object"
+      },
+      "name": "qos_status"
+    },
+    {
+      "inputSchema": {
+        "properties": {},
+        "type": "object"
+      },
+      "name": "qos_sysinfo"
+    }
+  ]
+}

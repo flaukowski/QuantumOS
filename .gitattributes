@@ -5,3 +5,8 @@ rootfs/** text eol=lf
 # Shell scripts run under WSL/Linux and die on CRLF ("$'\r': command not
 # found"); keep them LF everywhere.
 scripts/*.sh text eol=lf
+
+# Frozen contract goldens (ADR-0020) are strict-text-compared byte streams:
+# a CRLF checkout on Windows must never fake a gate diff (the extractors
+# normalize \r\n on read, but the committed bytes stay LF regardless).
+contracts/** text eol=lf

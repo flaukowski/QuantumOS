@@ -2551,3 +2551,107 @@ ci-smoke-abi-golden-selftest: $(ABI_PROBE_KERN)
 	@mkdir -p $(BUILD_DIR)/abi
 	$(CC) $(USER_CFLAGS) -DSYS_QPU_OVERRIDE=36 -c $(USER_DIR)/abi_probe.c -o $(BUILD_DIR)/abi/abi_probe_user_mut.o
 	@if timeout -k 5 $(ABI_GOLDEN_GATE_TIMEOUT) python3 scripts/extract-abi.py check --golden $(ABI_GOLDEN) $(BUILD_DIR)/abi/abi_probe_user_mut.o $(ABI_PROBE_KERN) >/dev/null 2>&1; then echo "TEETH-CHECK FAILED: a mutated SYS_QPU did NOT redden the gate"; exit 1; else echo "teeth-check OK: the mutation reddened the gate"; fi
+
+# ---------------------------------------------------------------------------
+# v1 WIRE freeze gate (ADR-0020 lane C). One probe TU (user/wire_probe.c)
+# emits the COM2 swarm-bridge + FSYN/FSYP wire contract into .abi_ents under
+# the REAL user build flags; scripts/extract-wire.py reads it back with
+# objcopy, builds the HOST ring live from scripts/qos_bridge.py (the one host
+# wire implementation), cross-checks the twins, and diffs the merged table
+# against contracts/wire/v1.golden. The gate NEVER regenerates the golden
+# (regen-wire-golden is human-only). Exit-code discipline: rc 1 = contract
+# signal (diff / twin / must-twin) ONLY; rc 2 = operational — so the selftest
+# below asserts rc == 1 EXACTLY, and a broken extractor can never pass as a
+# caught mutation. Timeout in ONE place (the #93 desync lesson); no kernel
+# prereq (fast static lane).
+# ---------------------------------------------------------------------------
+WIRE_GOLDEN_GATE_TIMEOUT ?= 60s
+WIRE_GOLDEN := contracts/wire/v1.golden
+WIRE_PROBE_USER := $(BUILD_DIR)/abi/wire_probe_user.o
+
+$(WIRE_PROBE_USER): $(USER_DIR)/wire_probe.c $(USER_DIR)/swarm.h $(USER_DIR)/fsyn.h $(USER_DIR)/ghost.h $(USER_DIR)/usys.h
+	@mkdir -p $(dir $@)
+	$(CC) $(USER_CFLAGS) -c $< -o $@
+
+.PHONY: regen-wire-golden ci-smoke-wire-golden-gate ci-smoke-wire-golden-selftest
+
+# HUMAN-ONLY: regenerate the committed golden after an intended wire change.
+regen-wire-golden: $(WIRE_PROBE_USER)
+	python3 scripts/extract-wire.py emit --out $(WIRE_GOLDEN) $(WIRE_PROBE_USER)
+
+# CI: diff extracted-vs-committed; NEVER writes the golden.
+ci-smoke-wire-golden-gate: $(WIRE_PROBE_USER)
+	timeout -k 5 $(WIRE_GOLDEN_GATE_TIMEOUT) python3 scripts/extract-wire.py check --golden $(WIRE_GOLDEN) $(WIRE_PROBE_USER)
+
+# CI teeth-check, two legs, each asserting rc == 1 EXACTLY plus the specific
+# mutated marker: (a) a guest probe recompiled with a mutated SWARM_MAGIC must
+# redden the gate NAMING the mutated entry; (b) QOS_WIRE_TEETH=1 (the host
+# ring perturbed inside the EXTRACTOR — teeth never live in production code)
+# must trip the TWIN MISMATCH path specifically.
+ci-smoke-wire-golden-selftest: $(WIRE_PROBE_USER)
+	@mkdir -p $(BUILD_DIR)/abi
+	$(CC) $(USER_CFLAGS) -DSWARM_MAGIC_OVERRIDE=0xA6 -c $(USER_DIR)/wire_probe.c -o $(BUILD_DIR)/abi/wire_probe_user_mut.o
+	@out=$$(timeout -k 5 $(WIRE_GOLDEN_GATE_TIMEOUT) python3 scripts/extract-wire.py check --golden $(WIRE_GOLDEN) $(BUILD_DIR)/abi/wire_probe_user_mut.o 2>&1); rc=$$?; \
+	if [ $$rc -ne 1 ]; then echo "TEETH-CHECK FAILED: mutated SWARM_MAGIC gave rc=$$rc (want exactly 1)"; echo "$$out"; exit 1; fi; \
+	if ! echo "$$out" | grep -q "guest:wire:SWARM_MAGIC"; then echo "TEETH-CHECK FAILED: the diff does not name the mutated guest:wire:SWARM_MAGIC entry"; echo "$$out"; exit 1; fi; \
+	echo "teeth-check OK (a): a mutated guest SWARM_MAGIC reddened the gate (rc=1, entry named)"
+	@out=$$(QOS_WIRE_TEETH=1 timeout -k 5 $(WIRE_GOLDEN_GATE_TIMEOUT) python3 scripts/extract-wire.py check --golden $(WIRE_GOLDEN) $(WIRE_PROBE_USER) 2>&1); rc=$$?; \
+	if [ $$rc -ne 1 ]; then echo "TEETH-CHECK FAILED: QOS_WIRE_TEETH=1 gave rc=$$rc (want exactly 1)"; echo "$$out"; exit 1; fi; \
+	if ! echo "$$out" | grep -q "TWIN MISMATCH"; then echo "TEETH-CHECK FAILED: teeth did not trip the TWIN MISMATCH path"; echo "$$out"; exit 1; fi; \
+	echo "teeth-check OK (b): QOS_WIRE_TEETH tripped TWIN MISMATCH (rc=1)"
+
+# ---------------------------------------------------------------------------
+# v1 MCP tool-surface freeze gate (ADR-0020 lane B). scripts/extract-mcp-
+# schema.py imports qos_mcp, lists the FastMCP tools, normalizes each
+# inputSchema (title/description stripped — pydantic re-derives those from
+# docstrings, which are NOT frozen) and diffs {name, inputSchema} against
+# contracts/mcp/v1-tools.json. Frozen = name + inputSchema; docstrings and
+# result-dict shapes are documented, not gated. Needs the `mcp` package, which
+# the stdlib-only lanes forbid — so it runs out of a pinned venv
+# (requirements-mcp-gate.txt) locally, or with MCP_PY=python3 in the dedicated
+# pip-provisioned mcp-schema CI job. The check self-verifies the generator
+# versions against the golden's _meta pins (mismatch = rc 2 GENERATOR SKEW,
+# operational — never a fake diff). rc 1 = schema diff ONLY.
+# ---------------------------------------------------------------------------
+MCP_SCHEMA_GATE_TIMEOUT ?= 120s
+MCP_GOLDEN := contracts/mcp/v1-tools.json
+MCP_VENV := $(BUILD_DIR)/mcp-venv
+MCP_PY ?= $(MCP_VENV)/bin/python
+
+# The venv is a prerequisite only while MCP_PY still points into it (CI passes
+# MCP_PY=python3 after its own pinned `pip install`).
+ifeq ($(MCP_PY),$(MCP_VENV)/bin/python)
+MCP_VENV_DEP := $(MCP_VENV)/.stamp
+else
+MCP_VENV_DEP :=
+endif
+
+$(MCP_VENV)/.stamp: requirements-mcp-gate.txt
+	python3 -m venv $(MCP_VENV)
+	$(MCP_VENV)/bin/pip install -r requirements-mcp-gate.txt
+	touch $@
+
+.PHONY: regen-mcp-golden ci-smoke-mcp-schema-gate ci-smoke-mcp-schema-selftest
+
+# HUMAN-ONLY: regenerate the committed golden after an intended tool change.
+regen-mcp-golden: $(MCP_VENV_DEP)
+	$(MCP_PY) scripts/extract-mcp-schema.py emit --out $(MCP_GOLDEN)
+
+# CI: diff extracted-vs-committed; NEVER writes the golden.
+ci-smoke-mcp-schema-gate: $(MCP_VENV_DEP)
+	timeout -k 5 $(MCP_SCHEMA_GATE_TIMEOUT) $(MCP_PY) scripts/extract-mcp-schema.py check --golden $(MCP_GOLDEN)
+
+# CI teeth-check, two legs, each asserting rc == 1 EXACTLY (rc 2 is GENERATOR
+# SKEW / operational and must NOT pass as a caught mutation) plus the specific
+# mutated marker: QOS_MCP_TEETH=del deletes a property from the qos_qpu_submit
+# schema in-memory (a changed-VALUE mutation, not just an added/removed name);
+# QOS_MCP_TEETH=add appends a bogus tool. Teeth live in the EXTRACTOR only.
+ci-smoke-mcp-schema-selftest: $(MCP_VENV_DEP)
+	@out=$$(QOS_MCP_TEETH=del timeout -k 5 $(MCP_SCHEMA_GATE_TIMEOUT) $(MCP_PY) scripts/extract-mcp-schema.py check --golden $(MCP_GOLDEN) 2>&1); rc=$$?; \
+	if [ $$rc -ne 1 ]; then echo "TEETH-CHECK FAILED: QOS_MCP_TEETH=del gave rc=$$rc (want exactly 1; 2 = skew/operational is a selftest FAILURE)"; echo "$$out"; exit 1; fi; \
+	if ! echo "$$out" | grep -q "TOOL SCHEMA DRIFT: qos_qpu_submit"; then echo "TEETH-CHECK FAILED: the diff does not name the mutated qos_qpu_submit schema"; echo "$$out"; exit 1; fi; \
+	echo "teeth-check OK (del): a deleted qos_qpu_submit property reddened the gate (rc=1)"
+	@out=$$(QOS_MCP_TEETH=add timeout -k 5 $(MCP_SCHEMA_GATE_TIMEOUT) $(MCP_PY) scripts/extract-mcp-schema.py check --golden $(MCP_GOLDEN) 2>&1); rc=$$?; \
+	if [ $$rc -ne 1 ]; then echo "TEETH-CHECK FAILED: QOS_MCP_TEETH=add gave rc=$$rc (want exactly 1)"; echo "$$out"; exit 1; fi; \
+	if ! echo "$$out" | grep -q "TOOL ADDED: qos_teeth_bogus_tool"; then echo "TEETH-CHECK FAILED: the diff does not name the bogus added tool"; echo "$$out"; exit 1; fi; \
+	echo "teeth-check OK (add): a bogus added tool reddened the gate (rc=1)"

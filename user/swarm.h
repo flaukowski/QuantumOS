@@ -51,6 +51,12 @@
 #define SWARM_HDR_LEN 4       /* magic + type + len(2) */
 #define SWARM_MAX_PAYLOAD 512 /* keep frames small for the polled UART */
 
+/* CRC-8/CCITT parameters (ADR-0020 lane C): named so the wire freeze probe
+ * (user/wire_probe.c) measures the SAME expressions swarm_crc8() computes
+ * with — a drive-by polynomial edit reddens contracts/wire/v1.golden. */
+#define SWARM_CRC8_POLY 0x07u
+#define SWARM_CRC8_INIT 0x00u
+
 /* Frame types */
 #define FRAME_HANDSHAKE 0x01u
 #define FRAME_DATA 0x02u
@@ -77,6 +83,34 @@
            * the field-coupling wire can be HMAC-authenticated. No reply. Trust
            * reduces to control of the host's COM2 channel (the key root). */
 
+/* ---- attestation string pieces (frozen v1 wire, ADR-0020 lane C) ----
+ * build_attestation() composes SWARM_ATTEST_HEAD <hex|none> SWARM_ATTEST_TICKS
+ * <n>; the host (scripts/qos_bridge.py parse_attestation) splits on the same
+ * literals. The freeze probe packs these bytes into KAT entries so either side
+ * drifting is a golden diff, not a silent verify failure. */
+#define SWARM_ATTEST_HEAD "QOS-BOOT|qseed="
+#define SWARM_ATTEST_TICKS "|ticks="
+
+/* ---- reply-auth + DATA reply body geometry (ADR-0019, frozen ADR-0020) ----
+ * The host verifier (qos_bridge._verify_reply_auth) slices replies with the
+ * SAME numbers: body | nonce_echo(16) | tag(32). */
+/* per-request host nonce echoed in an authenticated reply */
+#define SWARM_REPLYAUTH_NONCE_LEN 16
+/* HMAC-SHA256 tag bytes appended after the nonce echo */
+#define SWARM_REPLYAUTH_TAG_LEN 32
+/* swarm-plane group session key admitted via SWARM_OP_KEY */
+#define SWARM_KEY_LEN 32
+/* STATUS reply body: op + r_q16(4) + live */
+#define SWARM_STATUS_BODY_LEN 6
+/* RECALL reply body: op + match + r_q16(4) */
+#define SWARM_RECALL_BODY_LEN 6
+/* QSUBMIT error reply body: op + status */
+#define SWARM_QSUBMIT_BODY_ERR 2
+/* QSUBMIT DONE reply body: op + status + QC_RESULT_LEN(20) result */
+#define SWARM_QSUBMIT_BODY_OK 22
+/* r_q16 is a Q16 fraction: host divides by this scale */
+#define SWARM_STATUS_R_SCALE 65536
+
 /* ---- Lamport parameters ---- */
 #define LAMPORT_BITS 256    /* SHA-256 digest width */
 #define LAMPORT_HASH_LEN 32 /* SHA-256 output bytes */
@@ -86,11 +120,11 @@
 
 /* CRC-8/CCITT (poly 0x07, init 0x00), MSB-first — matches verify_attestation.py. */
 static inline uint8_t swarm_crc8(const uint8_t *data, uint32_t len) {
-    uint8_t crc = 0x00u;
+    uint8_t crc = SWARM_CRC8_INIT;
     for (uint32_t i = 0; i < len; i++) {
         crc ^= data[i];
         for (int b = 0; b < 8; b++) {
-            crc = (crc & 0x80u) ? (uint8_t)((crc << 1) ^ 0x07u) : (uint8_t)(crc << 1);
+            crc = (crc & 0x80u) ? (uint8_t)((crc << 1) ^ SWARM_CRC8_POLY) : (uint8_t)(crc << 1);
         }
     }
     return crc;
