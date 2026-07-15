@@ -1,7 +1,8 @@
 # 23. IPC Peer Re-Wiring on Watchdog Rebirth (and Dead-Target IPC Unlink)
 
 Date: 2026-07-13
-Status: Proposed
+Status: Accepted (2026-07-14; Part 1 + Part 2 shipped together — generalized unlink,
+declarative ipc_peers re-mint, swarm-svc key re-forward, anchored ci-smoke gate)
 
 ## Context
 

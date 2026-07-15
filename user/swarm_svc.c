@@ -41,9 +41,16 @@ static long ghostd_pid = 0;
  * authenticate COM2 DATA replies (the reply-auth Extension): a keyed STATUS
  * reply carries a nonce echo + HMAC so an agent's tool result is provably fresh,
  * not a replay. The same 32 bytes fieldsyncd stores (one SWARM_OP_KEY channel,
- * two consumers). In memory: a rebirth loses it; the host re-admits. */
+ * two consumers). In memory: a swarm_svc rebirth loses it and the host
+ * re-admits; a FIELDSYNCD rebirth is handled HERE (ADR-0023) — the main loop
+ * watches for a fieldsyncd pid change and re-forwards the cached key, because
+ * ADR-0023's declarative re-mint restores only the DELIVERY PATH: a reborn
+ * fieldsyncd with restored ghostd wiring but no key would emit seq=0 zero-tag
+ * frames that keyed peers silently reject (a keyless-but-wired partition). */
 static uint8_t session_key[32];
 static int have_key = 0;
+/* The fieldsyncd pid the key was last successfully forwarded to (0 = never). */
+static long key_fwd_pid = 0;
 
 /* COM2 receive accumulator for the inbound frame parser. */
 static uint8_t rxbuf[SWARM_HDR_LEN + SWARM_MAX_PAYLOAD + 1];
@@ -322,6 +329,73 @@ static void emit_authed_reply(const uint8_t *body, uint32_t body_len, const uint
     emit_frame(FRAME_DATA, out, body_len + 16 + 32);
 }
 
+/* ---- session-key delivery to fieldsyncd (ADR-0019 + ADR-0023) ---- */
+
+/* fieldsyncd's current pid from the uncapped SYSINFO_PS text (the agentd/qtop
+ * pattern): scan for a "PS: <pid> fieldsy..." row. 0 = not present. */
+static long find_fieldsyncd_pid(void) {
+    static char ps[2048];
+    long pn = sysinfo(SYSINFO_PS, ps, sizeof(ps) - 1);
+    ps[(pn > 0) ? pn : 0] = '\0';
+    for (long o = 0; ps[o]; o++) {
+        if ((o == 0 || ps[o - 1] == '\n') && ps[o] == 'P' && ps[o + 1] == 'S' && ps[o + 2] == ':' &&
+            ps[o + 3] == ' ') {
+            long p = 0, k = o + 4;
+            while (ps[k] >= '0' && ps[k] <= '9') {
+                p = p * 10 + (ps[k] - '0');
+                k++;
+            }
+            if (ps[k] == ' ' && ps[k + 1] == 'f' && ps[k + 2] == 'i' && ps[k + 3] == 'e' &&
+                ps[k + 4] == 'l' && ps[k + 5] == 'd' && ps[k + 6] == 's' && ps[k + 7] == 'y') {
+                return p;
+            }
+        }
+    }
+    return 0;
+}
+
+/* Send the cached session key to fieldsyncd as "K"+32 bytes over the declared
+ * swarm_svc->fieldsyncd IPC cap. Records the delivered-to pid on success so
+ * the main-loop watch can detect a fieldsyncd REBIRTH (new pid) and re-send. */
+static int forward_key_to(long fs_pid) {
+    char km[33];
+    km[0] = 'K';
+    for (int i = 0; i < 32; i++) {
+        km[i + 1] = (char)session_key[i];
+    }
+    if (send_to(fs_pid, km, 33) == 0) {
+        key_fwd_pid = fs_pid;
+        return 1;
+    }
+    return 0;
+}
+
+/* ADR-0023: a fieldsyncd watchdog rebirth restores the swarm->fieldsyncd
+ * DELIVERY PATH (the declarative re-mint) but not the key — the reborn
+ * fieldsyncd would be keyless-but-wired, emitting zero-tag frames its keyed
+ * peers silently reject. swarm_svc is the only citizen that caches the key
+ * AND can observe the pid change, so it re-forwards. Paced to ~every 2 s
+ * (the PS scan is a syscall + 2 KB text walk — not per-pass work). */
+static void key_reforward_step(void) {
+    static uint64_t last_check;
+    if (!have_key) {
+        return;
+    }
+    uint64_t now = (uint64_t)ticks();
+    if (now - last_check < 200) { /* 10 ms ticks -> ~2 s */
+        return;
+    }
+    last_check = now;
+    long fs_pid = find_fieldsyncd_pid();
+    if (fs_pid != 0 && fs_pid != key_fwd_pid) {
+        if (forward_key_to(fs_pid)) {
+            logline("SWARM: swarm-plane key re-forwarded to reborn fieldsyncd");
+        }
+        /* On failure: the declared cap may not be re-minted yet (fieldsyncd
+         * mid-restart) — the next 2 s pass retries; no log spam. */
+    }
+}
+
 /* ---- inbound frame dispatch ---- */
 
 static void handle_data(const uint8_t *payload, uint32_t len) {
@@ -440,10 +514,11 @@ static void handle_data(const uint8_t *payload, uint32_t len) {
         }
     } else if (op == SWARM_OP_KEY) {
         /* Host admits the swarm-plane group session key (ADR-0019): forward it
-         * to fieldsyncd over the boot-minted swarm_svc->fieldsyncd IPC send-cap
-         * so the field-coupling wire can be HMAC-authenticated. fieldsyncd's pid
-         * comes from the uncapped SYSINFO_PS text (the agentd/qtop pattern).
-         * No reply — the host does not depend on a guest ack for the key. */
+         * to fieldsyncd over the declared swarm_svc->fieldsyncd IPC send-cap
+         * (ipc_peers, ADR-0023) so the field-coupling wire can be
+         * HMAC-authenticated. fieldsyncd's pid comes from the uncapped
+         * SYSINFO_PS text (the agentd/qtop pattern). No reply — the host does
+         * not depend on a guest ack for the key. */
         if (len < 1 + 32) {
             return;
         }
@@ -454,35 +529,12 @@ static void handle_data(const uint8_t *payload, uint32_t len) {
             session_key[i] = payload[1 + i];
         }
         have_key = 1;
-        static char ps[2048];
-        long pn = sysinfo(SYSINFO_PS, ps, sizeof(ps) - 1);
-        ps[(pn > 0) ? pn : 0] = '\0';
-        long fs_pid = 0;
-        for (long o = 0; ps[o]; o++) {
-            if ((o == 0 || ps[o - 1] == '\n') && ps[o] == 'P' && ps[o + 1] == 'S' &&
-                ps[o + 2] == ':' && ps[o + 3] == ' ') {
-                long p = 0, k = o + 4;
-                while (ps[k] >= '0' && ps[k] <= '9') {
-                    p = p * 10 + (ps[k] - '0');
-                    k++;
-                }
-                if (ps[k] == ' ' && ps[k + 1] == 'f' && ps[k + 2] == 'i' && ps[k + 3] == 'e' &&
-                    ps[k + 4] == 'l' && ps[k + 5] == 'd' && ps[k + 6] == 's' && ps[k + 7] == 'y') {
-                    fs_pid = p;
-                    break;
-                }
-            }
-        }
+        long fs_pid = find_fieldsyncd_pid();
         if (fs_pid == 0) {
             logline("SWARM: key admit failed — fieldsyncd not in PS");
-            return;
+            return; /* the main-loop watch (ADR-0023) retries once it appears */
         }
-        char km[33];
-        km[0] = 'K';
-        for (int i = 0; i < 32; i++) {
-            km[i + 1] = (char)payload[1 + i];
-        }
-        if (send_to(fs_pid, km, 33) == 0) {
+        if (forward_key_to(fs_pid)) {
             logline("SWARM: swarm-plane key forwarded to fieldsyncd");
         } else {
             logline("SWARM: key forward to fieldsyncd FAILED (no IPC cap?)");
@@ -632,11 +684,13 @@ void _start(void) {
 
     /* Job 2: serve the bridge protocol. poll_com2() accepts frames (a QSUBMIT
      * submits and returns); qsub_poll_step() advances the one outstanding QPU
-     * job a single step; heartbeat() fires EVERY pass so a slow circuit can
-     * never starve the watchdog. */
+     * job a single step; key_reforward_step() re-delivers the session key if
+     * fieldsyncd was reborn (ADR-0023, ~2 s pacing); heartbeat() fires EVERY
+     * pass so a slow circuit can never starve the watchdog. */
     while (1) {
         poll_com2();
         qsub_poll_step();
+        key_reforward_step();
         heartbeat();
         yield();
     }

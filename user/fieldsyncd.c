@@ -102,9 +102,13 @@ static void note_aggregate(const char *buf, long got) {
 
 /* The host-admitted swarm-plane group session key (ADR-0019). Delivered from
  * swarm_svc (the sole COM2 holder) over IPC as "K"+32 bytes. Held in memory: a
- * watchdog rebirth loses it (same class as the ghostd-IPC restart limitation);
- * the host re-admits. Until it arrives, the wire is unauthenticated exactly as
- * before — increment B-frame-auth makes possession of this key load-bearing. */
+ * watchdog rebirth loses it, and since ADR-0023 swarm_svc RE-FORWARDS its
+ * cached copy when it observes our pid change (the declarative re-mint
+ * restores the delivery path; the re-forward restores the key — without it a
+ * reborn fieldsyncd would be keyless-but-wired, emitting zero-tag frames its
+ * keyed peers reject). Until it (re)arrives, the wire is unauthenticated
+ * exactly as before — increment B-frame-auth makes possession of this key
+ * load-bearing. */
 static uint8_t session_key[32];
 static int have_key;
 /* Monotonic per-sender transmit sequence, seeded from the boot tick at _start
@@ -416,6 +420,7 @@ void _start(void) {
             }
             out.magic = FSYN_MAGIC;
             if (ghost_snapshot(out.phase)) {
+                wiring_warned = 0; /* wiring works — a LATER outage warns anew */
                 /* ADR-0019: a keyed node stamps a fresh transmit seq and an HMAC
                  * over magic||seq||phase; an unkeyed node ships seq=0 + a zero
                  * tag (which a keyed peer rejects and an unkeyed peer ignores). */
@@ -438,11 +443,13 @@ void _start(void) {
                     udp_(UDP_SENDTO, &s); /* WOULDBLOCK ok — next round retries */
                 }
             } else if (!wiring_warned) {
-                /* send_msg to ghostd failed: either no cap (EPERM) or a
-                 * stale pid after a watchdog rebirth (EIO). Peer IPC caps
-                 * are not re-minted on restart (a known service.c limit);
-                 * say so once rather than spin silently. */
-                write_str("FIELDSYNC: ghostd wiring lost (known restart limitation)");
+                /* send_msg to ghostd failed. Since ADR-0023 the pair is
+                 * re-minted declaratively on every restart of either end, so
+                 * this is TRANSIENT (ghostd between death and rebirth, its
+                 * stale cap already unlinked) — or a real mint failure. Say
+                 * so once per outage rather than spin silently; the next
+                 * snapshot round retries and a success re-arms the warning. */
+                write_str("FIELDSYNC: ghostd snapshot unavailable (peer down or mint failed)");
                 wiring_warned = 1;
             }
         }

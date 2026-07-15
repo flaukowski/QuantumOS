@@ -296,14 +296,17 @@ void user_ghost_demo_init(void) {
  *
  * Wiring (all capability-as-address):
  *   - paradox-test -> paradoxd  : one IPC send-cap, to hand over the gate's
- *                                 canned contradiction.
- *   - paradoxd     -> ghostd    : one IPC send-cap, to poll ghostd STATUS.
- *   - ghostd       -> paradoxd  : one IPC send-cap, so ghostd can reply to
- *                                 paradoxd's STATUS query (ghostd replies to
- *                                 the sender via SYS_SEND_TO).
+ *                                 canned contradiction (hand-minted below —
+ *                                 the one-shot test citizen stays outside
+ *                                 the declarative table, ADR-0023).
+ *   - paradoxd    <-> ghostd    : declared via ipc_peers (ADR-0023), so a
+ *                                 watchdog rebirth of EITHER end re-mints
+ *                                 the pair — paradoxd polls ghostd STATUS,
+ *                                 ghostd replies to the sender (SYS_SEND_TO).
  * paradoxd is given NO cap back to paradox-test: the merge gate is paradoxd's
  * own printed RESOLVED line, so it never needs to answer the client. */
 void user_paradox_demo_init(uint32_t ghostd_pid) {
+    (void)ghostd_pid; /* wiring is declarative now (ipc_peers, ADR-0023) */
     service_definition_t paradoxd_def = {
         .name = "paradoxd",
         .entry = NULL, /* user-process service */
@@ -311,6 +314,7 @@ void user_paradox_demo_init(uint32_t ghostd_pid) {
         .user_elf_end = _binary_paradoxd_elf_end,
         .dependencies = {NULL},
         .max_restarts = 2,
+        .ipc_peers = {{"ghostd", CAP_READ | CAP_WRITE, CAP_READ | CAP_WRITE}},
     };
 
     uint32_t sid = 0;
@@ -335,13 +339,12 @@ void user_paradox_demo_init(uint32_t ghostd_pid) {
     }
 
     uint32_t cap = CAP_ID_INVALID;
-    /* client -> paradoxd (hand over the contradiction) */
+    /* client -> paradoxd (hand over the contradiction). paradox-test is a
+     * one-shot citizen, deliberately NOT in the declarative table. The
+     * paradoxd<->ghostd pair is minted by start_slot from paradoxd_def's
+     * ipc_peers (ADR-0023) — the two services are coupled through ghostd's
+     * field over cap-checked IPC, and a rebirth of either end re-wires. */
     cap_create(test_pid, CAP_RESOURCE_IPC, paradoxd_pid, CAP_READ | CAP_WRITE, 0, &cap);
-    /* paradoxd -> ghostd (poll STATUS), and ghostd -> paradoxd (reply). The
-     * two services are now coupled through ghostd's field over cap-checked
-     * IPC — the point of phase 3. */
-    cap_create(paradoxd_pid, CAP_RESOURCE_IPC, ghostd_pid, CAP_READ | CAP_WRITE, 0, &cap);
-    cap_create(ghostd_pid, CAP_RESOURCE_IPC, paradoxd_pid, CAP_READ | CAP_WRITE, 0, &cap);
 
     service_monitor(sid, true);
 
@@ -391,12 +394,17 @@ void user_httpd_init(void) {
 static uint32_t g_fieldsyncd_pid;
 
 /* Bring up fieldsyncd — the UDP field-coupling bridge (epic #97). It holds
- * the network cap (grant_net, for SYS_UDP) and an IPC send-cap to ghostd
- * (with a reply cap back), so it can pull phase snapshots from the local
- * field and fold a peer's phases in — mirroring paradoxd's IPC coupling
- * but over the wire. With no `peer=` configured it idles; the default
- * boot is unchanged. Monitored. */
+ * the network cap (grant_net, for SYS_UDP) and declares its IPC wiring
+ * (ADR-0023): a ghostd pair (pull phase snapshots, get replies) and the
+ * ONE-WAY swarm-svc->fieldsyncd key-delivery cap (ADR-0019) — from-only,
+ * to_perms 0, because a second outbound cap on fieldsyncd's side would make
+ * its untargeted send to ghostd first-match ambiguously. swarm-svc does not
+ * exist yet when fieldsyncd starts; start_slot's Pass 2 mints the key cap
+ * when it does, and every watchdog rebirth of either end re-mints both
+ * pairs. With no `peer=` configured it idles; the default boot is
+ * unchanged. Monitored. */
 void user_fieldsync_demo_init(uint32_t ghostd_pid) {
+    (void)ghostd_pid; /* wiring is declarative now (ipc_peers, ADR-0023) */
     service_definition_t fieldsyncd_def = {
         .name = "fieldsyncd",
         .entry = NULL,
@@ -405,6 +413,8 @@ void user_fieldsync_demo_init(uint32_t ghostd_pid) {
         .dependencies = {NULL},
         .max_restarts = 2,
         .grant_net = 1,
+        .ipc_peers = {{"ghostd", CAP_READ | CAP_WRITE, CAP_READ | CAP_WRITE},
+                      {"swarm-svc", 0, CAP_WRITE}},
     };
     uint32_t sid = 0, fs_pid = 0;
     if (service_register(&fieldsyncd_def, &sid) == SVC_SUCCESS &&
@@ -418,9 +428,6 @@ void user_fieldsync_demo_init(uint32_t ghostd_pid) {
         boot_log("Warning: fieldsyncd service failed to start");
         return;
     }
-    uint32_t cap = CAP_ID_INVALID;
-    cap_create(fs_pid, CAP_RESOURCE_IPC, ghostd_pid, CAP_READ | CAP_WRITE, 0, &cap);
-    cap_create(ghostd_pid, CAP_RESOURCE_IPC, fs_pid, CAP_READ | CAP_WRITE, 0, &cap);
     service_monitor(sid, true);
     g_fieldsyncd_pid = fs_pid;
     boot_log("epic97: fieldsyncd (ring 3) bridges ghostd's field to a UDP peer");
@@ -428,13 +435,19 @@ void user_fieldsync_demo_init(uint32_t ghostd_pid) {
 
 /* Bring up swarm_svc — the COM2 serial swarm bridge (ghostd phase 4, #51) —
  * as a monitored ring-3 user-process service. It is declaratively granted the
- * COM2 device cap and a quantum-pool read cap (both re-minted on every start),
- * plus a single IPC send-cap to ghostd so a remote DATA request can be routed
- * to the field over capability-checked IPC; ghostd gets a send-cap back so it
- * can reply to swarm_svc (SYS_SEND_TO to the sender pid). swarm_svc holds no
- * other authority: it can drive COM2, draw quantum bytes, and talk to ghostd —
- * nothing else. */
+ * COM2 device cap and a quantum-pool read cap, and declares its ghostd IPC
+ * pair (ADR-0023) so a remote DATA request can be routed to the field over
+ * capability-checked IPC and ghostd can reply to the sender (SYS_SEND_TO) —
+ * all re-minted on every start, so a rebirth of either end re-wires.
+ * swarm_svc holds no other outbound authority beyond the ONE-WAY
+ * swarm-svc->fieldsyncd key cap that FIELDSYNCD declares (from-peer, minted
+ * by start_slot's Pass 2 when swarm-svc starts): it can drive COM2, draw
+ * quantum bytes, talk to ghostd, and deliver the session key — nothing else.
+ * Pass 1 (ghostd) minting before Pass 2 (the key cap) also keeps the ghostd
+ * cap at the lower first-fit slot, which swarm_svc's one-shot untargeted
+ * discovery send relies on. */
 void user_swarm_demo_init(uint32_t ghostd_pid) {
+    (void)ghostd_pid; /* wiring is declarative now (ipc_peers, ADR-0023) */
     service_definition_t swarm_def = {
         .name = "swarm-svc",
         .entry = NULL, /* user-process service */
@@ -455,6 +468,7 @@ void user_swarm_demo_init(uint32_t ghostd_pid) {
          * circuit) then proves the 6th is refused. */
         .grant_qpu_submit = 1,
         .qsub_max = 5,
+        .ipc_peers = {{"ghostd", CAP_READ | CAP_WRITE, CAP_READ | CAP_WRITE}},
     };
 
     uint32_t sid = 0;
@@ -472,23 +486,11 @@ void user_swarm_demo_init(uint32_t ghostd_pid) {
         return;
     }
 
-    /* swarm_svc <-> ghostd: one IPC send-cap each way, so a DATA request can be
-     * routed to ghostd's field and ghostd can reply to the sender. */
-    uint32_t cap = CAP_ID_INVALID;
-    cap_create(swarm_pid, CAP_RESOURCE_IPC, ghostd_pid, CAP_READ | CAP_WRITE, 0, &cap);
-    cap_create(ghostd_pid, CAP_RESOURCE_IPC, swarm_pid, CAP_READ | CAP_WRITE, 0, &cap);
-
-    /* swarm_svc -> fieldsyncd: a ONE-WAY IPC send-cap (ADR-0019) so the host can
-     * admit the swarm-plane session key over COM2 and swarm_svc forwards it to
-     * fieldsyncd. One-way (WRITE only, no reverse cap) is deliberate: a second
-     * cap on fieldsyncd's side would make its untargeted send to ghostd
-     * first-match ambiguously. Like the ghostd IPC caps, this is NOT re-minted
-     * on a fieldsyncd watchdog rebirth (a documented existing limitation; the
-     * host re-admits the key). g_fieldsyncd_pid was stashed by
-     * user_fieldsync_demo_init above. */
-    if (g_fieldsyncd_pid != 0) {
-        cap_create(swarm_pid, CAP_RESOURCE_IPC, g_fieldsyncd_pid, CAP_WRITE, 0, &cap);
-    }
+    /* IPC wiring is declarative (ADR-0023): start_slot minted the
+     * swarm_svc<->ghostd pair (Pass 1, from swarm_def.ipc_peers) and the
+     * one-way swarm_svc->fieldsyncd key cap (Pass 2, from FIELDSYNCD's
+     * declaration) inside the same cli window as the device grants — and
+     * re-mints all of it on every watchdog rebirth of either end. */
 
     service_monitor(sid, true);
 
@@ -514,14 +516,18 @@ void user_swarm_demo_init(uint32_t ghostd_pid) {
  * minimal: the console device capability (its whole reason to exist) and a
  * quantum-pool read cap (the qrand/qseed builtins) are re-minted by the
  * service framework on every start, so a watchdog-reborn shell keeps its
- * console. One IPC send-cap each way wires it to ghostd for the `ghost`
- * builtin (peer caps are NOT re-minted on restart — a known service.c
- * limitation shared with the other demo peers).
+ * console. Its ghostd IPC pair (the `ghost` builtin; ghostd replies to the
+ * sender via SYS_SEND_TO) is DECLARED via ipc_peers (ADR-0023) and re-minted
+ * on every start like the other grants — a reborn shell keeps its `ghost`
+ * builtin, deterministically. qsh must hold exactly ONE outbound IPC cap
+ * (untargeted send_msg routes first-match, #176), which single-sided
+ * declaration preserves: qsh declares only ghostd and nobody declares qsh.
  *
  * `exit` is a feature, not a crash: the shell terminates, its heartbeat
  * goes silent, and the watchdog restarts it — the reborn banner is the
  * boot-log proof that an OS operator surface can die and come back. */
 void user_shell_init(uint32_t ghostd_pid) {
+    (void)ghostd_pid; /* wiring is declarative now (ipc_peers, ADR-0023) */
     service_definition_t qsh_def = {
         .name = "qsh",
         .entry = NULL, /* user-process service */
@@ -548,6 +554,7 @@ void user_shell_init(uint32_t ghostd_pid) {
         .grant_field = 1,
         .field_region = 0,
         .field_inherit = 1,
+        .ipc_peers = {{"ghostd", CAP_READ | CAP_WRITE, CAP_READ | CAP_WRITE}},
     };
 
     uint32_t sid = 0;
@@ -565,12 +572,9 @@ void user_shell_init(uint32_t ghostd_pid) {
         return;
     }
 
-    /* qsh <-> ghostd: the `ghost` builtin queries the field over
-     * capability-checked IPC; ghostd replies to the sender via SYS_SEND_TO. */
-    uint32_t cap = CAP_ID_INVALID;
-    cap_create(qsh_pid, CAP_RESOURCE_IPC, ghostd_pid, CAP_READ | CAP_WRITE, 0, &cap);
-    cap_create(ghostd_pid, CAP_RESOURCE_IPC, qsh_pid, CAP_READ | CAP_WRITE, 0, &cap);
-
+    /* qsh <-> ghostd wiring is declarative (ipc_peers above, ADR-0023):
+     * start_slot minted the pair alongside the console/spawn/field grants,
+     * and re-mints it on every rebirth of either end. */
     service_monitor(sid, true);
 
     boot_log("qsh: interactive shell online (ring 3, console capability)");
@@ -851,7 +855,12 @@ void user_agent_demo_init(void) {
      * fieldsyncd over this pair (agentd discovers the pid via SYSINFO_PS, the
      * qtop pattern); fieldsyncd broadcasts it to configured peers as an FSYP
      * frame and prints received peer aggregates for host-side verification.
-     * Minted ONLY in agentdemo boots — every other boot is unchanged. */
+     * Minted ONLY in agentdemo boots — every other boot is unchanged.
+     * Deliberately NOT converted to ipc_peers (ADR-0023), and honestly: the
+     * generalized dead-target unlink makes a fieldsyncd rebirth leave agentd
+     * permanently capless here (it used to sometimes re-attach by pid-reuse
+     * luck) — accepted, demo-only, no CI gate depends on this pair surviving
+     * a restart. */
     if (g_fieldsyncd_pid != 0) {
         uint32_t cap = CAP_ID_INVALID;
         cap_create(ag_pid, CAP_RESOURCE_IPC, g_fieldsyncd_pid, CAP_READ | CAP_WRITE, 0, &cap);

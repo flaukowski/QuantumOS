@@ -30,6 +30,7 @@
 #define MAX_SERVICES 32
 #define SERVICE_NAME_MAX 64
 #define SERVICE_MAX_DEPS 8
+#define SERVICE_MAX_IPC_PEERS 4
 #define SERVICE_DEFAULT_MAX_RESTARTS 3
 
 /* Heartbeat freshness threshold (timer ticks; 10 ms each) */
@@ -81,6 +82,30 @@ typedef struct {
     uint32_t quantum_limit;
     char dependencies[SERVICE_MAX_DEPS][SERVICE_NAME_MAX];
 } service_info_t;
+
+/* Declarative IPC peer wiring (ADR-0023). One entry declares one pair with a
+ * named peer SERVICE; start_slot re-mints the declared caps on EVERY start
+ * (first boot and every watchdog rebirth), inside the same cli window as the
+ * grant_* caps — replacing the boot-time hand mints that a rebirth used to
+ * lose forever.
+ *
+ * The two permission words are INDEPENDENT, never a single symmetric field:
+ *   to_perms   — mint declarer->peer with these perms (0 = no cap)
+ *   from_perms — mint peer->declarer with these perms (0 = no cap)
+ * A one-way pair (e.g. the ADR-0019 swarm-svc->fieldsyncd key cap: from-only,
+ * to_perms 0) MUST stay one-way — a stray reverse cap would give the declarer
+ * a second outbound IPC cap and break untargeted send_msg's first-match
+ * routing non-deterministically (the citizens.c fieldsyncd rationale).
+ *
+ * Declare each pair on exactly ONE side (the later-starting service):
+ * start_slot's two passes make single-sided declaration sufficient in both
+ * rebirth directions, and it structurally prevents a double mint (which
+ * would break qsh's singleton-IPC-cap first-match invariant, #176). */
+typedef struct {
+    const char *peer;    /* peer service name (NULL terminates the table) */
+    uint32_t to_perms;   /* declarer->peer permissions (0 = don't mint) */
+    uint32_t from_perms; /* peer->declarer permissions (0 = don't mint) */
+} service_ipc_peer_t;
 
 /* Static registration record.
  *
@@ -185,6 +210,10 @@ typedef struct {
      * unlimited. Only meaningful alongside grant_qpu_submit. qpu_test proves
      * enforcement with qsub_max=2. */
     uint32_t qsub_max;
+    /* Declared IPC peer pairs (ADR-0023), re-minted on every start — see
+     * service_ipc_peer_t. NULL peer terminates the table; a zero-initialized
+     * def declares nothing (every existing def keeps its exact behavior). */
+    service_ipc_peer_t ipc_peers[SERVICE_MAX_IPC_PEERS];
 } service_definition_t;
 
 /* ============================================================================

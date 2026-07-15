@@ -81,10 +81,12 @@ typedef struct {
     uint8_t is_revocable;              /* Can this be revoked? */
     uint8_t is_inherited;              /* Derived from a parent? */
     uint8_t is_spawn_channel;          /* Origin tag: minted by SYS_SPAWN as one half of a
-                                        * parent<->child IPC channel (epic #175). Scopes
-                                        * cap_revoke_spawn_channels to spawn wiring ONLY —
-                                        * kernel hand-minted pairs are never tagged, so a
-                                        * monitored service's restart cannot sever them. */
+                                        * parent<->child IPC channel (epic #175). Purely
+                                        * informational since ADR-0023: the dead-target
+                                        * unlink covers EVERY IPC cap naming the dead pid,
+                                        * tagged or not — hand-minted service pairs are
+                                        * re-minted declaratively on restart instead of
+                                        * surviving by pid-reuse luck. */
     uint32_t parent_cap;               /* Parent capability ID (0 = root) */
 } capability_t;
 
@@ -158,16 +160,19 @@ void cap_revoke_all_for_process(uint32_t pid);
  * syscall that cap_create'd it, so the tag is never observable half-set. */
 cap_result_t cap_mark_spawn_channel(uint32_t cap_id);
 
-/* Free every spawn-channel IPC cap TARGETING dead_pid (epic #175): the
- * surviving peer's half of a spawn-minted channel whose other end died.
- * Scoped by the is_spawn_channel origin tag + CAP_RESOURCE_IPC + resource_id,
- * so hand-minted pairs and non-IPC caps with a colliding resource_id survive.
- * MUST be called from process_destroy BEFORE the state=UNUSED store — pids
- * are first-fit slot indices, so a later call would let a recycled pid
- * inherit a live inbound channel (or worse, kill the recycled pid's fresh
- * channel). Ledger: each freed cap records AUDIT_UNLINK under its SURVIVING
- * owner (never REAP — the owner did not die). */
-void cap_revoke_spawn_channels(uint32_t dead_pid);
+/* Free EVERY IPC cap TARGETING dead_pid (epic #175, generalized by ADR-0023):
+ * the surviving peer's half of any channel whose other end died — spawn-minted
+ * or hand/declaratively-minted alike. No capability ever outlives the process
+ * it names: pids are recycled first-fit, so a stale cap would silently
+ * re-attach to whatever process lands on the recycled pid (an authority leak
+ * SYS_SEND_TO and the SYS_CAP_DERIVE targeted-peer check would both honor).
+ * Scoped by CAP_RESOURCE_IPC + resource_id — a FIELD/PROC/DEVICE cap whose
+ * resource_id collides with a small pid survives, as does an IPC cap to a
+ * live pid. MUST be called from process_destroy BEFORE the state=UNUSED
+ * store — every pid-reuse path funnels through there. Ledger: each freed cap
+ * records AUDIT_UNLINK under its SURVIVING owner (never REAP — the owner did
+ * not die). */
+void cap_revoke_ipc_targets(uint32_t dead_pid);
 
 /* Audit statistics */
 void cap_get_stats(cap_stats_t *stats);
