@@ -37,4 +37,13 @@ uint32_t com2_write(const uint8_t *buf, uint32_t len);
  * number of bytes read (0 if none waiting). */
 uint32_t com2_read(uint8_t *buf, uint32_t len);
 
+/* True iff a COM2 RX byte is waiting (ADR-0022 I/O boost). ONE LSR read,
+ * safe for scheduler_tick's IRQ context: reading LSR never consumes data.
+ * Returns 0 — permanently, via a sticky latch — when the device is ABSENT:
+ * an unbacked port reads 0xFF (all error bits + TEMT + THRE + DR at once,
+ * impossible on real silicon), and nearly every CI boot wires only COM1, so
+ * without the latch the boost would fire on every tick of every functional
+ * gate. Also 0 when COM2 is uninitialized or the TX-wedge latch tripped. */
+int com2_rx_pending(void);
+
 #endif /* COM2_UART_H */

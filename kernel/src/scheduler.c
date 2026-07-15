@@ -18,7 +18,8 @@
 #include <kernel/manifest.h>
 #include <kernel/audit.h>
 #include <kernel/capability.h>
-#include <kernel/console.h> /* early_console_write for the CPUKILL boot line */
+#include <kernel/com2_uart.h> /* com2_rx_pending + DEVICE_ID_COM2 (ADR-0022 RX boost) */
+#include <kernel/console.h>   /* early_console_write for the CPUKILL boot line */
 #ifdef SCHED_LOTTERY
 #include <kernel/quantum.h>
 #endif
@@ -36,6 +37,28 @@ static uint32_t quantum_counter = 0;
  * insensitive to the quantum. preempt_count is 1/quantum-paced by construction and
  * so is the quantity a SCHED_QUANTUM_TICKS change actually moves. */
 static uint64_t preempt_count = 0;
+
+#if SCHED_IO_BOOST
+/* HONORED boosts only (ADR-0022): incremented at the dispatch COMMIT points
+ * below, never where a flag is set — a set-side counter would read nonzero
+ * with the pick path dead (the switch_count vacuity lesson, prereq-2). */
+static uint64_t boost_count = 0;
+/* Consecutive boosted picks since the last plain pick (the starvation guard,
+ * see SCHED_BOOST_MAX_CONSEC). Single global counter; reset on any plain
+ * pick, checked before the boost scan. */
+static uint32_t consec_boost = 0;
+/* Whether the LAST pick_next call selected via the boost scan. File-static
+ * rather than a pick_next side effect on the PCB: pick_next stays PURE (it
+ * is also used as a bare predicate by scheduler_tick's CPUKILL pre-check,
+ * which must never consume a boost), and the commit points read this
+ * immediately after their own pick_next call. */
+static uint8_t pick_was_boost = 0;
+/* The registered COM2 holder for the RX boost, as (pid, generation) — a bare
+ * pid would boost whatever process recycles it (the ADR-0023 stale-pid
+ * lesson). generation 0 with pid 0 = no holder. */
+static uint32_t com2_holder_pid = 0;
+static uint32_t com2_holder_gen = 0;
+#endif
 
 /* PID of the idle process (created second in process_init) */
 #define IDLE_PROCESS_ID (KERNEL_PROCESS_ID + 1)
@@ -82,6 +105,34 @@ static process_t *pick_next(uint32_t from_pid) {
 #else
     process_t *idle = NULL;
 
+#if SCHED_IO_BOOST
+    /* Boost scan (ADR-0022): a READY citizen whose awaited I/O just arrived
+     * is picked out of turn — unless the consecutive-boost budget is spent,
+     * which forces a plain pick so a boost ping-pong can never starve the
+     * rotation (or, by resetting the quantum counter on every yield, keep
+     * quantum expiry itself from ever firing). READ-ONLY: the flag is
+     * consumed at the dispatch commit, never here — this function is also
+     * called as a bare predicate (the CPUKILL pre-check) and on the kill
+     * path twice, and a scan-side clear would eat boosts with no dispatch.
+     * Default round-robin arm ONLY: the RESONANT/LOTTERY arms above return
+     * first, so this is a compile-time no-op for the opt-in experiments. */
+    pick_was_boost = 0;
+    if (consec_boost < SCHED_BOOST_MAX_CONSEC) {
+        for (uint32_t off = 1; off <= MAX_PROCESSES; off++) {
+            uint32_t pid = (from_pid + off) % MAX_PROCESSES;
+            process_t *p = process_get_by_pid(pid);
+            if (!p || p->state != PROCESS_STATE_READY || !p->context_valid || !p->io_boost) {
+                continue;
+            }
+            if (pid == IDLE_PROCESS_ID) {
+                continue; /* idle is never boost-eligible */
+            }
+            pick_was_boost = 1;
+            return p;
+        }
+    }
+#endif
+
     for (uint32_t off = 1; off <= MAX_PROCESSES; off++) {
         uint32_t pid = (from_pid + off) % MAX_PROCESSES;
         process_t *p = process_get_by_pid(pid);
@@ -102,7 +153,80 @@ static process_t *pick_next(uint32_t from_pid) {
 #endif
 }
 
+#if SCHED_IO_BOOST
+/* Consume a boost at the dispatch COMMIT: unconditionally shed the flag on
+ * every committed switch (a process dispatched by ANY path must not carry a
+ * stale boost into a later, unrelated pick), and account the boost budget /
+ * counter only when the boost scan actually made this pick. */
+static void boost_commit(process_t *next) {
+    next->io_boost = 0;
+    if (pick_was_boost) {
+        boost_count++;
+        consec_boost++;
+    } else {
+        consec_boost = 0;
+    }
+}
+
+void scheduler_boost_if_ready(uint32_t pid) {
+    process_t *p = process_get_by_pid(pid);
+    if (p && p->state == PROCESS_STATE_READY) {
+        p->io_boost = 1;
+    }
+}
+
+void scheduler_com2_holder_set(uint32_t pid, uint32_t generation) {
+    com2_holder_pid = pid;
+    com2_holder_gen = generation;
+}
+
+void scheduler_com2_holder_clear(uint32_t pid) {
+    if (com2_holder_pid == pid) {
+        com2_holder_pid = 0;
+        com2_holder_gen = 0;
+    }
+}
+
+/* COM2 RX boost check, run from scheduler_tick (IRQ context, IF=0). Cost at
+ * rest: one io_inb of LSR (com2_rx_pending; a sticky latch makes COM2-less
+ * boots free after the first read). The heavier validation below runs only
+ * when bytes are actually pending. */
+static void com2_rx_boost_check(void) {
+    if (com2_holder_pid == 0 || !com2_rx_pending()) {
+        return;
+    }
+    /* Generation guard (the ADR-0023 lesson): never boost whatever process
+     * recycled the holder's pid. */
+    if (process_get_generation(com2_holder_pid) != com2_holder_gen) {
+        return;
+    }
+    /* Single source of truth: the registration is only an index hint — the
+     * AUTHORITY is the live COM2 device cap. A revoked cap (teardown in
+     * progress, or a future explicit revoke) must stop the boost with it. */
+    if (cap_find_resource(com2_holder_pid, CAP_RESOURCE_DEVICE, CAP_READ, DEVICE_ID_COM2) !=
+        CAP_SUCCESS) {
+        return;
+    }
+    process_t *p = process_get_by_pid(com2_holder_pid);
+    if (!p) {
+        return;
+    }
+    /* READY: normal case. RUNNING: the holder is the interrupted process
+     * itself — flag it anyway so an expiry on this same tick re-picks it
+     * instead of rotating it out with data waiting (saves one extra tick). */
+    if (p->state == PROCESS_STATE_READY || p->state == PROCESS_STATE_RUNNING) {
+        p->io_boost = 1;
+    }
+}
+#endif
+
 void scheduler_tick(cpu_state_t *state) {
+#if SCHED_IO_BOOST
+    /* ADR-0022: flag the COM2 holder the moment host bytes are waiting, so
+     * the pick below (or the next reschedule from any path) delivers them at
+     * tick granularity instead of one full rotation later. */
+    com2_rx_boost_check();
+#endif
     /* Manifest CPU accounting (epic #135): charge the interrupted process
      * one tick BEFORE the quantum early-return — after it, this would count
      * reschedules and undercount by SCHED_QUANTUM_TICKS x. IRQ context: IF
@@ -173,6 +297,9 @@ void scheduler_reschedule(cpu_state_t *state) {
     /* Bookkeeping: current_process pointer, statistics */
     process_switch_to(next);
     process_set_state(next->pid, PROCESS_STATE_RUNNING);
+#if SCHED_IO_BOOST
+    boost_commit(next); /* consume the flag exactly when the switch commits */
+#endif
 
     /* Restore the next context onto the interrupt frame; the iretq at
      * the end of irq_common resumes it. Switch to the next process's
@@ -221,6 +348,9 @@ void scheduler_kill_current(cpu_state_t *state) {
     /* Do not save the dead process's context */
     process_switch_to(next);
     process_set_state(next->pid, PROCESS_STATE_RUNNING);
+#if SCHED_IO_BOOST
+    boost_commit(next); /* same commit-point consume as scheduler_reschedule */
+#endif
     vmspace_switch(next->cr3 ? next->cr3 : vmspace_kernel_cr3());
     *state = next->context;
     switch_count++;
@@ -233,6 +363,29 @@ uint64_t scheduler_get_switches(void) {
 uint64_t scheduler_get_preempts(void) {
     return preempt_count;
 }
+
+uint64_t scheduler_get_boosts(void) {
+#if SCHED_IO_BOOST
+    return boost_count;
+#else
+    return 0;
+#endif
+}
+
+#if !SCHED_IO_BOOST
+/* Flag-off stubs keep the call sites (ipc_send, start_slot, process_destroy)
+ * unconditional — the revert-confirm build differs ONLY in pick behavior. */
+void scheduler_boost_if_ready(uint32_t pid) {
+    (void)pid;
+}
+void scheduler_com2_holder_set(uint32_t pid, uint32_t generation) {
+    (void)pid;
+    (void)generation;
+}
+void scheduler_com2_holder_clear(uint32_t pid) {
+    (void)pid;
+}
+#endif
 
 /* ADR-0022 prereq-2 fairness/tail snapshot over the runnable ring-3 citizens
  * (state READY or RUNNING, excluding the kernel and idle processes):

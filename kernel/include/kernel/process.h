@@ -102,6 +102,14 @@ typedef struct process {
     uint64_t last_scheduled; /* Timer tick at which the process was last picked (ADR-0022) */
     uint64_t
         sched_picks; /* Count of times the scheduler has picked this process (ADR-0022 fairness) */
+    /* ADR-0022 I/O boost: this process's awaited I/O (an IPC delivery, or a
+     * COM2 RX byte for the registered holder) arrived — pick it out of turn
+     * at the next reschedule. Advisory: pick_next still requires READY +
+     * context_valid; consumed (cleared) only at dispatch COMMIT in
+     * scheduler_reschedule/scheduler_kill_current, so a predicate call can
+     * never eat it and a process dispatched by ANY path sheds a stale flag.
+     * Zeroed for every incarnation by init_process_pcb's memset. */
+    uint8_t io_boost;
 
     /* IPC integration - queues managed internally by PID via ipc_process_init() */
     uint32_t port_count; /* Number of owned IPC ports */

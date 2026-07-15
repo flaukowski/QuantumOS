@@ -300,6 +300,14 @@ static svc_result_t start_slot(service_slot_t *slot) {
                        0, &dcap) != CAP_SUCCESS) {
             boot_log("service: COM2 device cap grant failed");
             boot_log(slot->info.name);
+        } else {
+            /* Register the holder for the ADR-0022 COM2-RX boost: (pid,
+             * generation) so a recycled pid can never inherit the boost
+             * (the ADR-0023 lesson), overwrite semantics so every watchdog
+             * rebirth re-registers structurally — this line re-executes
+             * inside the same cli window as the mint. The registration is
+             * only an index hint; the boost site re-validates the live cap. */
+            scheduler_com2_holder_set(pid, process_get_generation(pid));
         }
     }
     if (slot->def.grant_console) {
