@@ -1,10 +1,4 @@
-# Dependencies for scripts/qos_claude_agent.py — the bring-your-own-key Claude
-# agent that drives a live QuantumOS VM through its frozen MCP tool surface.
-# The `mcp` extra pulls in the MCP conversion helpers (anthropic.lib.tools.mcp)
-# used to reuse scripts/qos_mcp.py verbatim. Python >= 3.10.
-#
-# Not a CI dependency — the mcp-schema freeze gate (requirements-mcp-gate.txt)
-# pins mcp/pydantic exactly for reproducible schema extraction; this agent is a
-# developer tool and floats within compatible ranges.
-anthropic[mcp]>=0.116.0
-mcp>=1.0
+# Compat: the agent moved to scripts/qos_agent.py (any provider, Claude
+# default) and its deps to requirements-agent.txt — one source of truth.
+# This file remains so existing instructions keep working verbatim.
+-r requirements-agent.txt
