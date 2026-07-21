@@ -1,0 +1,16 @@
+# Dependencies for scripts/qos_agent.py — the bring-your-own-key agent that
+# drives a live QuantumOS VM through its frozen MCP tool surface with WHATEVER
+# model you bring. Both provider SDKs are listed; each is imported only when
+# its provider is selected (--provider anthropic|openai), so installing this
+# file works for either. Python >= 3.10.
+#
+# The anthropic `mcp` extra pulls in the MCP conversion helpers
+# (anthropic.lib.tools.mcp) used to reuse scripts/qos_mcp.py verbatim; the
+# openai path converts the same MCP tools to function-calling schemas itself.
+#
+# Not a CI dependency — the mcp-schema freeze gate (requirements-mcp-gate.txt)
+# pins mcp/pydantic exactly for reproducible schema extraction; this agent is a
+# developer tool and floats within compatible ranges.
+anthropic[mcp]>=0.116.0
+mcp>=1.0
+openai>=1.60
