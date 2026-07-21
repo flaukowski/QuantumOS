@@ -245,7 +245,42 @@ def _prepare_anthropic():
         return 2
 
 
-async def _drive_anthropic(client, session, mcp_tools, task, model, max_tokens, effort, max_turns):
+# Sticker $/MTok (input, output) for the spend estimate printed after each run.
+# Cache reads bill ~0.1x input; cache writes ~1.25x. Unknown models fall back
+# to the Opus row so the estimate errs high rather than silent.
+_PRICES = {
+    "claude-fable-5": (10.0, 50.0),
+    "claude-opus": (5.0, 25.0),
+    "claude-sonnet": (3.0, 15.0),
+    "claude-haiku": (1.0, 5.0),
+}
+
+
+def _price_for(model):
+    for prefix, rates in _PRICES.items():
+        if model.startswith(prefix):
+            return rates
+    return _PRICES["claude-opus"]
+
+
+def _report_spend(model, totals):
+    in_rate, out_rate = _price_for(model)
+    est = (
+        totals["input"] * in_rate
+        + totals["cache_read"] * in_rate * 0.1
+        + totals["cache_write"] * in_rate * 1.25
+        + totals["output"] * out_rate
+    ) / 1_000_000
+    print(
+        f"\n[usage] {model}: {totals['input']:,} in / {totals['output']:,} out / "
+        f"{totals['cache_read']:,} cache-read / {totals['cache_write']:,} cache-write "
+        f"tokens — est. ${est:.2f}",
+        file=sys.stderr,
+    )
+
+
+async def _drive_anthropic(client, session, mcp_tools, task, model, max_tokens, effort, max_turns,
+                           token_budget):
     """The Claude loop: the SDK's MCP conversion helpers + tool_runner drive
     the agentic loop, streaming the trace to stdout."""
     from anthropic.lib.tools.mcp import async_mcp_tool
@@ -267,8 +302,15 @@ async def _drive_anthropic(client, session, mcp_tools, task, model, max_tokens, 
     # Each yielded message is one assistant turn (before its tools run).
     # The MCP tools execute long VM operations; the runner awaits them.
     turns = 0
+    totals = {"input": 0, "output": 0, "cache_read": 0, "cache_write": 0}
     async for message in runner:
         turns += 1
+        u = getattr(message, "usage", None)
+        if u is not None:
+            totals["input"] += getattr(u, "input_tokens", 0) or 0
+            totals["output"] += getattr(u, "output_tokens", 0) or 0
+            totals["cache_read"] += getattr(u, "cache_read_input_tokens", 0) or 0
+            totals["cache_write"] += getattr(u, "cache_creation_input_tokens", 0) or 0
         for block in message.content:
             if block.type == "text" and block.text.strip():
                 print(block.text, flush=True)
@@ -279,6 +321,15 @@ async def _drive_anthropic(client, session, mcp_tools, task, model, max_tokens, 
         if message.stop_reason == "refusal":
             print("\n[The model declined this request.]", file=sys.stderr)
             break
+        spent = sum(totals.values())
+        if token_budget and spent >= token_budget:
+            print(
+                f"\n[Token budget reached — {spent:,} of {token_budget:,} tokens "
+                "spent across this run. Stopping so the key can't keep draining. "
+                "Raise --token-budget (or pass 0 to disable) to allow more.]",
+                file=sys.stderr,
+            )
+            break
         if turns >= max_turns:
             print(
                 f"\n[Reached the {max_turns}-turn cap — stopping so a "
@@ -287,6 +338,7 @@ async def _drive_anthropic(client, session, mcp_tools, task, model, max_tokens, 
                 file=sys.stderr,
             )
             break
+    _report_spend(model, totals)
     return 0
 
 
@@ -428,7 +480,7 @@ async def _drive_openai(client, session, mcp_tools, task, model, max_tokens, max
 # shared driver
 # --------------------------------------------------------------------------
 
-async def run_agent(task, provider, model, base_url, max_tokens, effort, max_turns):
+async def run_agent(task, provider, model, base_url, max_tokens, effort, max_turns, token_budget):
     """Drive QuantumOS with the chosen model: resolve provider credentials
     FIRST (no VM is ever spawned for a run that can't talk to a model), then
     spawn the MCP server and hand the session to the provider loop. Guarantees
@@ -459,7 +511,8 @@ async def run_agent(task, provider, model, base_url, max_tokens, effort, max_tur
             try:
                 if provider == "anthropic":
                     return await _drive_anthropic(
-                        client, session, mcp_tools, task, model, max_tokens, effort, max_turns
+                        client, session, mcp_tools, task, model, max_tokens, effort, max_turns,
+                        token_budget,
                     )
                 return await _drive_openai(
                     client, session, mcp_tools, task, model, max_tokens, max_turns
@@ -484,8 +537,8 @@ def main():
                    help="anthropic = Claude via the Anthropic SDK (default); openai = any "
                         "OpenAI-compatible endpoint (env QOS_AGENT_PROVIDER)")
     p.add_argument("--model", default=None,
-                   help="model id. anthropic default: claude-opus-4-8 (env QOS_CLAUDE_MODEL; "
-                        "try claude-fable-5 for the hardest reasoning). REQUIRED for openai — "
+                   help="model id. anthropic default: claude-sonnet-5 (env QOS_CLAUDE_MODEL; "
+                        "claude-opus-4-8 / claude-fable-5 for the hardest reasoning). REQUIRED for openai — "
                         "whatever your endpoint serves, e.g. gpt-5.1 or llama3.3")
     p.add_argument("--base-url", default=os.environ.get("QOS_AGENT_BASE_URL"),
                    help="OpenAI-compatible endpoint, e.g. http://localhost:11434/v1 for a local "
@@ -495,6 +548,11 @@ def main():
                    help="reasoning effort (anthropic only; ignored for openai)")
     p.add_argument("--max-turns", type=int, default=40,
                    help="hard cap on agent turns so a runaway loop can't burn your key (default 40)")
+    p.add_argument("--token-budget", type=int,
+                   default=int(os.environ.get("QOS_TOKEN_BUDGET", "400000")),
+                   help="cumulative token cap (input+output+cache) per run, anthropic only; "
+                        "the loop stops when reached and a spend estimate is printed "
+                        "(default 400000; env QOS_TOKEN_BUDGET; 0 = unlimited)")
     p.add_argument("--list-tools", action="store_true",
                    help="list the QuantumOS MCP tools and exit (no API call, no key needed)")
     args = p.parse_args()
@@ -509,7 +567,7 @@ def main():
         p.error(f"unknown provider {provider!r} (QOS_AGENT_PROVIDER?) — choose from {PROVIDERS}")
     if provider == "anthropic":
         model = (args.model or os.environ.get("QOS_CLAUDE_MODEL")
-                 or os.environ.get("QOS_AGENT_MODEL") or "claude-opus-4-8")
+                 or os.environ.get("QOS_AGENT_MODEL") or "claude-sonnet-5")
     else:
         model = args.model or os.environ.get("QOS_AGENT_MODEL")
         if not model:
@@ -518,7 +576,8 @@ def main():
 
     task = args.task if args.task is not None else EXPERIMENTS[args.experiment]
     return asyncio.run(
-        run_agent(task, provider, model, args.base_url, args.max_tokens, args.effort, args.max_turns)
+        run_agent(task, provider, model, args.base_url, args.max_tokens, args.effort, args.max_turns,
+                  args.token_budget)
     )
 
 
