@@ -25,6 +25,12 @@ SECTIONS
         KEEP(*(.multiboot_header))
         . = ALIGN(4096);
     } > kernel
+
+    /* PVH entry note (Firecracker / QEMU ELF64 boot); ld emits a PT_NOTE for it */
+    .note.Xen :
+    {
+        KEEP(*(.note.Xen))
+    } > kernel
     
     /* Code section */
     .text :

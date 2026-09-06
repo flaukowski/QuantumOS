@@ -43,6 +43,23 @@
     .long 768      /* height */
     .long 32       /* depth  (bpp) */
 
+
+/* PVH boot (Firecracker, QEMU -kernel with an ELF64): the loader enters at the
+ * address in this ELF note in 32-bit protected mode, paging off, flat segments,
+ * EBX = physical address of hvm_start_info -- the same machine state the
+ * Multiboot1 path expects, minus the info block. _pvh_start builds a Multiboot1
+ * info block (memory map, cmdline, mem_lower/mem_upper) from hvm_start_info and
+ * jumps to _start, so the kernel stays Multiboot1-only (ADR-0021). */
+.section .note.Xen, "a", @note
+.align 4
+    .long 4                 /* namesz ("Xen\0") */
+    .long 4                 /* descsz */
+    .long 18                /* XEN_ELFNOTE_PHYS32_ENTRY */
+    .asciz "Xen"
+    .align 4
+    .long _pvh_start        /* desc: 32-bit physical entry */
+.align 4
+
 .section .text
 .global _start
 .extern kernel_main
@@ -51,6 +68,88 @@
 # 32-bit entry (protected mode, flat segments, paging off)
 # ============================================================================
 .code32
+
+# ============================================================================
+# PVH entry (32-bit, paging off, EBX = hvm_start_info). Synthesizes a
+# Multiboot1 info block in .data (survives the BSS clear) and joins _start.
+# hvm_start_info v1: magic +0 (0x336ec578), cmdline_paddr +24 (u64),
+# memmap_paddr +40 (u64), memmap_entries +48. Memmap entry = {addr u64,
+# size u64, type u32, reserved u32} (24 bytes); RAM = type 1, same numbering
+# as Multiboot1 for types 1-4.
+# ============================================================================
+.global _pvh_start
+_pvh_start:
+    cli
+    movl $boot_stack_top, %esp
+    cmpl $0x336ec578, (%ebx)
+    jne .pvh_bad
+
+    /* zero the synthetic info block (128 bytes) */
+    pushl %ebx
+    movl $pvh_mbinfo, %edi
+    movl $32, %ecx
+    xorl %eax, %eax
+    rep stosl
+    popl %ebx
+
+    movl $0x45, pvh_mbinfo              /* flags: mem | cmdline | mmap */
+    movl 24(%ebx), %eax                 /* cmdline_paddr (low 32) */
+    movl %eax, pvh_mbinfo+16
+
+    movl 40(%ebx), %esi                 /* memmap_paddr (low 32) */
+    movl 48(%ebx), %ecx                 /* memmap_entries */
+    movl $pvh_mmap, %edi
+    movl %edi, pvh_mbinfo+48            /* mmap_addr */
+    xorl %edx, %edx                     /* usable RAM in KB */
+    cmpl $32, %ecx
+    jbe 1f
+    movl $32, %ecx
+1:  testl %ecx, %ecx
+    jz .pvh_mmap_done
+.pvh_mmap_loop:
+    movl $20, (%edi)                    /* MB1 entry size (excludes itself) */
+    movl 0(%esi), %eax
+    movl %eax, 4(%edi)                  /* base lo */
+    movl 4(%esi), %eax
+    movl %eax, 8(%edi)                  /* base hi */
+    movl 8(%esi), %eax
+    movl %eax, 12(%edi)                 /* len lo */
+    movl 12(%esi), %eax
+    movl %eax, 16(%edi)                 /* len hi */
+    movl 16(%esi), %eax                 /* type */
+    cmpl $4, %eax
+    jbe 2f
+    movl $2, %eax                       /* anything exotic -> reserved */
+2:  movl %eax, 20(%edi)
+    cmpl $1, %eax
+    jne 3f
+    movl 8(%esi), %eax
+    shrl $10, %eax
+    addl %eax, %edx
+    movl 12(%esi), %eax
+    shll $22, %eax
+    addl %eax, %edx
+3:  addl $24, %esi
+    addl $24, %edi
+    loop .pvh_mmap_loop
+.pvh_mmap_done:
+    movl %edi, %eax
+    subl $pvh_mmap, %eax
+    movl %eax, pvh_mbinfo+44            /* mmap_length */
+    movl $640, pvh_mbinfo+4             /* mem_lower KB */
+    movl %edx, %eax
+    subl $1024, %eax
+    jae 4f
+    xorl %eax, %eax
+4:  movl %eax, pvh_mbinfo+8             /* mem_upper KB (fallback only; mmap wins) */
+
+    movl $0x2BADB002, %eax
+    movl $pvh_mbinfo, %ebx
+    jmp _start
+.pvh_bad:
+    hlt
+    jmp .pvh_bad
+
 _start:
     cli
     movl $boot_stack_top, %esp
@@ -306,3 +405,14 @@ boot_stack_top:
 
 # Non-executable stack marker
 .section .note.GNU-stack, "", @progbits
+
+/* PVH: synthetic Multiboot1 info block + memory map (in .data: the BSS clear in
+ * _start must not wipe them). 32 entries is far more than any microVM reports. */
+.section .data
+.align 8
+.global pvh_mbinfo
+pvh_mbinfo:
+    .fill 128, 1, 0
+.global pvh_mmap
+pvh_mmap:
+    .fill 32*24, 1, 0
